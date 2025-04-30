@@ -1,0 +1,20 @@
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+    public: false
+
+  Hn\McpServer\:
+    resource: '../Classes/*'
+    exclude: '../Classes/Domain/Model/*'
+
+  # Explicitly register command controller
+  Hn\McpServer\Command\McpServerCommand:
+    tags:
+      - name: 'console.command'
+        command: 'mcp:server'
+        description: 'Starts an MCP (Model Context Protocol) server using stdio transport'
+
+# Import tool-specific configurations
+imports:
+  - { resource: 'Services/Record.yaml' }
