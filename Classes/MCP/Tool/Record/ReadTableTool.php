@@ -9,6 +9,7 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
+use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Utility\MathUtility;
 
@@ -220,7 +221,7 @@ class ReadTableTool extends AbstractRecordTool
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
         foreach ($records as $record) {
-            $processedRecord = $this->processRecord($table, $record);
+            $processedRecord = $this->processRecord($record, $table);
             $processedRecords[] = $processedRecord;
         }
 
@@ -237,69 +238,142 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
-     * Process a record to handle binary data, convert types, and filter default values
+     * Process a record
      */
-    protected function processRecord(string $table, array $record): array
+    protected function processRecord(array $record, string $table, array $fields = []): array
     {
         $processedRecord = [];
-        $tca = $GLOBALS['TCA'][$table] ?? [];
-
-        // Always include essential fields
-        $essentialFields = ['uid', 'pid', 'CType', 'sys_language_uid', 'hidden', 'deleted'];
-
+        
+        // Define essential fields that should always be included
+        $essentialFields = ['uid', 'pid'];
+        
+        // Add language field if it exists
+        if (isset($GLOBALS['TCA'][$table]['ctrl']['languageField'])) {
+            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
+        }
+        
+        // Add timestamp fields if they exist
+        if (isset($GLOBALS['TCA'][$table]['ctrl']['tstamp'])) {
+            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['tstamp'];
+        }
+        if (isset($GLOBALS['TCA'][$table]['ctrl']['crdate'])) {
+            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['crdate'];
+        }
+        
+        // Add delete field if it exists
+        if (isset($GLOBALS['TCA'][$table]['ctrl']['delete'])) {
+            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['delete'];
+        }
+        
+        // Add hidden field if it exists
+        if (isset($GLOBALS['TCA'][$table]['ctrl']['enablecolumns']['disabled'])) {
+            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['enablecolumns']['disabled'];
+        }
+        
+        // Add sorting field if it exists
+        if (isset($GLOBALS['TCA'][$table]['ctrl']['sortby'])) {
+            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['sortby'];
+        }
+        
         // Get type-specific fields if a type field exists
-        $typeField = $tca['ctrl']['type'] ?? null;
+        $typeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
         $typeSpecificFields = [];
-
+        
         if ($typeField && isset($record[$typeField])) {
             $recordType = $record[$typeField];
             $typeSpecificFields = $this->getTypeSpecificFields($table, $recordType);
         }
-
+        
+        // Process each field
         foreach ($record as $field => $value) {
             // Always include essential fields
             if (in_array($field, $essentialFields)) {
-                $processedRecord[$field] = $this->convertFieldValue($value, $table, $field);
+                $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
                 continue;
             }
-
-            // Skip empty or default values
-            if ($this->isDefaultValue($table, $field, $value)) {
+            
+            // If specific fields were requested, only include those
+            if (!empty($fields) && !in_array($field, $fields)) {
                 continue;
             }
-
+            
             // Skip fields not relevant to this record type (if type fields are available)
             if (!empty($typeSpecificFields) && !in_array($field, $typeSpecificFields)) {
                 continue;
             }
-
+            
             // Include the field
-            $processedRecord[$field] = $this->convertFieldValue($value, $table, $field);
+            $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
         }
-
+        
         return $processedRecord;
     }
 
     /**
      * Convert a field value to the appropriate type
      */
-    protected function convertFieldValue($value, string $table = '', string $field = '')
+    protected function convertFieldValue(string $table, string $field, $value)
     {
-        // Convert binary data to a placeholder
-        if (is_resource($value)) {
-            return '[BINARY DATA]';
+        // Skip null values
+        if ($value === null) {
+            return null;
         }
         
-        // Handle date fields (Unix timestamps)
-        if ($this->isDateField($table, $field) && is_numeric($value) && $value > 0) {
-            return date('c', (int)$value);
+        // Convert FlexForm XML to JSON
+        if ($this->isFlexFormField($table, $field) && is_string($value) && !empty($value) && strpos($value, '<?xml') === 0) {
+            try {
+                // Use TYPO3's FlexFormService to convert XML to array
+                $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
+                $flexFormArray = $flexFormService->convertFlexFormContentToArray($value);
+                
+                // Simplify the structure for easier use in LLMs
+                $result = [];
+                $settings = [];
+                
+                // Process each field and organize settings
+                foreach ($flexFormArray as $key => $val) {
+                    // Check if this is a settings field (key starts with "settings")
+                    if (strpos($key, 'settings') === 0 && strlen($key) > 8) {
+                        // Extract the setting name (remove "settings" prefix)
+                        $settingName = substr($key, 8);
+                        // Convert first character to lowercase if it's uppercase
+                        if (ctype_upper($settingName[0])) {
+                            $settingName = lcfirst($settingName);
+                        }
+                        $settings[$settingName] = $val;
+                    } else {
+                        $result[$key] = $val;
+                    }
+                }
+                
+                // Add settings to result if any were found
+                if (!empty($settings)) {
+                    $result['settings'] = $settings;
+                }
+                
+                return $result;
+            } catch (\Exception $e) {
+                // If parsing fails, return an empty array
+                return [];
+            }
         }
         
-        // Convert numeric strings to integers or floats
-        if (is_string($value) && MathUtility::canBeInterpretedAsInteger($value)) {
-            return (int)$value;
-        } elseif (is_string($value) && MathUtility::canBeInterpretedAsFloat($value)) {
-            return (float)$value;
+        // Convert JSON strings to arrays
+        if (is_string($value) && strpos($value, '{') === 0) {
+            $decoded = json_decode($value, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                return $decoded;
+            }
+        }
+        
+        // Convert timestamps to ISO 8601 dates
+        if (is_numeric($value) && $this->isDateField($table, $field)) {
+            if ($value > 0) {
+                $dateTime = new \DateTime('@' . $value);
+                $dateTime->setTimezone(new \DateTimeZone(date_default_timezone_get()));
+                return $dateTime->format('c');
+            }
+            return null;
         }
         
         return $value;
@@ -779,5 +853,40 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         return true;
+    }
+
+    /**
+     * Check if a field is a FlexForm field
+     */
+    protected function isFlexFormField(string $table, string $field): bool
+    {
+        if (empty($table) || empty($field)) {
+            return false;
+        }
+
+        // First check TCA configuration if available
+        $tca = $GLOBALS['TCA'][$table]['columns'][$field]['config'] ?? [];
+        if (!empty($tca['type']) && $tca['type'] === 'flex') {
+            return true;
+        }
+
+        // If TCA is not available or doesn't have flex configuration,
+        // check if the field name is a known FlexForm field
+        $knownFlexFormFields = [
+            'tt_content' => ['pi_flexform'],
+            'pages' => ['tx_templavoila_flex'],
+            // Add other tables and their FlexForm fields here
+        ];
+
+        if (isset($knownFlexFormFields[$table]) && in_array($field, $knownFlexFormFields[$table])) {
+            return true;
+        }
+
+        // As a last resort, check if the value looks like XML and contains FlexForm structure
+        if (is_string($field) && strpos($field, 'flexform') !== false) {
+            return true;
+        }
+
+        return false;
     }
 }

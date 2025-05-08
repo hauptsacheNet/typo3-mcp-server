@@ -26,7 +26,7 @@ abstract class AbstractRecordTool extends AbstractTool implements RecordToolInte
      */
     protected function createJsonResult(array $data): CallToolResult
     {
-        return new CallToolResult([new TextContent(json_encode($data, JSON_PRETTY_PRINT))]);
+        return new CallToolResult([new TextContent(json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))]);
     }
 
     /**

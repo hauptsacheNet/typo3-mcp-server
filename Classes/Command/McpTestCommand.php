@@ -4,24 +4,20 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Command;
 
-use Mcp\Server\Server;
-use Mcp\Server\ServerRunner;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\MCP\ToolRegistry;
-use Mcp\Types\CallToolRequest;
-use Mcp\Types\CallToolRequestParams;
 use Mcp\Types\CallToolResult;
-use Mcp\Types\ListToolsResult;
 use Mcp\Types\TextContent;
 
 /**
- * MCP Server Command - Uses logiscape/mcp-sdk-php
+ * MCP Test Command - For testing MCP tools directly
  */
-class McpServerCommand extends Command
+class McpTestCommand extends Command
 {
     /**
      * @var ToolRegistry
@@ -42,8 +38,20 @@ class McpServerCommand extends Command
      */
     protected function configure(): void
     {
-        $this->setDescription('Start the MCP server for AI assistants');
-        $this->setHelp('This command starts an MCP server that allows AI assistants to interact with TYPO3 via the stdio protocol.');
+        $this
+            ->setDescription('Test MCP tools directly')
+            ->setHelp('This command allows you to test MCP tools directly without starting a server.')
+            ->addArgument(
+                'tool',
+                InputArgument::REQUIRED,
+                'The tool to test (e.g., "record/schema")'
+            )
+            ->addArgument(
+                'params',
+                InputArgument::OPTIONAL,
+                'JSON-encoded parameters for the tool',
+                '{}'
+            );
     }
 
     /**
@@ -58,76 +66,84 @@ class McpServerCommand extends Command
             // Ensure TCA is loaded
             $this->ensureTcaLoaded();
             
-            // Set up debugging to stderr
-            $debug = function($message) {
-                file_put_contents('php://stderr', '[MCP Server] ' . $message . PHP_EOL);
-            };
+            // Get command arguments
+            $toolName = $input->getArgument('tool');
+            $paramsJson = $input->getArgument('params');
             
-            $debug('Starting MCP server using logiscape/mcp-sdk-php');
+            // Parse parameters
+            $params = json_decode($paramsJson, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                $output->writeln('<error>Invalid JSON parameters: ' . json_last_error_msg() . '</error>');
+                return Command::FAILURE;
+            }
             
-            // Create the MCP server using the SDK
-            $server = new Server('typo3-mcp-server');
-            
-            // Register tool/list handler to return all available tools
-            $server->registerHandler('tools/list', function() use ($debug) {
-                $debug('Handling tools/list request');
-                $tools = [];
-                
-                foreach ($this->toolRegistry->getTools() as $tool) {
-                    $schema = $tool->getSchema();
-                    $tools[] = [
-                        'name' => $tool->getName(),
-                        'description' => $schema['description'] ?? '',
-                        'inputSchema' => [
-                            'type' => 'object',
-                            'properties' => $schema['parameters']['properties'] ?? [],
-                            'required' => $schema['parameters']['required'] ?? [],
-                        ],
-                    ];
+            // List all available tools if requested
+            if ($toolName === 'list') {
+                $output->writeln('<info>Available MCP tools:</info>');
+                foreach ($this->toolRegistry->getTools() as $name => $tool) {
+                    $output->writeln('- ' . $name);
                 }
-                
-                return ['tools' => $tools];
-            });
+                return Command::SUCCESS;
+            }
             
-            // Register tool/call handler to execute the specified tool
-            $server->registerHandler('tools/call', function(CallToolRequestParams $params) use ($debug) {
-                $toolName = $params->name;
-                $arguments = $params->arguments;
-                
-                $debug('Handling tools/call request for tool: ' . $toolName);
-                
-                $tool = $this->toolRegistry->getTool($toolName);
-                if (!$tool) {
-                    throw new \InvalidArgumentException('Tool not found: ' . $toolName);
+            // Find the tool
+            $tool = $this->toolRegistry->getTool($toolName);
+            if (!$tool) {
+                $output->writeln('<error>Tool not found: ' . $toolName . '</error>');
+                $output->writeln('<info>Available tools:</info>');
+                foreach ($this->toolRegistry->getTools() as $name => $tool) {
+                    $output->writeln('- ' . $name);
                 }
-                
-                try {
-                    // Tool's execute method now directly returns CallToolResult
-                    return $tool->execute($arguments);
-                } catch (\Throwable $e) {
-                    $debug('Error executing tool ' . $toolName . ': ' . $e->getMessage());
-                    return new CallToolResult(
-                        [new TextContent($e->getMessage())],
-                        true // isError
-                    );
-                }
-            });
+                return Command::FAILURE;
+            }
             
-            $debug('All handlers registered, starting server...');
+            // Execute the tool
+            $output->writeln('<info>Executing tool: ' . $toolName . '</info>');
+            $output->writeln('<info>Parameters: ' . $paramsJson . '</info>');
+            $output->writeln('');
             
-            // Create initialization options and run server
-            $initOptions = $server->createInitializationOptions();
-            $runner = new ServerRunner($server, $initOptions);
-            $runner->run();
+            $result = $tool->execute($params);
+            
+            // Display the result
+            $output->writeln('<info>Result:</info>');
+            
+            // Check if the result is an error
+            $isError = $result->isError ?? false;
+            
+            if ($isError) {
+                $output->writeln('<error>Error: ' . $this->getResultText($result) . '</error>');
+                return Command::FAILURE;
+            }
+            
+            $output->writeln($this->getResultText($result));
             
             return Command::SUCCESS;
         } catch (\Throwable $e) {
-            // Log the error to stderr, not stdout (to avoid corrupting MCP protocol)
-            file_put_contents('php://stderr', 'MCP Server Error: ' . $e->getMessage() . PHP_EOL . $e->getTraceAsString() . PHP_EOL);
+            $output->writeln('<error>Error: ' . $e->getMessage() . '</error>');
+            if ($output->isVerbose()) {
+                $output->writeln('<error>' . $e->getTraceAsString() . '</error>');
+            }
             return Command::FAILURE;
         }
     }
     
+    /**
+     * Extract text content from a CallToolResult
+     */
+    protected function getResultText(CallToolResult $result): string
+    {
+        $text = '';
+        
+        foreach ($result->content as $item) {
+            if ($item instanceof TextContent) {
+                $text .= $item->text;
+            } else {
+                $text .= json_encode($item, JSON_PRETTY_PRINT);
+            }
+        }
+        
+        return $text;
+    }
     
     /**
      * Ensure we have admin rights for the backend user

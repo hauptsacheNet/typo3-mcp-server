@@ -9,9 +9,9 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
- * Tool for listing available table types in TYPO3
+ * Tool for listing available tables in TYPO3
  */
-class ListTableTypesTool extends AbstractRecordTool
+class ListTablesTool extends AbstractRecordTool
 {
     /**
      * Get the tool type
@@ -27,19 +27,14 @@ class ListTableTypesTool extends AbstractRecordTool
     public function getSchema(): array
     {
         return [
-            'description' => 'List available tables and their types in TYPO3, organized by extension',
+            'description' => 'List available tables in TYPO3, organized by extension',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
-                    'pid' => [
-                        'type' => 'integer',
-                        'description' => 'Optional page ID to filter tables that are relevant for this page',
-                    ],
-                    'format' => [
-                        'type' => 'string',
-                        'description' => 'Output format (json or text)',
-                        'enum' => ['json', 'text'],
-                        'default' => 'json',
+                    'includeHidden' => [
+                        'type' => 'boolean',
+                        'description' => 'Whether to include hidden tables',
+                        'default' => false,
                     ],
                 ],
             ],
@@ -49,9 +44,9 @@ class ListTableTypesTool extends AbstractRecordTool
                     'parameters' => []
                 ],
                 [
-                    'description' => 'List tables relevant for a specific page',
+                    'description' => 'List all tables including hidden ones',
                     'parameters' => [
-                        'pid' => 123
+                        'includeHidden' => true
                     ]
                 ]
             ]
@@ -63,29 +58,17 @@ class ListTableTypesTool extends AbstractRecordTool
      */
     public function execute(array $params): CallToolResult
     {
-        $pid = isset($params['pid']) ? (int)$params['pid'] : null;
-        $condition = $params['condition'] ?? '';
         $includeHidden = $params['includeHidden'] ?? false;
-        $format = $params['format'] ?? 'text';
         
         try {
             // Get all tables from TCA
             $tables = $this->getTables($includeHidden);
             
-            // Filter by page ID if specified
-            if ($pid !== null) {
-                $tables = $this->filterTablesByPid($tables, $pid);
-            }
-            
             // Group tables by extension
             $groupedTables = $this->groupTablesByExtension($tables);
             
             // Format the result
-            if ($format === 'json') {
-                return $this->createJsonResult($groupedTables);
-            } else {
-                return $this->createSuccessResult($this->formatTablesAsText($groupedTables));
-            }
+            return $this->createSuccessResult($this->formatTablesAsText($groupedTables));
         } catch (\Throwable $e) {
             return $this->createErrorResult('Error listing tables: ' . $e->getMessage());
         }
@@ -116,43 +99,6 @@ class ListTableTypesTool extends AbstractRecordTool
         }
         
         return $tables;
-    }
-    
-    /**
-     * Filter tables by page ID
-     */
-    protected function filterTablesByPid(array $tables, int $pid): array
-    {
-        if ($pid <= 0) {
-            return $tables;
-        }
-        
-        $filteredTables = [];
-        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
-        
-        foreach ($tables as $tableName => $tableInfo) {
-            // Skip tables that don't have a pid field
-            if (!$this->tableHasPidField($tableName)) {
-                continue;
-            }
-            
-            // Check if there are records on this page
-            $queryBuilder = $connectionPool->getQueryBuilderForTable($tableName);
-            $count = $queryBuilder->count('uid')
-                ->from($tableName)
-                ->where(
-                    $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, \PDO::PARAM_INT))
-                )
-                ->executeQuery()
-                ->fetchOne();
-            
-            if ($count > 0) {
-                $filteredTables[$tableName] = $tableInfo;
-                $filteredTables[$tableName]['recordCount'] = (int)$count;
-            }
-        }
-        
-        return $filteredTables;
     }
     
     /**
@@ -207,10 +153,6 @@ class ListTableTypesTool extends AbstractRecordTool
                 }
                 
                 $result .= " [" . $tableInfo['type'] . "]";
-                
-                if (isset($tableInfo['recordCount'])) {
-                    $result .= " (" . $tableInfo['recordCount'] . " records)";
-                }
                 
                 if ($tableInfo['readOnly']) {
                     $result .= " [READ-ONLY]";
@@ -340,5 +282,13 @@ class ListTableTypesTool extends AbstractRecordTool
         }
         
         return true;
+    }
+    
+    /**
+     * Get the table label
+     */
+    protected function getTableLabel(string $table): string
+    {
+        return $GLOBALS['TCA'][$table]['ctrl']['title'] ?? $table;
     }
 }

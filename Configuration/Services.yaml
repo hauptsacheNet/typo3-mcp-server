@@ -8,13 +8,15 @@ services:
     resource: '../Classes/*'
     exclude: '../Classes/Domain/Model/*'
 
-  # Explicitly register command controller
+  # Explicitly register command controllers
   Hn\McpServer\Command\McpServerCommand:
     tags:
       - name: 'console.command'
         command: 'mcp:server'
         description: 'Starts an MCP (Model Context Protocol) server using stdio transport'
-
-# Import tool-specific configurations
-imports:
-  - { resource: 'Services/Record.yaml' }
+        
+  Hn\McpServer\Command\McpTestCommand:
+    tags:
+      - name: 'console.command'
+        command: 'mcp:test'
+        description: 'Test MCP tools directly without starting a server'

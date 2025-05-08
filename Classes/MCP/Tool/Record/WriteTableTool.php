@@ -7,6 +7,7 @@ namespace Hn\McpServer\MCP\Tool\Record;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 
 /**
  * Tool for writing records to TYPO3 tables
@@ -50,21 +51,42 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'data' => [
                         'type' => 'object',
-                        'description' => 'Record data (required for "create" and "update" actions)',
+                        'description' => 'Record data (required for "create" and "update" actions).',
+                    ],
+                    'position' => [
+                        'type' => 'string',
+                        'description' => 'Position for new records: "top", "bottom", "after:UID", or "before:UID"',
+                        'default' => 'bottom',
                     ],
                 ],
+                'required' => ['action', 'table'],
             ],
             'examples' => [
                 [
-                    'description' => 'Create a new content element',
+                    'description' => 'Create a new content element at the bottom of the page',
                     'parameters' => [
                         'action' => 'create',
                         'table' => 'tt_content',
                         'pid' => 123,
+                        'position' => 'bottom',
                         'data' => [
-                            'CType' => 'text',
-                            'header' => 'New content element',
-                            'bodytext' => '<p>This is a new content element</p>'
+                            'CType' => 'textmedia',
+                            'header' => 'New Content Element',
+                            'bodytext' => 'This is a new content element'
+                        ]
+                    ]
+                ],
+                [
+                    'description' => 'Create a new content element after a specific element',
+                    'parameters' => [
+                        'action' => 'create',
+                        'table' => 'tt_content',
+                        'pid' => 123,
+                        'position' => 'after:456',
+                        'data' => [
+                            'CType' => 'textmedia',
+                            'header' => 'New Content Element',
+                            'bodytext' => 'This is a new content element'
                         ]
                     ]
                 ],
@@ -75,8 +97,8 @@ class WriteTableTool extends AbstractRecordTool
                         'table' => 'tt_content',
                         'uid' => 456,
                         'data' => [
-                            'header' => 'Updated header',
-                            'bodytext' => '<p>Updated content</p>'
+                            'header' => 'Updated Header',
+                            'bodytext' => 'This content has been updated'
                         ]
                     ]
                 ],
@@ -88,7 +110,7 @@ class WriteTableTool extends AbstractRecordTool
                         'uid' => 456
                     ]
                 ]
-            ]
+            ],
         ];
     }
 
@@ -103,6 +125,7 @@ class WriteTableTool extends AbstractRecordTool
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
         $data = $params['data'] ?? [];
+        $position = $params['position'] ?? 'bottom';
         
         // Validate parameters
         if (empty($action)) {
@@ -157,7 +180,7 @@ class WriteTableTool extends AbstractRecordTool
         try {
             switch ($action) {
                 case 'create':
-                    return $this->createRecord($table, $pid, $data);
+                    return $this->createRecord($table, $pid, $data, $position);
                     
                 case 'update':
                     return $this->updateRecord($table, $uid, $data);
@@ -176,21 +199,55 @@ class WriteTableTool extends AbstractRecordTool
     /**
      * Create a new record
      */
-    protected function createRecord(string $table, int $pid, array $data): CallToolResult
+    protected function createRecord(string $table, int $pid, array $data, string $position): CallToolResult
     {
-        // Ensure pid is set
-        $data['pid'] = $pid;
-        
-        // Validate data against TCA
+        // Validate the data
         $validationResult = $this->validateRecordData($table, $data, 'create');
         if ($validationResult !== true) {
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
         
-        // Create the record using DataHandler
+        // Convert data for storage
+        $data = $this->convertDataForStorage($table, $data);
+        
+        // Prepare the data array
+        $newRecordData = $data;
+        $newRecordData['pid'] = $pid;
+        
+        // Handle sorting for bottom position
+        if ($position === 'bottom') {
+            // Get the maximum sorting value and add some space
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable($table);
+            
+            $maxSorting = $queryBuilder
+                ->select('sorting')
+                ->from($table)
+                ->where(
+                    $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, \PDO::PARAM_INT))
+                )
+                ->orderBy('sorting', 'DESC')
+                ->setMaxResults(1)
+                ->executeQuery()
+                ->fetchOne();
+            
+            if ($maxSorting !== false) {
+                $newRecordData['sorting'] = (int)$maxSorting + 128; // Add some space for future insertions
+            }
+        }
+        
+        // Create a unique ID for this new record
+        $newId = 'NEW' . uniqid();
+        
+        // Initialize DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
-        $dataHandler->bypassWorkspaceRestrictions = true;
-        $dataHandler->start([$table => ['NEW' => $data]], []);
+        
+        // Set up the data map
+        $dataMap = [];
+        $dataMap[$table][$newId] = $newRecordData;
+        
+        // Process the data map
+        $dataHandler->start($dataMap, []);
         $dataHandler->process_datamap();
         
         // Check for errors
@@ -199,16 +256,48 @@ class WriteTableTool extends AbstractRecordTool
         }
         
         // Get the UID of the newly created record
-        $newUid = $dataHandler->substNEWwithIDs['NEW'] ?? null;
+        $newUid = $dataHandler->substNEWwithIDs[$newId] ?? null;
+        
         if (!$newUid) {
-            return $this->createErrorResult('Failed to create record');
+            return $this->createErrorResult('Error creating record: No UID returned');
         }
         
+        // Handle after/before positioning if needed
+        if (strpos($position, 'after:') === 0 || strpos($position, 'before:') === 0) {
+            $positionType = substr($position, 0, strpos($position, ':'));
+            $referenceUid = (int)substr($position, strpos($position, ':') + 1);
+            
+            // Set up the command map for moving the record
+            $cmdMap = [];
+            $cmdMap[$table][$newUid]['move'] = [
+                'action' => $positionType,
+                'target' => $referenceUid,
+            ];
+            
+            // Initialize a new DataHandler for the move operation
+            $moveDataHandler = GeneralUtility::makeInstance(DataHandler::class);
+            $moveDataHandler->start([], $cmdMap);
+            $moveDataHandler->process_cmdmap();
+            
+            // Check for errors in the move operation
+            if (!empty($moveDataHandler->errorLog)) {
+                // The record was created but positioning failed
+                return $this->createJsonResult([
+                    'action' => 'create',
+                    'table' => $table,
+                    'uid' => $newUid,
+                    'data' => $data,
+                    'warning' => 'Record created but positioning failed: ' . implode(', ', $moveDataHandler->errorLog)
+                ]);
+            }
+        }
+        
+        // Return the result
         return $this->createJsonResult([
-            'status' => 'success',
             'action' => 'create',
             'table' => $table,
             'uid' => $newUid,
+            'data' => $data,
         ]);
     }
     
@@ -217,11 +306,14 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function updateRecord(string $table, int $uid, array $data): CallToolResult
     {
-        // Validate data against TCA
+        // Validate the data
         $validationResult = $this->validateRecordData($table, $data, 'update');
         if ($validationResult !== true) {
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
+        
+        // Convert data for storage
+        $data = $this->convertDataForStorage($table, $data);
         
         // Update the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
@@ -230,15 +322,16 @@ class WriteTableTool extends AbstractRecordTool
         $dataHandler->process_datamap();
         
         // Check for errors
-        if (!empty($dataHandler->errorLog)) {
+        if ($dataHandler->errorLog) {
             return $this->createErrorResult('Error updating record: ' . implode(', ', $dataHandler->errorLog));
         }
         
+        // Return the result
         return $this->createJsonResult([
-            'status' => 'success',
             'action' => 'update',
             'table' => $table,
             'uid' => $uid,
+            'data' => $data,
         ]);
     }
     
@@ -254,12 +347,11 @@ class WriteTableTool extends AbstractRecordTool
         $dataHandler->process_cmdmap();
         
         // Check for errors
-        if (!empty($dataHandler->errorLog)) {
+        if ($dataHandler->errorLog) {
             return $this->createErrorResult('Error deleting record: ' . implode(', ', $dataHandler->errorLog));
         }
         
         return $this->createJsonResult([
-            'status' => 'success',
             'action' => 'delete',
             'table' => $table,
             'uid' => $uid,
@@ -484,5 +576,71 @@ class WriteTableTool extends AbstractRecordTool
         ];
         
         return in_array($table, $readOnlyTables);
+    }
+    
+    /**
+     * Check if a field is a FlexForm field
+     */
+    protected function isFlexFormField(string $table, string $fieldName): bool
+    {
+        return !empty($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['type']) && $GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['type'] === 'flex';
+    }
+    
+    /**
+     * Convert data for storage
+     */
+    protected function convertDataForStorage(string $table, array $data): array
+    {
+        // Process each field
+        foreach ($data as $fieldName => $value) {
+            // Skip null values
+            if ($value === null) {
+                continue;
+            }
+            
+            // Handle FlexForm fields
+            if ($this->isFlexFormField($table, $fieldName)) {
+                // If the value is already a string (XML), keep it as is
+                if (is_string($value) && strpos($value, '<?xml') === 0) {
+                    continue;
+                }
+                
+                // If the value is an array or JSON string, convert it to XML
+                $flexFormArray = is_array($value) ? $value : (is_string($value) && strpos($value, '{') === 0 ? json_decode($value, true) : null);
+                
+                if (is_array($flexFormArray)) {
+                    // Prepare the data structure for TYPO3's XML conversion
+                    $flexFormData = [
+                        'data' => [
+                            'sDEF' => [
+                                'lDEF' => []
+                            ]
+                        ]
+                    ];
+                    
+                    // Process settings fields
+                    if (isset($flexFormArray['settings']) && is_array($flexFormArray['settings'])) {
+                        foreach ($flexFormArray['settings'] as $settingKey => $settingValue) {
+                            $flexFormData['data']['sDEF']['lDEF']['settings.' . $settingKey]['vDEF'] = $settingValue;
+                        }
+                    }
+                    
+                    // Process other fields
+                    foreach ($flexFormArray as $key => $val) {
+                        if ($key !== 'settings' && !is_array($val)) {
+                            $flexFormData['data']['sDEF']['lDEF'][$key]['vDEF'] = $val;
+                        }
+                    }
+                    
+                    // Use TYPO3's GeneralUtility::array2xml to convert the array to XML
+                    $xml = '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' . "\n";
+                    $xml .= GeneralUtility::array2xml($flexFormData, '', 0, 'T3FlexForms');
+                    
+                    $data[$fieldName] = $xml;
+                }
+            }
+        }
+        
+        return $data;
     }
 }
