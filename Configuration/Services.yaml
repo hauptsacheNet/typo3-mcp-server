@@ -20,3 +20,13 @@ services:
       - name: 'console.command'
         command: 'mcp:test'
         description: 'Test MCP tools directly without starting a server'
+        
+  Hn\McpServer\Command\GenerateTokenCommand:
+    tags:
+      - name: 'console.command'
+        command: 'mcp:generate-token'
+        description: 'Generate MCP access token for backend users'
+        
+  # Make ToolRegistry public for eID access
+  Hn\McpServer\MCP\ToolRegistry:
+    public: true
