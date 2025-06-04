@@ -91,8 +91,8 @@ abstract class AbstractRecordTool extends AbstractTool implements RecordToolInte
         if (strpos($label, 'LLL:') === 0) {
             // Initialize language service if needed
             if (!isset($GLOBALS['LANG'])) {
-                $GLOBALS['LANG'] = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageService::class);
-                $GLOBALS['LANG']->init('default');
+                $languageServiceFactory = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
+                $GLOBALS['LANG'] = $languageServiceFactory->create('default');
             }
             
             // Translate the label

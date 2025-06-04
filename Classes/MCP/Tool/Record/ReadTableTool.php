@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool\Record;
 
+use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\ParameterType;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
@@ -164,14 +166,14 @@ class ReadTableTool extends AbstractRecordTool
         // Filter by pid if specified
         if ($pid !== null && $this->tableHasPidField($table)) {
             $queryBuilder->andWhere(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
             );
         }
 
         // Filter by uid if specified
         if ($uid !== null) {
             $queryBuilder->andWhere(
-                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
             );
         }
 
@@ -209,11 +211,32 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         // Get total count (without pagination)
-        $countQueryBuilder = clone $queryBuilder;
-        $totalCount = $countQueryBuilder->count('uid')
-            ->resetQueryPart('orderBy')
-            ->executeQuery()
-            ->fetchOne();
+        $countQueryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable($table);
+        $countQueryBuilder->getRestrictions()->removeAll();
+        $countQueryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+        if (!$includeHidden) {
+            $countQueryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
+        }
+        
+        $countQueryBuilder->count('uid')->from($table);
+        
+        // Apply the same WHERE conditions as the main query
+        if (!empty($where)) {
+            foreach ($where as $field => $value) {
+                if (is_array($value)) {
+                    $countQueryBuilder->andWhere(
+                        $countQueryBuilder->expr()->in($field, $countQueryBuilder->createNamedParameter($value, Connection::PARAM_STR_ARRAY))
+                    );
+                } else {
+                    $countQueryBuilder->andWhere(
+                        $countQueryBuilder->expr()->eq($field, $countQueryBuilder->createNamedParameter($value, ParameterType::INTEGER))
+                    );
+                }
+            }
+        }
+        
+        $totalCount = $countQueryBuilder->executeQuery()->fetchOne();
 
         // Execute the query
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
@@ -280,7 +303,7 @@ class ReadTableTool extends AbstractRecordTool
         $typeSpecificFields = [];
         
         if ($typeField && isset($record[$typeField])) {
-            $recordType = $record[$typeField];
+            $recordType = (string)$record[$typeField];
             $typeSpecificFields = $this->getTypeSpecificFields($table, $recordType);
         }
         
@@ -660,7 +683,7 @@ class ReadTableTool extends AbstractRecordTool
                     // Process each record
                     foreach ($result['records'] as &$record) {
                         if (isset($record[$fieldName]) && $record[$fieldName] !== '' && $record[$fieldName] !== null) {
-                            $values = GeneralUtility::trimExplode(',', $record[$fieldName], true);
+                            $values = GeneralUtility::trimExplode(',', (string)$record[$fieldName], true);
                             $selectedItems = [];
 
                             // Find the selected items

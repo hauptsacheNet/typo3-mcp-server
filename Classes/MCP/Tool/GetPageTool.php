@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool;
 
+use Doctrine\DBAL\ParameterType;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -12,6 +13,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\Localization\LanguageService;
+use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 
 /**
  * Tool for retrieving detailed information about a TYPO3 page
@@ -91,7 +93,7 @@ class GetPageTool extends AbstractTool
         $page = $queryBuilder->select('*')
             ->from('pages')
             ->where(
-                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
             )
             ->executeQuery()
             ->fetchAssociative();
@@ -188,7 +190,7 @@ class GetPageTool extends AbstractTool
         $totalCount = $countQueryBuilder->count('*')
             ->from($table)
             ->where(
-                $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pageId, \PDO::PARAM_INT))
+                $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
             )
             ->executeQuery()
             ->fetchOne();
@@ -197,7 +199,7 @@ class GetPageTool extends AbstractTool
         $query = $queryBuilder->select('*')
             ->from($table)
             ->where(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
             );
 
         // Limit to 20 records per table
@@ -481,8 +483,8 @@ class GetPageTool extends AbstractTool
         if (strpos($label, 'LLL:') === 0) {
             // Initialize language service if needed
             if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof LanguageService) {
-                $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageService::class);
-                $GLOBALS['LANG']->init('default');
+                $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
+                $GLOBALS['LANG'] = $languageServiceFactory->create('default');
             }
             
             // Translate the label

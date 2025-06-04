@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool\Record;
 
+use Doctrine\DBAL\ParameterType;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -224,7 +225,7 @@ class WriteTableTool extends AbstractRecordTool
                 ->select('sorting')
                 ->from($table)
                 ->where(
-                    $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, \PDO::PARAM_INT))
+                    $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
                 )
                 ->orderBy('sorting', 'DESC')
                 ->setMaxResults(1)

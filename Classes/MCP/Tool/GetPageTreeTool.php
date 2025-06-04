@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool;
 
+use Doctrine\DBAL\ParameterType;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -83,19 +84,19 @@ class GetPageTreeTool extends AbstractTool
         if ($startPage === 0) {
             // Root level pages have pid=0
             $query->where(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter(0, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
             );
         } else {
             // Get subpages of the specified page
             $query->where(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($startPage, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($startPage, ParameterType::INTEGER))
             );
         }
 
         // Only include non-hidden pages if includeHidden is false
         if (!$includeHidden) {
             $query->andWhere(
-                $queryBuilder->expr()->eq('hidden', $queryBuilder->createNamedParameter(0, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('hidden', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
             );
         }
 
@@ -154,7 +155,7 @@ class GetPageTreeTool extends AbstractTool
 
         if (!$includeHidden) {
             $query->andWhere(
-                $queryBuilder->expr()->eq('hidden', $queryBuilder->createNamedParameter(0, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('hidden', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
             );
         }
 
