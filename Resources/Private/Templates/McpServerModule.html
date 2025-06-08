@@ -1,0 +1,168 @@
+<html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers" data-namespace-typo3-fluid="true">
+
+<div class="module-body">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:title" />
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:description" />
+                    </p>
+                    
+                    <!-- Token Status -->
+                    <div class="row mb-4">
+                        <div class="col-md-3">
+                            <strong><f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:token_status" />:</strong>
+                        </div>
+                        <div class="col-md-9">
+                            <f:if condition="{tokenInfo.isValid}">
+                                <f:then>
+                                    <span class="badge badge-success">
+                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:token_valid" arguments="{0: '{tokenInfo.expires -> f:format.date(format: \'Y-m-d H:i:s\')}'}" />
+                                    </span>
+                                </f:then>
+                                <f:else>
+                                    <f:if condition="{tokenInfo.token}">
+                                        <f:then>
+                                            <span class="badge badge-warning">
+                                                <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:token_expired" />
+                                            </span>
+                                        </f:then>
+                                        <f:else>
+                                            <span class="badge badge-secondary">
+                                                <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:no_token" />
+                                            </span>
+                                        </f:else>
+                                    </f:if>
+                                </f:else>
+                            </f:if>
+                        </div>
+                    </div>
+                    
+                    <!-- Endpoint URL -->
+                    <f:if condition="{tokenInfo.isValid}">
+                        <div class="row mb-4">
+                            <div class="col-md-3">
+                                <strong><f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:endpoint_url" />:</strong>
+                            </div>
+                            <div class="col-md-9">
+                                <div class="input-group">
+                                    <input type="text" class="form-control" value="{endpointUrl}" readonly id="mcp-endpoint-url">
+                                    <div class="input-group-append">
+                                        <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="mcp-endpoint-url">
+                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                                <span class="icon-markup">📋</span>
+                                            </span>
+                                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:copy_url" />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </f:if>
+                    
+                    <!-- Generate Token Button -->
+                    <f:if condition="{tokenInfo.isValid} == false">
+                        <div class="alert alert-info">
+                            <h5>Generate Access Token</h5>
+                            <p>You need to generate an access token to use the MCP server. Run this command in your terminal:</p>
+                            <div class="input-group mb-3">
+                                <input type="text" class="form-control" value="docker compose exec php vendor/bin/typo3 mcp:generate-token {username}" readonly id="generate-command">
+                                <div class="input-group-append">
+                                    <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="generate-command">
+                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                            <span class="icon-markup">📋</span>
+                                        </span>
+                                        Copy Command
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </f:if>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Client Configuration -->
+    <f:if condition="{tokenInfo.isValid}">
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">
+                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:client_config" />
+                        </h3>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted">
+                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:client_config_description" />
+                        </p>
+
+                        <!-- MCP Client Configuration -->
+                        <h5>MCP Client Configuration</h5>
+                        <p class="text-muted small">Add this to your MCP configuration file for Claude Desktop, Windsurf, Cursor, or other compatible clients:</p>
+                        <div class="input-group mb-3">
+                            <textarea class="form-control" rows="{mcpConfigLines}" readonly id="mcp-config" style="white-space: pre">{mcpConfig}</textarea>
+                            <div class="input-group-append">
+                                <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="mcp-config">
+                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                        <span class="icon-markup">📋</span>
+                                    </span>
+                                    Copy Full Config
+                                </button>
+                                <button class="btn btn-outline-info copy-button" type="button" data-copy-target="mcp-config" data-copy-server-only="{serverKey}">
+                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                        <span class="icon-markup">✂️</span>
+                                    </span>
+                                    Copy Server Only
+                                </button>
+                            </div>
+                        </div>
+                        <p class="text-muted small">
+                            <strong>Tip:</strong> Use "Copy Full Config" for new setups, or "Copy Server Only" to add <code>{serverKey}</code> to your existing <code>mcpServers</code> section.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Available Tools -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">
+                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:available_tools" />
+                        </h3>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted">
+                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:tools_description" />
+                        </p>
+                        
+                        <div class="row">
+                            <f:for each="{tools}" as="tool">
+                                <div class="col-md-6 col-lg-4 mb-3">
+                                    <div class="card card-sm">
+                                        <div class="card-body">
+                                            <h6 class="card-title">{tool.name}</h6>
+                                            <p class="card-text text-muted small">{tool.description}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </f:for>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </f:if>
+</div>
+
+</html>

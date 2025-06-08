@@ -30,3 +30,11 @@ services:
   # Make ToolRegistry public for eID access
   Hn\McpServer\MCP\ToolRegistry:
     public: true
+    
+  # Explicitly configure the module controller
+  Hn\McpServer\Controller\McpServerModuleController:
+    public: true
+    arguments:
+      $moduleTemplateFactory: '@TYPO3\CMS\Backend\Template\ModuleTemplateFactory'
+      $toolRegistry: '@Hn\McpServer\MCP\ToolRegistry'
+      $pageRenderer: '@TYPO3\CMS\Core\Page\PageRenderer'
