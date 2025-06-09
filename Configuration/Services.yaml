@@ -31,6 +31,10 @@ services:
   Hn\McpServer\MCP\ToolRegistry:
     public: true
     
+  # Make WorkspaceContextService public 
+  Hn\McpServer\Service\WorkspaceContextService:
+    public: true
+    
   # Explicitly configure the module controller
   Hn\McpServer\Controller\McpServerModuleController:
     public: true

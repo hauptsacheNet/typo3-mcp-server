@@ -7,6 +7,7 @@ namespace Hn\McpServer\MCP\Tool\Record;
 use Hn\McpServer\MCP\Tool\AbstractTool;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 
 /**
  * Abstract base class for record-related MCP tools
@@ -64,6 +65,76 @@ abstract class AbstractRecordTool extends AbstractTool implements RecordToolInte
         }
         
         return 'unknown';
+    }
+    
+    /**
+     * Check if a table is workspace-capable
+     */
+    protected function isTableWorkspaceCapable(string $table): bool
+    {
+        if (!$this->tableExists($table)) {
+            return false;
+        }
+        
+        // Use TYPO3's built-in method (most reliable)
+        return BackendUtility::isTableWorkspaceEnabled($table);
+    }
+    
+    /**
+     * Get workspace capability information for a table
+     */
+    protected function getWorkspaceCapabilityInfo(string $table): array
+    {
+        if (!$this->tableExists($table)) {
+            return [
+                'workspace_capable' => false,
+                'reason' => 'Table does not exist in TCA'
+            ];
+        }
+        
+        $isWorkspaceCapable = $this->isTableWorkspaceCapable($table);
+        
+        if (!$isWorkspaceCapable) {
+            // Determine why it's not workspace capable
+            $tca = $GLOBALS['TCA'][$table];
+            $ctrl = $tca['ctrl'] ?? [];
+            
+            $reasons = [];
+            
+            if (empty($ctrl['versioningWS'])) {
+                $reasons[] = 'No versioningWS setting in TCA';
+            }
+            
+            if (!empty($ctrl['rootLevel'])) {
+                $reasons[] = 'Root-level table (rootLevel = 1)';
+            }
+            
+            if (!empty($ctrl['adminOnly'])) {
+                $reasons[] = 'Admin-only table';
+            }
+            
+            if (!empty($ctrl['hideTable'])) {
+                $reasons[] = 'Hidden system table';
+            }
+            
+            if (strpos($table, 'sys_') === 0) {
+                $reasons[] = 'System table (sys_* prefix)';
+            }
+            
+            if (in_array($table, ['be_users', 'be_groups', 'sys_file', 'sys_file_storage', 'sys_filemounts'])) {
+                $reasons[] = 'Core system/configuration table';
+            }
+            
+            return [
+                'workspace_capable' => false,
+                'reason' => !empty($reasons) ? implode(', ', $reasons) : 'Not enabled for workspace operations'
+            ];
+        }
+        
+        return [
+            'workspace_capable' => true,
+            'reason' => 'Table supports workspace operations'
+        ];
     }
     
     /**

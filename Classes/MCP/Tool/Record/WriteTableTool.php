@@ -29,7 +29,7 @@ class WriteTableTool extends AbstractRecordTool
     public function getSchema(): array
     {
         return [
-            'description' => 'Create, update, or delete records in TYPO3 tables with TCA validation',
+            'description' => 'Create, update, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -143,6 +143,16 @@ class WriteTableTool extends AbstractRecordTool
         
         if ($this->isTableReadOnly($table)) {
             return $this->createErrorResult('Table "' . $table . '" is read-only');
+        }
+        
+        // Check workspace capability
+        $workspaceInfo = $this->getWorkspaceCapabilityInfo($table);
+        if (!$workspaceInfo['workspace_capable']) {
+            return $this->createErrorResult(
+                'Table "' . $table . '" is not workspace-capable and cannot be modified via MCP. ' .
+                'Reason: ' . $workspaceInfo['reason'] . '. ' .
+                'This table requires direct database access or TYPO3 backend administration.'
+            );
         }
         
         // Validate action-specific parameters
@@ -318,7 +328,6 @@ class WriteTableTool extends AbstractRecordTool
         
         // Update the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
-        $dataHandler->bypassWorkspaceRestrictions = true;
         $dataHandler->start([$table => [$uid => $data]], []);
         $dataHandler->process_datamap();
         
@@ -343,7 +352,6 @@ class WriteTableTool extends AbstractRecordTool
     {
         // Delete the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
-        $dataHandler->bypassWorkspaceRestrictions = true;
         $dataHandler->start([], [$table => [$uid => ['delete' => 1]]]);
         $dataHandler->process_cmdmap();
         

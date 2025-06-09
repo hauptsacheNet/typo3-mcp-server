@@ -27,7 +27,7 @@ class ListTablesTool extends AbstractRecordTool
     public function getSchema(): array
     {
         return [
-            'description' => 'List available tables in TYPO3, organized by extension',
+            'description' => 'List available tables in TYPO3, organized by extension. By default, only shows workspace-capable tables.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -36,17 +36,34 @@ class ListTablesTool extends AbstractRecordTool
                         'description' => 'Whether to include hidden tables',
                         'default' => false,
                     ],
+                    'includeNonWorkspace' => [
+                        'type' => 'boolean',
+                        'description' => 'Whether to include tables that are not workspace-capable',
+                        'default' => false,
+                    ],
+                    'workspaceOnly' => [
+                        'type' => 'boolean',
+                        'description' => 'Show only workspace-capable tables (default behavior)',
+                        'default' => true,
+                    ],
                 ],
             ],
             'examples' => [
                 [
-                    'description' => 'List all available tables',
+                    'description' => 'List workspace-capable tables (default)',
                     'parameters' => []
                 ],
                 [
-                    'description' => 'List all tables including hidden ones',
+                    'description' => 'List all tables including non-workspace-capable ones',
                     'parameters' => [
-                        'includeHidden' => true
+                        'includeNonWorkspace' => true
+                    ]
+                ],
+                [
+                    'description' => 'List all tables including hidden and non-workspace',
+                    'parameters' => [
+                        'includeHidden' => true,
+                        'includeNonWorkspace' => true
                     ]
                 ]
             ]
@@ -59,16 +76,23 @@ class ListTablesTool extends AbstractRecordTool
     public function execute(array $params): CallToolResult
     {
         $includeHidden = $params['includeHidden'] ?? false;
+        $includeNonWorkspace = $params['includeNonWorkspace'] ?? false;
+        $workspaceOnly = $params['workspaceOnly'] ?? true;
+        
+        // If includeNonWorkspace is true, disable workspaceOnly filter
+        if ($includeNonWorkspace) {
+            $workspaceOnly = false;
+        }
         
         try {
             // Get all tables from TCA
-            $tables = $this->getTables($includeHidden);
+            $tables = $this->getTables($includeHidden, $workspaceOnly);
             
             // Group tables by extension
             $groupedTables = $this->groupTablesByExtension($tables);
             
             // Format the result
-            return $this->createSuccessResult($this->formatTablesAsText($groupedTables));
+            return $this->createSuccessResult($this->formatTablesAsText($groupedTables, $workspaceOnly));
         } catch (\Throwable $e) {
             return $this->createErrorResult('Error listing tables: ' . $e->getMessage());
         }
@@ -77,13 +101,22 @@ class ListTablesTool extends AbstractRecordTool
     /**
      * Get all tables from TCA
      */
-    protected function getTables(bool $includeHidden = false): array
+    protected function getTables(bool $includeHidden = false, bool $workspaceOnly = true): array
     {
         $tables = [];
         
         foreach (array_keys($GLOBALS['TCA']) as $table) {
             // Skip hidden tables if not explicitly included
             if (!$includeHidden && $this->isTableHidden($table)) {
+                continue;
+            }
+            
+            // Check workspace capability
+            $workspaceInfo = $this->getWorkspaceCapabilityInfo($table);
+            $isWorkspaceCapable = $workspaceInfo['workspace_capable'];
+            
+            // Skip non-workspace tables if workspaceOnly is true
+            if ($workspaceOnly && !$isWorkspaceCapable) {
                 continue;
             }
             
@@ -95,6 +128,8 @@ class ListTablesTool extends AbstractRecordTool
                 'hidden' => $this->isTableHidden($table),
                 'readOnly' => $this->isTableReadOnly($table),
                 'type' => $this->getTableType($table),
+                'workspace_capable' => $isWorkspaceCapable,
+                'workspace_info' => $workspaceInfo['reason'],
             ];
         }
         
@@ -131,10 +166,17 @@ class ListTablesTool extends AbstractRecordTool
     /**
      * Format tables as text
      */
-    protected function formatTablesAsText(array $groupedTables): string
+    protected function formatTablesAsText(array $groupedTables, bool $workspaceOnly = true): string
     {
-        $result = "AVAILABLE TABLES IN TYPO3\n";
-        $result .= "========================\n\n";
+        $result = $workspaceOnly 
+            ? "WORKSPACE-CAPABLE TABLES IN TYPO3\n" 
+            : "AVAILABLE TABLES IN TYPO3\n";
+        $result .= "===================================\n\n";
+        
+        if ($workspaceOnly) {
+            $result .= "Note: Only showing tables that support workspace operations.\n";
+            $result .= "Use 'includeNonWorkspace: true' to see all tables.\n\n";
+        }
         
         foreach ($groupedTables as $extension => $extensionInfo) {
             $extensionLabel = $extensionInfo['extensionLabel'];
@@ -156,6 +198,14 @@ class ListTablesTool extends AbstractRecordTool
                 
                 if ($tableInfo['readOnly']) {
                     $result .= " [READ-ONLY]";
+                }
+                
+                if (!$workspaceOnly) {
+                    if ($tableInfo['workspace_capable']) {
+                        $result .= " [WORKSPACE-CAPABLE]";
+                    } else {
+                        $result .= " [NO WORKSPACE: " . $tableInfo['workspace_info'] . "]";
+                    }
                 }
                 
                 $result .= "\n";
@@ -284,11 +334,4 @@ class ListTablesTool extends AbstractRecordTool
         return true;
     }
     
-    /**
-     * Get the table label
-     */
-    protected function getTableLabel(string $table): string
-    {
-        return $GLOBALS['TCA'][$table]['ctrl']['title'] ?? $table;
-    }
 }

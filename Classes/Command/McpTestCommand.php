@@ -11,6 +11,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\MCP\ToolRegistry;
+use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 
@@ -158,17 +159,25 @@ class McpTestCommand extends Command
             // Set admin flag directly since setTemporaryAdminFlag doesn't exist in TYPO3 v12
             $beUser->user['admin'] = 1;
             $beUser->user['uid'] = 1; // Add a UID for the fake user to prevent DataHandler errors
-            $beUser->user['workspace_id'] = 0; // Set workspace ID to live workspace
-            $beUser->workspace = 0; // Set workspace to live workspace
             $GLOBALS['BE_USER'] = $beUser;
+            
+            // Set up workspace context
+            $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+            $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
         } else if (!$beUser->isAdmin()) {
             // If user exists but is not admin, set admin flag directly
             $beUser->user['admin'] = 1;
             if (!isset($beUser->user['uid'])) {
                 $beUser->user['uid'] = 1; // Ensure UID is set
             }
-            $beUser->user['workspace_id'] = 0; // Set workspace ID to live workspace
-            $beUser->workspace = 0; // Set workspace to live workspace
+            
+            // Set up workspace context
+            $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+            $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
+        } else {
+            // User exists and is admin, still set up workspace context
+            $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+            $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
         }
     }
     

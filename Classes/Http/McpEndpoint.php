@@ -17,6 +17,7 @@ use TYPO3\CMS\Core\Http\Stream;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Hn\McpServer\MCP\ToolRegistry;
+use Hn\McpServer\Service\WorkspaceContextService;
 
 /**
  * MCP HTTP Endpoint for remote access
@@ -145,13 +146,24 @@ class McpEndpoint
             
             foreach ($toolRegistry->getTools() as $tool) {
                 $schema = $tool->getSchema();
+                $properties = $schema['parameters']['properties'] ?? [];
+                $required = $schema['parameters']['required'] ?? [];
+                
+                // Ensure properties is an object, not an array (MCP requires object)
+                if (empty($properties)) {
+                    $properties = new \stdClass();
+                } else {
+                    // Convert associative array to object for JSON encoding
+                    $properties = (object) $properties;
+                }
+                
                 $tools[] = [
                     'name' => $tool->getName(),
                     'description' => $schema['description'] ?? '',
                     'inputSchema' => [
                         'type' => 'object',
-                        'properties' => $schema['parameters']['properties'] ?? [],
-                        'required' => $schema['parameters']['required'] ?? [],
+                        'properties' => $properties,
+                        'required' => $required,
                     ],
                 ];
             }
@@ -243,8 +255,14 @@ class McpEndpoint
 
         if ($userData) {
             $beUser->user = $userData;
-            $beUser->workspace = 0;
             $GLOBALS['BE_USER'] = $beUser;
+            
+            // Set up workspace context
+            $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+            $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
+            
+            // Log workspace selection for debugging
+            error_log("MCP: User {$userId} switched to workspace {$workspaceId}");
         }
         
         // Ensure TCA is loaded

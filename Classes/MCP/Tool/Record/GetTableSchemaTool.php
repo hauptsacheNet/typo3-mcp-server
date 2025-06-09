@@ -109,8 +109,16 @@ class GetTableSchemaTool extends AbstractRecordTool
         // Check if the table is read-only
         $readOnly = !empty($GLOBALS['TCA'][$table]['ctrl']['readOnly']);
         
+        // Get workspace capability info
+        $workspaceInfo = $this->getWorkspaceCapabilityInfo($table);
+        
         $result .= "Type: content\n";
-        $result .= "Read-Only: " . ($readOnly ? "Yes" : "No") . "\n\n";
+        $result .= "Read-Only: " . ($readOnly ? "Yes" : "No") . "\n";
+        $result .= "Workspace-Capable: " . ($workspaceInfo['workspace_capable'] ? "Yes" : "No") . "\n";
+        if (!$workspaceInfo['workspace_capable']) {
+            $result .= "Workspace Info: " . $workspaceInfo['reason'] . "\n";
+        }
+        $result .= "\n";
         
         // Add control fields section - only the most important ones
         $result .= "CONTROL FIELDS:\n";
