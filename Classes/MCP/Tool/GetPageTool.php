@@ -14,6 +14,8 @@ use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use TYPO3\CMS\Core\Site\SiteFinder;
+use TYPO3\CMS\Core\Site\Entity\Site;
 
 /**
  * Tool for retrieving detailed information about a TYPO3 page
@@ -38,6 +40,10 @@ class GetPageTool extends AbstractTool
                         'type' => 'boolean',
                         'description' => 'Whether to include hidden records (default: false)',
                     ],
+                    'languageId' => [
+                        'type' => 'integer',
+                        'description' => 'Language ID for URL generation (default: 0)',
+                    ],
                 ],
                 'required' => ['uid'],
             ],
@@ -51,6 +57,7 @@ class GetPageTool extends AbstractTool
     {
         $uid = (int)($params['uid'] ?? 0);
         $includeHidden = (bool)($params['includeHidden'] ?? false);
+        $languageId = (int)($params['languageId'] ?? 0);
 
         if ($uid <= 0) {
             return new CallToolResult(
@@ -63,11 +70,14 @@ class GetPageTool extends AbstractTool
             // Get page data
             $pageData = $this->getPageData($uid);
             
+            // Get page URL
+            $pageUrl = $this->getPageUrl($uid, $languageId);
+            
             // Get records on this page
             $recordsInfo = $this->getPageRecords($uid, $includeHidden);
             
             // Build a text representation of the page information
-            $result = $this->formatPageInfo($pageData, $recordsInfo);
+            $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl);
             
             return new CallToolResult([new TextContent($result)]);
         } catch (\Throwable $e) {
@@ -111,6 +121,29 @@ class GetPageTool extends AbstractTool
         }
 
         return $page;
+    }
+
+    /**
+     * Generate URL for a page
+     */
+    protected function getPageUrl(int $pageId, int $languageId = 0): ?string
+    {
+        try {
+            $siteFinder = GeneralUtility::makeInstance(SiteFinder::class);
+            $site = $siteFinder->getSiteByPageId($pageId);
+            
+            if (!$site instanceof Site) {
+                return null;
+            }
+            
+            $language = $site->getLanguageById($languageId);
+            $uri = $site->getRouter()->generateUri($pageId, ['_language' => $language]);
+            
+            return (string)$uri;
+        } catch (\Throwable $e) {
+            // Return null if URL generation fails
+            return null;
+        }
     }
 
     /**
@@ -239,7 +272,7 @@ class GetPageTool extends AbstractTool
     /**
      * Format page information as readable text
      */
-    protected function formatPageInfo(array $pageData, array $recordsInfo): string
+    protected function formatPageInfo(array $pageData, array $recordsInfo, ?string $pageUrl = null): string
     {
         $result = "PAGE INFORMATION\n";
         $result .= "================\n\n";
@@ -247,6 +280,10 @@ class GetPageTool extends AbstractTool
         // Basic page info
         $result .= "UID: " . $pageData['uid'] . "\n";
         $result .= "Title: " . $pageData['title'] . "\n";
+        
+        if ($pageUrl !== null) {
+            $result .= "URL: " . $pageUrl . "\n";
+        }
         
         if (!empty($pageData['nav_title'])) {
             $result .= "Navigation Title: " . $pageData['nav_title'] . "\n";
