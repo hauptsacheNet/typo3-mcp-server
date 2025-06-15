@@ -11,6 +11,8 @@ use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Page\PageRenderer;
+use TYPO3\CMS\Core\Http\JsonResponse;
+use TYPO3\CMS\Core\Http\HtmlResponse;
 use Hn\McpServer\MCP\ToolRegistry;
 
 /**
@@ -40,8 +42,8 @@ class McpServerModuleController
         // Get base URL for endpoint
         $baseUrl = $this->getBaseUrl($request);
         $endpointUrl = $tokenInfo['token'] ? 
-            $baseUrl . '/index.php?eID=mcp_server&token=' . urlencode($tokenInfo['token']) : 
-            '';
+            $baseUrl . '/index.php?eID=mcp_server&token=' . urlencode($tokenInfo['token']) :
+            $baseUrl . '/index.php?eID=mcp_server';
         
         // Get available tools
         $tools = [];
@@ -59,7 +61,7 @@ class McpServerModuleController
             $mcpConfigData,
             JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         );
-        
+
         // Extract just the server configuration part
         $serverKey = array_keys($mcpConfigData['mcpServers'])[0];
         $serverConfig = json_encode(
@@ -74,6 +76,7 @@ class McpServerModuleController
             'baseUrl' => $baseUrl,
             'tools' => $tools,
             'username' => $backendUser->user['username'],
+            'isAdmin' => (bool)($backendUser->user['admin'] ?? false),
             'mcpConfig' => $mcpConfig,
             'mcpConfigLines' => substr_count($mcpConfig, "\n") + 1,
             'serverConfig' => $serverConfig,
@@ -140,10 +143,6 @@ class McpServerModuleController
     
     private function generateMcpConfig(string $endpointUrl, string $siteName): array
     {
-        if (empty($endpointUrl)) {
-            return [];
-        }
-        
         // Create a safe identifier from the site name
         $serverKey = strtolower(preg_replace('/[^a-zA-Z0-9]/', '-', $siteName));
         $serverKey = preg_replace('/--+/', '-', $serverKey); // Remove multiple dashes
@@ -193,5 +192,112 @@ class McpServerModuleController
     private function getBackendUser(): ?BackendUserAuthentication
     {
         return $GLOBALS['BE_USER'] ?? null;
+    }
+    
+    /**
+     * Generate a new token for the current user
+     */
+    public function generateTokenAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $backendUser = $this->getBackendUser();
+        if (!$backendUser) {
+            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
+        }
+        
+        try {
+            $userId = (int)$backendUser->user['uid'];
+            $username = $backendUser->user['username'];
+            
+            // Generate new token (default 30 days expiration)
+            $token = $this->generateSecureToken();
+            $expires = time() + (720 * 3600); // 30 days in seconds
+            
+            // Update user record
+            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable('be_users');
+                
+            $queryBuilder = $connection->createQueryBuilder();
+            $queryBuilder
+                ->update('be_users')
+                ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($userId)))
+                ->set('mcp_token', $token)
+                ->set('mcp_token_expires', $expires)
+                ->executeStatement();
+            
+            return new JsonResponse([
+                'success' => true,
+                'message' => 'Token generated successfully',
+                'token' => $token,
+                'expires' => date('Y-m-d H:i:s', $expires)
+            ]);
+            
+        } catch (\Throwable $e) {
+            return new JsonResponse([
+                'success' => false,
+                'message' => 'Error generating token: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+    
+    /**
+     * Refresh the token for the current user
+     */
+    public function refreshTokenAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $backendUser = $this->getBackendUser();
+        if (!$backendUser) {
+            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
+        }
+        
+        try {
+            $userId = (int)$backendUser->user['uid'];
+            
+            // Check if user has an existing token
+            $tokenInfo = $this->getUserTokenInfo($userId);
+            if (empty($tokenInfo['token'])) {
+                return new JsonResponse([
+                    'success' => false,
+                    'message' => 'No existing token found. Please generate a new token instead.'
+                ], 400);
+            }
+            
+            // Generate new token (default 30 days expiration)
+            $token = $this->generateSecureToken();
+            $expires = time() + (720 * 3600); // 30 days in seconds
+            
+            // Update user record
+            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable('be_users');
+                
+            $queryBuilder = $connection->createQueryBuilder();
+            $queryBuilder
+                ->update('be_users')
+                ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($userId)))
+                ->set('mcp_token', $token)
+                ->set('mcp_token_expires', $expires)
+                ->executeStatement();
+            
+            return new JsonResponse([
+                'success' => true,
+                'message' => 'Token refreshed successfully',
+                'token' => $token,
+                'expires' => date('Y-m-d H:i:s', $expires)
+            ]);
+            
+        } catch (\Throwable $e) {
+            return new JsonResponse([
+                'success' => false,
+                'message' => 'Error refreshing token: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+    
+    /**
+     * Generate a cryptographically secure token
+     */
+    private function generateSecureToken(): string
+    {
+        $randomBytes = random_bytes(32);
+        return bin2hex($randomBytes);
     }
 }

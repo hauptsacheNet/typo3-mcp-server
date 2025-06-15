@@ -197,6 +197,154 @@ function showManualCopyMessage() {
     alert('Copy failed. Please select the text manually and copy with Ctrl+C (Cmd+C on Mac).');
 }
 
+/**
+ * Handle token generation
+ */
+function generateToken() {
+    showLoading(true);
+    hideMessages();
+    
+    const generateBtn = document.getElementById('generate-token-btn');
+    if (generateBtn) {
+        generateBtn.disabled = true;
+    }
+    
+    fetch(TYPO3.settings.ajaxUrls['mcp_server_generate_token'], {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        showLoading(false);
+        
+        if (data.success) {
+            showSuccessMessage('Token generated successfully! The page will reload to show the updated status.');
+            // Reload page after 2 seconds to show updated token status
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            showErrorMessage(data.message || 'Failed to generate token');
+            if (generateBtn) {
+                generateBtn.disabled = false;
+            }
+        }
+    })
+    .catch(error => {
+        showLoading(false);
+        showErrorMessage('Network error: ' + error.message);
+        if (generateBtn) {
+            generateBtn.disabled = false;
+        }
+    });
+}
+
+/**
+ * Handle token refresh
+ */
+function refreshToken() {
+    showLoading(true);
+    hideMessages();
+    
+    const refreshBtn = document.getElementById('refresh-token-btn');
+    if (refreshBtn) {
+        refreshBtn.disabled = true;
+    }
+    
+    fetch(TYPO3.settings.ajaxUrls['mcp_server_refresh_token'], {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        showLoading(false);
+        
+        if (data.success) {
+            showSuccessMessage('Token refreshed successfully! The page will reload to show the updated status.');
+            // Reload page after 2 seconds to show updated token status
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            showErrorMessage(data.message || 'Failed to refresh token');
+            if (refreshBtn) {
+                refreshBtn.disabled = false;
+            }
+        }
+    })
+    .catch(error => {
+        showLoading(false);
+        showErrorMessage('Network error: ' + error.message);
+        if (refreshBtn) {
+            refreshBtn.disabled = false;
+        }
+    });
+}
+
+/**
+ * Show loading indicator
+ */
+function showLoading(show) {
+    const messagesContainer = document.getElementById('token-messages');
+    const loadingDiv = document.getElementById('token-loading');
+    
+    if (messagesContainer && loadingDiv) {
+        if (show) {
+            messagesContainer.style.display = 'block';
+            loadingDiv.style.display = 'block';
+        } else {
+            loadingDiv.style.display = 'none';
+        }
+    }
+}
+
+/**
+ * Show success message
+ */
+function showSuccessMessage(message) {
+    const messagesContainer = document.getElementById('token-messages');
+    const successDiv = document.getElementById('token-success');
+    
+    if (messagesContainer && successDiv) {
+        messagesContainer.style.display = 'block';
+        successDiv.style.display = 'block';
+        successDiv.textContent = message;
+    }
+}
+
+/**
+ * Show error message
+ */
+function showErrorMessage(message) {
+    const messagesContainer = document.getElementById('token-messages');
+    const errorDiv = document.getElementById('token-error');
+    
+    if (messagesContainer && errorDiv) {
+        messagesContainer.style.display = 'block';
+        errorDiv.style.display = 'block';
+        errorDiv.textContent = message;
+    }
+}
+
+/**
+ * Hide all messages
+ */
+function hideMessages() {
+    const successDiv = document.getElementById('token-success');
+    const errorDiv = document.getElementById('token-error');
+    
+    if (successDiv) {
+        successDiv.style.display = 'none';
+    }
+    if (errorDiv) {
+        errorDiv.style.display = 'none';
+    }
+}
+
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
     // Add event listeners to all copy buttons using data attributes
@@ -207,4 +355,15 @@ document.addEventListener('DOMContentLoaded', function() {
             button.addEventListener('click', () => copyToClipboard(targetId, button));
         }
     });
+    
+    // Add event listeners for token management buttons
+    const generateBtn = document.getElementById('generate-token-btn');
+    if (generateBtn) {
+        generateBtn.addEventListener('click', generateToken);
+    }
+    
+    const refreshBtn = document.getElementById('refresh-token-btn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', refreshToken);
+    }
 });

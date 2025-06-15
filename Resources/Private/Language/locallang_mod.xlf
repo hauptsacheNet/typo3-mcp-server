@@ -33,6 +33,15 @@
 			<trans-unit id="generate_token">
 				<source>Generate New Token</source>
 			</trans-unit>
+			<trans-unit id="generate_token_hint">
+				<source>Create an access token to connect external MCP clients (valid for 30 days)</source>
+			</trans-unit>
+			<trans-unit id="refresh_token">
+				<source>Refresh Token</source>
+			</trans-unit>
+			<trans-unit id="refresh_token_hint">
+				<source>Generate a new token with extended expiration (old token will be invalidated)</source>
+			</trans-unit>
 			<trans-unit id="copy_url">
 				<source>Copy URL</source>
 			</trans-unit>
@@ -47,6 +56,15 @@
 			</trans-unit>
 			<trans-unit id="tools_description">
 				<source>Your MCP server provides access to these TYPO3 tools:</source>
+			</trans-unit>
+			<trans-unit id="cli_alternative_note">
+				<source>Admin Alternative</source>
+			</trans-unit>
+			<trans-unit id="cli_alternative_text">
+				<source>You can also use `vendor/bin/typo3 mcp:serve` for direct CLI access (bypasses all permissions and authentication).</source>
+			</trans-unit>
+			<trans-unit id="http_only_note">
+				<source>This is an HTTP-only MCP server. Most current implementations only support SSE at the moment - see the Client Configuration section below for a current workaround.</source>
 			</trans-unit>
 		</body>
 	</file>

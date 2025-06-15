@@ -10,7 +10,7 @@ return [
         'parent' => 'user',
         'position' => ['after' => 'user_setup'],
         'access' => 'user',
-        'workspaces' => 'live',
+        'workspaces' => '*',
         'path' => '/module/user/mcp-server',
         'iconIdentifier' => 'content-plugin',
         'labels' => 'LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf',

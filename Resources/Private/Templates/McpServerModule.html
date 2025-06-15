@@ -46,7 +46,7 @@
                     
                     <!-- Endpoint URL -->
                     <f:if condition="{tokenInfo.isValid}">
-                        <div class="row mb-4">
+                        <div class="row">
                             <div class="col-md-3">
                                 <strong><f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:endpoint_url" />:</strong>
                             </div>
@@ -62,28 +62,58 @@
                                         </button>
                                     </div>
                                 </div>
+
+                                <!-- HTTP-Only Note -->
+                                <p class="text-muted small">
+                                    <strong>Note:</strong> <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:http_only_note" />
+                                </p>
                             </div>
                         </div>
                     </f:if>
-                    
-                    <!-- Generate Token Button -->
-                    <f:if condition="{tokenInfo.isValid} == false">
-                        <div class="alert alert-info">
-                            <h5>Generate Access Token</h5>
-                            <p>You need to generate an access token to use the MCP server. Run this command in your terminal:</p>
-                            <div class="input-group mb-3">
-                                <input type="text" class="form-control" value="docker compose exec php vendor/bin/typo3 mcp:generate-token {username}" readonly id="generate-command">
-                                <div class="input-group-append">
-                                    <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="generate-command">
-                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                            <span class="icon-markup">📋</span>
+
+                    <!-- Token Management Buttons -->
+                    <div class="row mb-4">
+                        <div class="col-md-9 offset-md-3">
+                            <f:if condition="{tokenInfo.isValid}">
+                                <f:then>
+                                    <button id="refresh-token-btn" class="btn btn-warning" type="button">
+                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-refresh" data-identifier="actions-refresh">
+                                            <span class="icon-markup">🔄</span>
                                         </span>
-                                        Copy Command
+                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:refresh_token" />
                                     </button>
+                                    <small class="text-muted ml-2">
+                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:refresh_token_hint" />
+                                    </small>
+                                </f:then>
+                                <f:else>
+                                    <button id="generate-token-btn" class="btn btn-primary" type="button">
+                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
+                                            <span class="icon-markup">🔑</span>
+                                        </span>
+                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:generate_token" />
+                                    </button>
+                                    <small class="text-muted ml-2">
+                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:generate_token_hint" />
+                                    </small>
+                                </f:else>
+                            </f:if>
+                        </div>
+                    </div>
+
+                    <!-- Status Messages -->
+                    <div id="token-messages" class="mb-3" style="display: none;">
+                        <div id="token-success" class="alert alert-success" style="display: none;"></div>
+                        <div id="token-error" class="alert alert-danger" style="display: none;"></div>
+                        <div id="token-loading" class="alert alert-info" style="display: none;">
+                            <div class="d-flex align-items-center">
+                                <div class="spinner-border spinner-border-sm mr-2" role="status">
+                                    <span class="sr-only">Loading...</span>
                                 </div>
+                                <span>Processing request...</span>
                             </div>
                         </div>
-                    </f:if>
+                    </div>
                 </div>
             </div>
         </div>
@@ -127,6 +157,12 @@
                         <p class="text-muted small">
                             <strong>Tip:</strong> Use "Copy Full Config" for new setups, or "Copy Server Only" to add <code>{serverKey}</code> to your existing <code>mcpServers</code> section.
                         </p>
+                        <f:if condition="{isAdmin}">
+                            <p class="text-muted small">
+                                <strong><f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:cli_alternative_note" />:</strong> 
+                                <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:cli_alternative_text" />
+                            </p>
+                        </f:if>
                     </div>
                 </div>
             </div>
@@ -152,7 +188,7 @@
                                     <div class="card card-sm">
                                         <div class="card-body">
                                             <h6 class="card-title">{tool.name}</h6>
-                                            <p class="card-text text-muted small">{tool.description}</p>
+                                            <p class="card-text text-muted small">{tool.description -> f:format.nl2br()}</p>
                                         </div>
                                     </div>
                                 </div>
