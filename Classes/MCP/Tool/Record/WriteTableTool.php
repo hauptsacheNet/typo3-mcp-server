@@ -252,6 +252,7 @@ class WriteTableTool extends AbstractRecordTool
         
         // Initialize DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
         
         // Set up the data map
         $dataMap = [];
@@ -287,6 +288,7 @@ class WriteTableTool extends AbstractRecordTool
             
             // Initialize a new DataHandler for the move operation
             $moveDataHandler = GeneralUtility::makeInstance(DataHandler::class);
+            $moveDataHandler->BE_USER = $GLOBALS['BE_USER'];
             $moveDataHandler->start([], $cmdMap);
             $moveDataHandler->process_cmdmap();
             
@@ -328,6 +330,7 @@ class WriteTableTool extends AbstractRecordTool
         
         // Update the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
         $dataHandler->start([$table => [$uid => $data]], []);
         $dataHandler->process_datamap();
         
@@ -352,6 +355,7 @@ class WriteTableTool extends AbstractRecordTool
     {
         // Delete the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
         $dataHandler->start([], [$table => [$uid => ['delete' => 1]]]);
         $dataHandler->process_cmdmap();
         
