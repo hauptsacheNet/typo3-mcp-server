@@ -311,6 +311,7 @@ class OAuthService
                 'grant_types' => ['authorization_code'],
                 'response_types' => ['code'],
                 'scope' => 'mcp_access',
+                'redirect_uris' => $clientData['redirect_uris'] ?? ['http://localhost'],
             ];
         }
 
@@ -321,7 +322,7 @@ class OAuthService
             'grant_types' => $clientData['grant_types'] ?? ['authorization_code'],
             'response_types' => ['code'],
             'scope' => $clientData['scope'] ?? 'mcp_access',
-            'redirect_uris' => $clientData['redirect_uris'] ?? [],
+            'redirect_uris' => $clientData['redirect_uris'] ?? ['http://localhost'],
         ];
     }
 

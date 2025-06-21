@@ -44,6 +44,11 @@ class OAuthRegisterEndpoint
                 $clientData['client_name'] = 'MCP Client';
             }
 
+            // redirect_uris is required by RFC 7591, but for MCP clients we can provide a default
+            if (empty($clientData['redirect_uris']) || !is_array($clientData['redirect_uris'])) {
+                $clientData['redirect_uris'] = ['http://localhost']; // Default for local MCP clients
+            }
+
             // Set default values for MCP clients
             $clientData['grant_types'] = $clientData['grant_types'] ?? ['authorization_code'];
             $clientData['response_types'] = $clientData['response_types'] ?? ['code'];
