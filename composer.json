@@ -5,7 +5,7 @@
     "license": "GPL-2.0-or-later",
     "require": {
         "php": ">=8.1.0",
-        "logiscape/mcp-sdk-php": "^1.1",
+        "logiscape/mcp-sdk-php": "^1.2",
         "typo3/cms-backend": "^12.4|^13.4",
         "typo3/cms-core": "^12.4|^13.4",
         "typo3/cms-workspaces": "^12.4|^13.4"

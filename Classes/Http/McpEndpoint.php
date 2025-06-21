@@ -18,6 +18,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
+use Hn\McpServer\Service\OAuthService;
 
 /**
  * MCP HTTP Endpoint for remote access
@@ -34,28 +35,22 @@ class McpEndpoint
             $container = GeneralUtility::getContainer();
             $toolRegistry = $container->get(ToolRegistry::class);
             
-            // Authenticate via query parameter
-            $queryParams = $request->getQueryParams();
-            $token = $queryParams['token'] ?? '';
+            // Authenticate via Bearer token or query parameter
+            $token = $this->extractToken($request);
             
-            if (!$this->validateToken($token)) {
-                $stream = new Stream('php://temp', 'rw');
-                $stream->write(json_encode([
-                    'error' => 'Unauthorized',
-                    'message' => 'Invalid or missing token'
-                ]));
-                $stream->rewind();
-                
-                return new Response(
-                    $stream,
-                    401,
-                    ['Content-Type' => 'application/json']
-                );
+            if (!$token) {
+                return $this->createUnauthorizedResponse('Missing authentication token');
+            }
+
+            $oauthService = GeneralUtility::makeInstance(OAuthService::class);
+            $tokenInfo = $oauthService->validateToken($token);
+            
+            if (!$tokenInfo) {
+                return $this->createUnauthorizedResponse('Invalid or expired token');
             }
 
             // Set up TYPO3 backend context for the authenticated user
-            $userId = $this->getUserIdFromToken($token);
-            $this->setupBackendUserContext($userId);
+            $this->setupBackendUserContext($tokenInfo['be_user_uid']);
 
             // Create MCP server instance
             $server = new Server('typo3-mcp-server');
@@ -186,52 +181,38 @@ class McpEndpoint
     }
 
     /**
-     * Validate authentication token
+     * Extract token from request (Bearer header or query parameter)
      */
-    private function validateToken(string $token): bool
+    private function extractToken(ServerRequestInterface $request): ?string
     {
-        if (empty($token)) {
-            return false;
+        // Try Authorization header first (preferred method)
+        $authHeader = $request->getHeaderLine('Authorization');
+        if (!empty($authHeader) && preg_match('/Bearer\s+(.+)/', $authHeader, $matches)) {
+            return $matches[1];
         }
 
-        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('be_users');
-            
-        $queryBuilder = $connection->createQueryBuilder();
-        $result = $queryBuilder
-            ->select('uid', 'username', 'mcp_token_expires')
-            ->from('be_users')
-            ->where(
-                $queryBuilder->expr()->eq('mcp_token', $queryBuilder->createNamedParameter($token)),
-                $queryBuilder->expr()->gt('mcp_token_expires', $queryBuilder->createNamedParameter(time())),
-                $queryBuilder->expr()->eq('disable', $queryBuilder->createNamedParameter(0))
-            )
-            ->executeQuery()
-            ->fetchAssociative();
-
-        return $result !== false;
+        // Fallback to query parameter for backward compatibility
+        $queryParams = $request->getQueryParams();
+        return $queryParams['token'] ?? null;
     }
 
     /**
-     * Get user ID from valid token
+     * Create unauthorized response
      */
-    private function getUserIdFromToken(string $token): int
+    private function createUnauthorizedResponse(string $message): ResponseInterface
     {
-        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('be_users');
-            
-        $queryBuilder = $connection->createQueryBuilder();
-        $result = $queryBuilder
-            ->select('uid')
-            ->from('be_users')
-            ->where(
-                $queryBuilder->expr()->eq('mcp_token', $queryBuilder->createNamedParameter($token)),
-                $queryBuilder->expr()->gt('mcp_token_expires', $queryBuilder->createNamedParameter(time()))
-            )
-            ->executeQuery()
-            ->fetchAssociative();
-
-        return (int)($result['uid'] ?? 0);
+        $stream = new Stream('php://temp', 'rw');
+        $stream->write(json_encode([
+            'error' => 'Unauthorized',
+            'message' => $message
+        ]));
+        $stream->rewind();
+        
+        return new Response(
+            $stream,
+            401,
+            ['Content-Type' => 'application/json']
+        );
     }
 
     /**

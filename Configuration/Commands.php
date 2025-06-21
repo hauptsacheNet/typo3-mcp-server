@@ -9,8 +9,8 @@ return [
         'class' => \Hn\McpServer\Command\McpTestCommand::class,
         'schedulable' => false,
     ],
-    'mcp:generate-token' => [
-        'class' => \Hn\McpServer\Command\GenerateTokenCommand::class,
+    'mcp:oauth' => [
+        'class' => \Hn\McpServer\Command\OAuthManageCommand::class,
         'schedulable' => false,
     ],
 ];

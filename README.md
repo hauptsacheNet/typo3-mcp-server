@@ -77,23 +77,55 @@ This method gives you admin privileges by default. Add this to your mcp config f
 }
 ```
 
-#### Option 2: Remote MCP Server (Recommended)
+#### Option 2: OAuth Authentication (Recommended)
 
-For easier setup and remote access, use the built-in TYPO3 backend module:
+For secure remote access with proper authentication:
 
 1. Go to **[Username] → MCP Server** in your TYPO3 backend
-2. Copy the configuration from the "MCP Client Configuration" section
+2. Copy the OAuth configuration from the "OAuth Client Configuration" section
 3. Add it to your Claude Desktop configuration file
 
-![MCP Server Setup](mcp_setup.png)
+The OAuth setup:
+- Provides secure authentication through TYPO3 backend login
+- Supports multiple simultaneous client connections per user
+- Includes proper token management and revocation
+- Works with any MCP client that supports OAuth 2.1
 
-The remote setup allows multiple clients to connect simultaneously and provides a web-based interface for token management.
+**OAuth Flow:**
+1. MCP client redirects you to TYPO3 authorization URL
+2. You log in to TYPO3 backend (if not already logged in)  
+3. You authorize the MCP client access
+4. TYPO3 generates a secure access token
+5. MCP client uses the token for API access
+
+![MCP Server Setup](mcp_setup.png)
 
 #### Next Steps
 
 3. Begin creating content - all changes will be safely queued in workspaces
 
 4. Review and publish changes through TYPO3 Backend → Workspaces module
+
+### CLI OAuth Management
+
+For advanced users and automation, you can manage OAuth tokens via command line:
+
+```bash
+# Generate authorization URL for a user
+vendor/bin/typo3 mcp:oauth url admin --client-name="My MCP Client"
+
+# List active tokens for a user  
+vendor/bin/typo3 mcp:oauth list admin
+
+# Revoke a specific token
+vendor/bin/typo3 mcp:oauth revoke admin --token-id=123
+
+# Revoke all tokens for a user
+vendor/bin/typo3 mcp:oauth revoke admin --all
+
+# Clean up expired tokens and codes
+vendor/bin/typo3 mcp:oauth cleanup
+```
 
 ## Development
 

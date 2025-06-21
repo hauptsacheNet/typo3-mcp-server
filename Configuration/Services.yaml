@@ -21,11 +21,11 @@ services:
         command: 'mcp:test'
         description: 'Test MCP tools directly without starting a server'
         
-  Hn\McpServer\Command\GenerateTokenCommand:
+  Hn\McpServer\Command\OAuthManageCommand:
     tags:
       - name: 'console.command'
-        command: 'mcp:generate-token'
-        description: 'Generate MCP access token for backend users'
+        command: 'mcp:oauth'
+        description: 'Manage OAuth tokens for MCP server'
         
   # Make ToolRegistry public for eID access
   Hn\McpServer\MCP\ToolRegistry:
@@ -35,6 +35,10 @@ services:
   Hn\McpServer\Service\WorkspaceContextService:
     public: true
     
+  # Make OAuthService public for eID access
+  Hn\McpServer\Service\OAuthService:
+    public: true
+    
   # Explicitly configure the module controller
   Hn\McpServer\Controller\McpServerModuleController:
     public: true
@@ -42,3 +46,4 @@ services:
       $moduleTemplateFactory: '@TYPO3\CMS\Backend\Template\ModuleTemplateFactory'
       $toolRegistry: '@Hn\McpServer\MCP\ToolRegistry'
       $pageRenderer: '@TYPO3\CMS\Core\Page\PageRenderer'
+      $oauthService: '@Hn\McpServer\Service\OAuthService'

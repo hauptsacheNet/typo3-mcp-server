@@ -14,6 +14,8 @@ use TYPO3\CMS\Core\Page\PageRenderer;
 use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\HtmlResponse;
 use Hn\McpServer\MCP\ToolRegistry;
+use Hn\McpServer\Service\OAuthService;
+use TYPO3\CMS\Core\Core\Environment;
 
 /**
  * Backend module controller for MCP Server configuration
@@ -23,7 +25,8 @@ class McpServerModuleController
     public function __construct(
         private readonly ModuleTemplateFactory $moduleTemplateFactory,
         private readonly ToolRegistry $toolRegistry,
-        private readonly PageRenderer $pageRenderer
+        private readonly PageRenderer $pageRenderer,
+        private readonly OAuthService $oauthService
     ) {}
 
     public function mainAction(ServerRequestInterface $request): ResponseInterface
@@ -36,14 +39,18 @@ class McpServerModuleController
             return new HtmlResponse('Access denied', 403);
         }
         
-        // Get user's token information
-        $tokenInfo = $this->getUserTokenInfo($backendUser->user['uid']);
+        // Get user's OAuth tokens
+        $userId = (int)$backendUser->user['uid'];
+        $tokens = $this->oauthService->getUserTokens($userId);
         
         // Get base URL for endpoint
         $baseUrl = $this->getBaseUrl($request);
-        $endpointUrl = $tokenInfo['token'] ? 
-            $baseUrl . '/index.php?eID=mcp_server&token=' . urlencode($tokenInfo['token']) :
-            $baseUrl . '/index.php?eID=mcp_server';
+        
+        // Generate OAuth authorization URL
+        $authUrl = $this->oauthService->generateAuthorizationUrl($baseUrl, 'Claude Desktop');
+        
+        // Check .well-known file status
+        $wellKnownStatus = $this->checkWellKnownFile($baseUrl);
         
         // Get available tools
         $tools = [];
@@ -56,31 +63,34 @@ class McpServerModuleController
         }
         
         
-        $mcpConfigData = $this->generateMcpConfig($endpointUrl, $this->getSiteName());
-        $mcpConfig = json_encode(
-            $mcpConfigData,
+        // OAuth configuration for Claude Desktop
+        $oauthConfigData = $this->generateOAuthConfig($baseUrl, $this->getSiteName());
+        $oauthConfig = json_encode(
+            $oauthConfigData,
             JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         );
 
         // Extract just the server configuration part
-        $serverKey = array_keys($mcpConfigData['mcpServers'])[0];
+        $serverKey = array_keys($oauthConfigData['mcpServers'])[0];
         $serverConfig = json_encode(
-            $mcpConfigData['mcpServers'][$serverKey],
+            $oauthConfigData['mcpServers'][$serverKey],
             JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         );
         
         // Prepare template variables
         $templateVariables = [
-            'tokenInfo' => $tokenInfo,
-            'endpointUrl' => $endpointUrl,
+            'tokens' => $tokens,
+            'authUrl' => $authUrl,
             'baseUrl' => $baseUrl,
             'tools' => $tools,
             'username' => $backendUser->user['username'],
+            'userId' => $userId,
             'isAdmin' => (bool)($backendUser->user['admin'] ?? false),
-            'mcpConfig' => $mcpConfig,
-            'mcpConfigLines' => substr_count($mcpConfig, "\n") + 1,
+            'oauthConfig' => $oauthConfig,
+            'oauthConfigLines' => substr_count($oauthConfig, "\n") + 1,
             'serverConfig' => $serverConfig,
             'serverKey' => $serverKey,
+            'wellKnownStatus' => $wellKnownStatus,
         ];
         
         // Include JavaScript for copy functionality
@@ -93,32 +103,44 @@ class McpServerModuleController
         return $moduleTemplate->renderResponse('McpServerModule');
     }
     
-    private function getUserTokenInfo(int $userId): array
+    /**
+     * Revoke a specific token
+     */
+    public function revokeTokenAction(ServerRequestInterface $request): ResponseInterface
     {
-        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('be_users');
-            
-        $queryBuilder = $connection->createQueryBuilder();
-        $result = $queryBuilder
-            ->select('mcp_token', 'mcp_token_expires')
-            ->from('be_users')
-            ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($userId)))
-            ->executeQuery()
-            ->fetchAssociative();
-        
-        if (!$result) {
-            return ['token' => '', 'expires' => 0, 'isValid' => false];
+        $backendUser = $this->getBackendUser();
+        if (!$backendUser) {
+            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
         }
-        
-        $isValid = !empty($result['mcp_token']) && 
-                   !empty($result['mcp_token_expires']) && 
-                   $result['mcp_token_expires'] > time();
-        
-        return [
-            'token' => $result['mcp_token'] ?? '',
-            'expires' => (int)($result['mcp_token_expires'] ?? 0),
-            'isValid' => $isValid,
-        ];
+
+        $parsedBody = $request->getParsedBody();
+        $tokenId = (int)($parsedBody['tokenId'] ?? 0);
+        $userId = (int)$backendUser->user['uid'];
+
+        if ($tokenId <= 0) {
+            return new JsonResponse(['success' => false, 'message' => 'Invalid token ID'], 400);
+        }
+
+        try {
+            $success = $this->oauthService->revokeToken($tokenId, $userId);
+            
+            if ($success) {
+                return new JsonResponse([
+                    'success' => true,
+                    'message' => 'Token revoked successfully'
+                ]);
+            } else {
+                return new JsonResponse([
+                    'success' => false,
+                    'message' => 'Token not found or access denied'
+                ], 404);
+            }
+        } catch (\Throwable $e) {
+            return new JsonResponse([
+                'success' => false,
+                'message' => 'Error revoking token: ' . $e->getMessage()
+            ], 500);
+        }
     }
     
     private function getBaseUrl(ServerRequestInterface $request): string
@@ -141,7 +163,7 @@ class McpServerModuleController
         return rtrim($baseUrl, '/');
     }
     
-    private function generateMcpConfig(string $endpointUrl, string $siteName): array
+    private function generateOAuthConfig(string $baseUrl, string $siteName): array
     {
         // Create a safe identifier from the site name
         $serverKey = strtolower(preg_replace('/[^a-zA-Z0-9]/', '-', $siteName));
@@ -152,6 +174,10 @@ class McpServerModuleController
             $serverKey = 'typo3-mcp';
         }
         
+        $endpointUrl = $baseUrl . '/index.php?eID=mcp_server';
+        $authUrl = $baseUrl . '/index.php?eID=mcp_server_oauth_authorize';
+        $tokenUrl = $baseUrl . '/index.php?eID=mcp_server_oauth_token';
+        
         return [
             'mcpServers' => [
                 $serverKey => [
@@ -161,6 +187,11 @@ class McpServerModuleController
                         $endpointUrl,
                         '--transport',
                         'http-only'
+                    ],
+                    'auth' => [
+                        'authorization_url' => $authUrl,
+                        'token_url' => $tokenUrl,
+                        'client_id' => 'typo3-mcp-server'
                     ]
                 ]
             ]
@@ -195,109 +226,140 @@ class McpServerModuleController
     }
     
     /**
-     * Generate a new token for the current user
+     * Check .well-known OAuth discovery file status and try to create if missing
      */
-    public function generateTokenAction(ServerRequestInterface $request): ResponseInterface
+    private function checkWellKnownFile(string $baseUrl): array
     {
-        $backendUser = $this->getBackendUser();
-        if (!$backendUser) {
-            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
+        $webRoot = Environment::getPublicPath();
+        $wellKnownDir = $webRoot . '/.well-known';
+        $wellKnownFile = $wellKnownDir . '/oauth-authorization-server';
+        
+        $status = [
+            'exists' => false,
+            'writable' => false,
+            'created' => false,
+            'error' => null,
+            'path' => $wellKnownFile,
+            'url' => $baseUrl . '/.well-known/oauth-authorization-server'
+        ];
+        
+        // Check if file exists
+        if (file_exists($wellKnownFile)) {
+            $status['exists'] = true;
+            $status['writable'] = is_writable($wellKnownFile);
+            return $status;
         }
         
-        try {
-            $userId = (int)$backendUser->user['uid'];
-            $username = $backendUser->user['username'];
-            
-            // Generate new token (default 30 days expiration)
-            $token = $this->generateSecureToken();
-            $expires = time() + (720 * 3600); // 30 days in seconds
-            
-            // Update user record
-            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getConnectionForTable('be_users');
-                
-            $queryBuilder = $connection->createQueryBuilder();
-            $queryBuilder
-                ->update('be_users')
-                ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($userId)))
-                ->set('mcp_token', $token)
-                ->set('mcp_token_expires', $expires)
-                ->executeStatement();
-            
-            return new JsonResponse([
-                'success' => true,
-                'message' => 'Token generated successfully',
-                'token' => $token,
-                'expires' => date('Y-m-d H:i:s', $expires)
-            ]);
-            
-        } catch (\Throwable $e) {
-            return new JsonResponse([
-                'success' => false,
-                'message' => 'Error generating token: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-    
-    /**
-     * Refresh the token for the current user
-     */
-    public function refreshTokenAction(ServerRequestInterface $request): ResponseInterface
-    {
-        $backendUser = $this->getBackendUser();
-        if (!$backendUser) {
-            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
-        }
-        
-        try {
-            $userId = (int)$backendUser->user['uid'];
-            
-            // Check if user has an existing token
-            $tokenInfo = $this->getUserTokenInfo($userId);
-            if (empty($tokenInfo['token'])) {
-                return new JsonResponse([
-                    'success' => false,
-                    'message' => 'No existing token found. Please generate a new token instead.'
-                ], 400);
+        // Try to create the directory if it doesn't exist
+        if (!is_dir($wellKnownDir)) {
+            if (!@mkdir($wellKnownDir, 0755, true)) {
+                $status['error'] = 'Cannot create .well-known directory. Please create it manually: ' . $wellKnownDir;
+                return $status;
             }
+        }
+        
+        // Check if directory is writable
+        if (!is_writable($wellKnownDir)) {
+            $status['error'] = 'Directory .well-known is not writable. Please check permissions: ' . $wellKnownDir;
+            return $status;
+        }
+        
+        // Generate OAuth metadata content
+        $metadata = $this->oauthService->getMetadata($baseUrl);
+        $content = json_encode($metadata, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        
+        // Try to create the file
+        if (@file_put_contents($wellKnownFile, $content) !== false) {
+            $status['created'] = true;
+            $status['exists'] = true;
+            $status['writable'] = true;
+        } else {
+            $status['error'] = 'Failed to write .well-known file. Please create it manually: ' . $wellKnownFile;
+        }
+        
+        return $status;
+    }
+    
+    /**
+     * AJAX endpoint to manually create .well-known file
+     */
+    public function createWellKnownFileAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $backendUser = $this->getBackendUser();
+        if (!$backendUser) {
+            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
+        }
+        
+        $baseUrl = $this->getBaseUrl($request);
+        $status = $this->checkWellKnownFile($baseUrl);
+        
+        if ($status['exists']) {
+            return new JsonResponse([
+                'success' => true,
+                'message' => 'OAuth discovery file already exists',
+                'status' => $status
+            ]);
+        }
+        
+        if ($status['error']) {
+            return new JsonResponse([
+                'success' => false,
+                'message' => $status['error'],
+                'status' => $status
+            ], 500);
+        }
+        
+        if ($status['created']) {
+            return new JsonResponse([
+                'success' => true,
+                'message' => 'OAuth discovery file created successfully',
+                'status' => $status
+            ]);
+        }
+        
+        return new JsonResponse([
+            'success' => false,
+            'message' => 'Unknown error creating .well-known file',
+            'status' => $status
+        ], 500);
+    }
+
+    /**
+     * Get user tokens via AJAX for dynamic updates
+     */
+    public function getUserTokensAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $backendUser = $this->getBackendUser();
+        if (!$backendUser) {
+            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
+        }
+
+        try {
+            $userId = (int)$backendUser->user['uid'];
+            $tokens = $this->oauthService->getUserTokens($userId);
             
-            // Generate new token (default 30 days expiration)
-            $token = $this->generateSecureToken();
-            $expires = time() + (720 * 3600); // 30 days in seconds
-            
-            // Update user record
-            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getConnectionForTable('be_users');
-                
-            $queryBuilder = $connection->createQueryBuilder();
-            $queryBuilder
-                ->update('be_users')
-                ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($userId)))
-                ->set('mcp_token', $token)
-                ->set('mcp_token_expires', $expires)
-                ->executeStatement();
+            // Format tokens for frontend display
+            $formattedTokens = array_map(function($token) {
+                return [
+                    'uid' => $token['uid'],
+                    'client_name' => $token['client_name'],
+                    'created' => date('Y-m-d H:i:s', $token['crdate']),
+                    'expires' => date('Y-m-d H:i:s', $token['expires']),
+                    'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
+                    'token_preview' => substr($token['token'], 0, 20) . '...',
+                ];
+            }, $tokens);
             
             return new JsonResponse([
                 'success' => true,
-                'message' => 'Token refreshed successfully',
-                'token' => $token,
-                'expires' => date('Y-m-d H:i:s', $expires)
+                'tokens' => $formattedTokens
             ]);
             
         } catch (\Throwable $e) {
             return new JsonResponse([
                 'success' => false,
-                'message' => 'Error refreshing token: ' . $e->getMessage()
+                'message' => 'Error retrieving tokens: ' . $e->getMessage()
             ], 500);
         }
-    }
-    
-    /**
-     * Generate a cryptographically secure token
-     */
-    private function generateSecureToken(): string
-    {
-        $randomBytes = random_bytes(32);
-        return bin2hex($randomBytes);
     }
 }

@@ -14,95 +14,259 @@
                         <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:description" />
                     </p>
                     
-                    <!-- Token Status -->
-                    <div class="row mb-4">
-                        <div class="col-md-3">
-                            <strong><f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:token_status" />:</strong>
-                        </div>
-                        <div class="col-md-9">
-                            <f:if condition="{tokenInfo.isValid}">
-                                <f:then>
-                                    <span class="badge badge-success">
-                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:token_valid" arguments="{0: '{tokenInfo.expires -> f:format.date(format: \'Y-m-d H:i:s\')}'}" />
-                                    </span>
-                                </f:then>
-                                <f:else>
-                                    <f:if condition="{tokenInfo.token}">
-                                        <f:then>
-                                            <span class="badge badge-warning">
-                                                <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:token_expired" />
-                                            </span>
-                                        </f:then>
-                                        <f:else>
-                                            <span class="badge badge-secondary">
-                                                <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:no_token" />
-                                            </span>
-                                        </f:else>
-                                    </f:if>
-                                </f:else>
-                            </f:if>
+                    <!-- Claude Desktop Integration Instructions -->
+                    <div class="alert alert-success">
+                        <h5>🚀 Claude Desktop Integration</h5>
+                        <p class="mb-2">To connect Claude Desktop to this TYPO3 instance:</p>
+                        <ol class="mb-2">
+                            <li>Copy the Server URL below</li>
+                            <li>In Claude Desktop, go to <strong>Settings → Integrations</strong></li>
+                            <li>Click <strong>"Integration hinzufügen"</strong> (Add Integration)</li>
+                            <li>Enter the name and paste the Server URL</li>
+                            <li>Claude Desktop will automatically handle OAuth authentication</li>
+                        </ol>
+                        <p class="mb-0"><strong>Simple setup!</strong> Just one URL - Claude Desktop handles the rest automatically.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Claude Desktop Server URL -->
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        📱 Claude Desktop Server URL
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        Copy this URL and paste it into Claude Desktop's integration field:
+                    </p>
+
+                    <!-- Server URL for Claude Desktop -->
+                    <div class="input-group mb-3">
+                        <input type="text" class="form-control form-control-lg" value="{baseUrl}/index.php?eID=mcp_server" readonly id="claude-server-url" style="font-family: monospace; font-weight: bold;">
+                        <div class="input-group-append">
+                            <button class="btn btn-success btn-lg copy-button" type="button" data-copy-target="claude-server-url">
+                                <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                    <span class="icon-markup">📋</span>
+                                </span>
+                                Copy Server URL
+                            </button>
                         </div>
                     </div>
                     
-                    <!-- Endpoint URL -->
-                    <f:if condition="{tokenInfo.isValid}">
-                        <div class="row">
-                            <div class="col-md-3">
-                                <strong><f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:endpoint_url" />:</strong>
-                            </div>
-                            <div class="col-md-9">
-                                <div class="input-group">
-                                    <input type="text" class="form-control" value="{endpointUrl}" readonly id="mcp-endpoint-url">
-                                    <div class="input-group-append">
-                                        <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="mcp-endpoint-url">
-                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                                <span class="icon-markup">📋</span>
-                                            </span>
-                                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:copy_url" />
-                                        </button>
-                                    </div>
-                                </div>
+                    <div class="alert alert-info">
+                        <h6><strong>How it works:</strong></h6>
+                        <ol class="mb-0">
+                            <li>Claude Desktop discovers OAuth endpoints automatically</li>
+                            <li>You'll be redirected to this TYPO3 backend for authentication</li>
+                            <li>After authorization, Claude Desktop gets secure access</li>
+                            <li>All future requests use OAuth tokens automatically</li>
+                        </ol>
+                    </div>
 
-                                <!-- HTTP-Only Note -->
-                                <p class="text-muted small">
-                                    <strong>Note:</strong> <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:http_only_note" />
-                                </p>
-                            </div>
+                    <!-- OAuth Discovery Status -->
+                    <div class="mt-3">
+                        <h6><strong>OAuth Discovery Status:</strong></h6>
+                        <f:if condition="{wellKnownStatus.exists}">
+                            <f:then>
+                                <div class="alert alert-success">
+                                    <span class="icon-markup">✅</span>
+                                    OAuth discovery file exists at: <code>{wellKnownStatus.url}</code>
+                                    <f:if condition="{wellKnownStatus.created}">
+                                        <br><small class="text-muted">File was automatically created during this request.</small>
+                                    </f:if>
+                                </div>
+                            </f:then>
+                            <f:else>
+                                <f:if condition="{wellKnownStatus.error}">
+                                    <f:then>
+                                        <div class="alert alert-warning">
+                                            <span class="icon-markup">⚠️</span>
+                                            <strong>OAuth Discovery Issue:</strong> {wellKnownStatus.error}
+                                            <div class="mt-2">
+                                                <button type="button" class="btn btn-sm btn-warning" id="create-wellknown-btn">
+                                                    <span class="icon-markup">🔧</span> Try to Create File
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </f:then>
+                                    <f:else>
+                                        <div class="alert alert-info">
+                                            <span class="icon-markup">ℹ️</span>
+                                            OAuth discovery file will be created automatically.
+                                        </div>
+                                    </f:else>
+                                </f:if>
+                            </f:else>
+                        </f:if>
+                    </div>
+
+                    <f:if condition="{isAdmin}">
+                        <div class="mt-4">
+                            <h5>CLI Alternative (Development)</h5>
+                            <p class="text-muted small">
+                                <strong>Admin users:</strong> For local development, you can also connect via command line:
+                            </p>
+                            <pre class="bg-light p-2 small"><code>{
+  "mcpServers": {
+    "{serverKey}": {
+      "command": "php",
+      "args": ["vendor/bin/typo3", "mcp:server"]
+    }
+  }
+}</code></pre>
                         </div>
                     </f:if>
+                </div>
+            </div>
+        </div>
+    </div>
 
-                    <!-- Token Management Buttons -->
-                    <div class="row mb-4">
-                        <div class="col-md-9 offset-md-3">
-                            <f:if condition="{tokenInfo.isValid}">
-                                <f:then>
-                                    <button id="refresh-token-btn" class="btn btn-warning" type="button">
-                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-refresh" data-identifier="actions-refresh">
-                                            <span class="icon-markup">🔄</span>
-                                        </span>
-                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:refresh_token" />
-                                    </button>
-                                    <small class="text-muted ml-2">
-                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:refresh_token_hint" />
-                                    </small>
-                                </f:then>
-                                <f:else>
-                                    <button id="generate-token-btn" class="btn btn-primary" type="button">
-                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
-                                            <span class="icon-markup">🔑</span>
-                                        </span>
-                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:generate_token" />
-                                    </button>
-                                    <small class="text-muted ml-2">
-                                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:generate_token_hint" />
-                                    </small>
-                                </f:else>
-                            </f:if>
+    <!-- Advanced OAuth Configuration -->
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        ⚙️ Advanced OAuth Configuration
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        For advanced MCP clients or manual OAuth setup:
+                    </p>
+
+                    <!-- OAuth Configuration -->
+                    <div class="mb-3">
+                        <label class="form-label"><strong>Full OAuth Configuration:</strong></label>
+                        <div class="input-group">
+                            <textarea class="form-control" rows="{oauthConfigLines}" readonly id="oauth-config" style="white-space: pre; font-family: monospace; font-size: 12px;">{oauthConfig}</textarea>
+                            <div class="input-group-append">
+                                <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="oauth-config">
+                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                        <span class="icon-markup">📋</span>
+                                    </span>
+                                    Copy
+                                </button>
+                            </div>
                         </div>
                     </div>
 
+                    <!-- OAuth Discovery -->
+                    <div class="row">
+                        <div class="col-md-6">
+                            <label class="form-label"><strong>OAuth Discovery:</strong></label>
+                            <div class="input-group mb-2">
+                                <input type="text" class="form-control" value="{baseUrl}/index.php?eID=mcp_server_oauth_metadata" readonly id="oauth-discovery">
+                                <div class="input-group-append">
+                                    <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="oauth-discovery">
+                                        <span class="icon-markup">📋</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label"><strong>Manual Authorization:</strong></label>
+                            <div class="input-group mb-2">
+                                <input type="text" class="form-control" value="{authUrl}" readonly id="auth-url">
+                                <div class="input-group-append">
+                                    <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="auth-url">
+                                        <span class="icon-markup">📋</span>
+                                    </button>
+                                    <a href="{authUrl}" target="_blank" class="btn btn-primary">
+                                        <span class="icon-markup">🔗</span>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Tokens -->
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h3 class="card-title mb-0">
+                        Active OAuth Tokens
+                    </h3>
+                    <button id="refresh-tokens-btn" class="btn btn-sm btn-outline-secondary">
+                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-refresh" data-identifier="actions-refresh">
+                            <span class="icon-markup">🔄</span>
+                        </span>
+                        Refresh
+                    </button>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        Manage your active OAuth tokens. Each token represents an authorized MCP client connection.
+                    </p>
+
+                    <!-- Token List -->
+                    <div id="tokens-container">
+                        <f:if condition="{tokens}">
+                            <f:then>
+                                <div class="table-responsive">
+                                    <table class="table table-striped">
+                                        <thead>
+                                            <tr>
+                                                <th>Client Name</th>
+                                                <th>Created</th>
+                                                <th>Last Used</th>
+                                                <th>Expires</th>
+                                                <th>Token</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="tokens-table-body">
+                                            <f:for each="{tokens}" as="token">
+                                                <tr data-token-id="{token.uid}">
+                                                    <td><strong>{token.client_name}</strong></td>
+                                                    <td><small class="text-muted">{token.crdate -> f:format.date(format: 'Y-m-d H:i:s')}</small></td>
+                                                    <td><small class="text-muted">
+                                                        <f:if condition="{token.last_used}">
+                                                            <f:then>{token.last_used -> f:format.date(format: 'Y-m-d H:i:s')}</f:then>
+                                                            <f:else>Never</f:else>
+                                                        </f:if>
+                                                    </small></td>
+                                                    <td><small class="text-muted">{token.expires -> f:format.date(format: 'Y-m-d H:i:s')}</small></td>
+                                                    <td><code class="small">{token.token -> f:format.crop(maxCharacters: 20)}...</code></td>
+                                                    <td>
+                                                        <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="{token.uid}">
+                                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-delete" data-identifier="actions-delete">
+                                                                <span class="icon-markup">🗑️</span>
+                                                            </span>
+                                                            Revoke
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            </f:for>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </f:then>
+                            <f:else>
+                                <div id="no-tokens-message" class="text-center text-muted py-4">
+                                    <div class="mb-3">
+                                        <span style="font-size: 2rem;">🔑</span>
+                                    </div>
+                                    <p>No active OAuth tokens found.</p>
+                                    <p class="small">Use the OAuth configuration above to connect your first MCP client.</p>
+                                </div>
+                            </f:else>
+                        </f:if>
+                    </div>
+
                     <!-- Status Messages -->
-                    <div id="token-messages" class="mb-3" style="display: none;">
+                    <div id="token-messages" class="mt-3" style="display: none;">
                         <div id="token-success" class="alert alert-success" style="display: none;"></div>
                         <div id="token-error" class="alert alert-danger" style="display: none;"></div>
                         <div id="token-loading" class="alert alert-info" style="display: none;">
@@ -118,87 +282,254 @@
             </div>
         </div>
     </div>
-    
-    <!-- Client Configuration -->
-    <f:if condition="{tokenInfo.isValid}">
-        <div class="row mt-4">
-            <div class="col-md-12">
-                <div class="card">
-                    <div class="card-header">
-                        <h3 class="card-title">
-                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:client_config" />
-                        </h3>
-                    </div>
-                    <div class="card-body">
-                        <p class="text-muted">
-                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:client_config_description" />
-                        </p>
-
-                        <!-- MCP Client Configuration -->
-                        <h5>MCP Client Configuration</h5>
-                        <p class="text-muted small">Add this to your MCP configuration file for Claude Desktop, Windsurf, Cursor, or other compatible clients:</p>
-                        <div class="input-group mb-3">
-                            <textarea class="form-control" rows="{mcpConfigLines}" readonly id="mcp-config" style="white-space: pre">{mcpConfig}</textarea>
-                            <div class="input-group-append">
-                                <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="mcp-config">
-                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                        <span class="icon-markup">📋</span>
-                                    </span>
-                                    Copy Full Config
-                                </button>
-                                <button class="btn btn-outline-info copy-button" type="button" data-copy-target="mcp-config" data-copy-server-only="{serverKey}">
-                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                        <span class="icon-markup">✂️</span>
-                                    </span>
-                                    Copy Server Only
-                                </button>
-                            </div>
-                        </div>
-                        <p class="text-muted small">
-                            <strong>Tip:</strong> Use "Copy Full Config" for new setups, or "Copy Server Only" to add <code>{serverKey}</code> to your existing <code>mcpServers</code> section.
-                        </p>
-                        <f:if condition="{isAdmin}">
-                            <p class="text-muted small">
-                                <strong><f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:cli_alternative_note" />:</strong> 
-                                <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:cli_alternative_text" />
-                            </p>
-                        </f:if>
-                    </div>
-                </div>
-            </div>
-        </div>
         
-        <!-- Available Tools -->
-        <div class="row mt-4">
-            <div class="col-md-12">
-                <div class="card">
-                    <div class="card-header">
-                        <h3 class="card-title">
-                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:available_tools" />
-                        </h3>
-                    </div>
-                    <div class="card-body">
-                        <p class="text-muted">
-                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:tools_description" />
-                        </p>
-                        
-                        <div class="row">
-                            <f:for each="{tools}" as="tool">
-                                <div class="col-md-6 col-lg-4 mb-3">
-                                    <div class="card card-sm">
-                                        <div class="card-body">
-                                            <h6 class="card-title">{tool.name}</h6>
-                                            <p class="card-text text-muted small">{tool.description -> f:format.nl2br()}</p>
-                                        </div>
+    <!-- Available Tools -->
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:available_tools" />
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:tools_description" />
+                    </p>
+                    
+                    <div class="row">
+                        <f:for each="{tools}" as="tool">
+                            <div class="col-md-6 col-lg-4 mb-3">
+                                <div class="card card-sm">
+                                    <div class="card-body">
+                                        <h6 class="card-title">{tool.name}</h6>
+                                        <p class="card-text text-muted small">{tool.description -> f:format.nl2br()}</p>
                                     </div>
                                 </div>
-                            </f:for>
-                        </div>
+                            </div>
+                        </f:for>
                     </div>
                 </div>
             </div>
         </div>
-    </f:if>
+    </div>
 </div>
+
+<script>
+// Token management functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const userId = {userId};
+    
+    // Copy button functionality
+    document.querySelectorAll('.copy-button').forEach(button => {
+        button.addEventListener('click', function() {
+            const targetId = this.getAttribute('data-copy-target');
+            const serverOnly = this.getAttribute('data-copy-server-only');
+            let text;
+            
+            if (serverOnly) {
+                // Copy only the server configuration
+                const fullConfig = JSON.parse(document.getElementById(targetId).value);
+                const serverConfig = fullConfig.mcpServers[serverOnly];
+                text = JSON.stringify({[serverOnly]: serverConfig}, null, 2);
+            } else {
+                text = document.getElementById(targetId).value;
+            }
+            
+            navigator.clipboard.writeText(text).then(() => {
+                // Show temporary success feedback
+                const originalText = this.innerHTML;
+                this.innerHTML = '<span class="icon-markup">✅</span> Copied!';
+                this.classList.add('btn-success');
+                this.classList.remove('btn-outline-secondary', 'btn-outline-info');
+                
+                setTimeout(() => {
+                    this.innerHTML = originalText;
+                    this.classList.remove('btn-success');
+                    this.classList.add(serverOnly ? 'btn-outline-info' : 'btn-outline-secondary');
+                }, 1500);
+            });
+        });
+    });
+    
+    // Token refresh functionality
+    document.getElementById('refresh-tokens-btn')?.addEventListener('click', refreshTokens);
+    
+    // Well-known file creation
+    document.getElementById('create-wellknown-btn')?.addEventListener('click', createWellKnownFile);
+    
+    // Token revocation
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('revoke-token-btn') || e.target.closest('.revoke-token-btn')) {
+            const button = e.target.classList.contains('revoke-token-btn') ? e.target : e.target.closest('.revoke-token-btn');
+            const tokenId = button.getAttribute('data-token-id');
+            
+            if (confirm('Are you sure you want to revoke this token? The associated MCP client will lose access immediately.')) {
+                revokeToken(tokenId);
+            }
+        }
+    });
+    
+    function refreshTokens() {
+        showLoading();
+        
+        fetch(TYPO3.settings.ajaxUrls.mcp_server_get_tokens, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        })
+        .then(response => response.json())
+        .then(data => {
+            hideLoading();
+            if (data.success) {
+                updateTokensTable(data.tokens);
+            } else {
+                showError('Failed to refresh tokens: ' + data.message);
+            }
+        })
+        .catch(error => {
+            hideLoading();
+            showError('Error refreshing tokens: ' + error.message);
+        });
+    }
+    
+    function revokeToken(tokenId) {
+        showLoading();
+        
+        fetch(TYPO3.settings.ajaxUrls.mcp_server_revoke_token, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                tokenId: tokenId
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            hideLoading();
+            if (data.success) {
+                showSuccess(data.message);
+                refreshTokens(); // Refresh the token list
+            } else {
+                showError('Failed to revoke token: ' + data.message);
+            }
+        })
+        .catch(error => {
+            hideLoading();
+            showError('Error revoking token: ' + error.message);
+        });
+    }
+    
+    function createWellKnownFile() {
+        showLoading();
+        
+        fetch(TYPO3.settings.ajaxUrls.mcp_server_create_wellknown, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        })
+        .then(response => response.json())
+        .then(data => {
+            hideLoading();
+            if (data.success) {
+                showSuccess(data.message);
+                // Reload page to update status
+                setTimeout(() => {
+                    window.location.reload();
+                }, 2000);
+            } else {
+                showError('Failed to create .well-known file: ' + data.message);
+            }
+        })
+        .catch(error => {
+            hideLoading();
+            showError('Error creating .well-known file: ' + error.message);
+        });
+    }
+    
+    function updateTokensTable(tokens) {
+        const container = document.getElementById('tokens-container');
+        
+        if (tokens.length === 0) {
+            container.innerHTML = `
+                <div id="no-tokens-message" class="text-center text-muted py-4">
+                    <div class="mb-3">
+                        <span style="font-size: 2rem;">🔑</span>
+                    </div>
+                    <p>No active OAuth tokens found.</p>
+                    <p class="small">Use the OAuth configuration above to connect your first MCP client.</p>
+                </div>
+            `;
+        } else {
+            const tableHTML = `
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Client Name</th>
+                                <th>Created</th>
+                                <th>Last Used</th>
+                                <th>Expires</th>
+                                <th>Token</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tokens-table-body">
+                            ${tokens.map(token => `
+                                <tr data-token-id="${token.uid}">
+                                    <td><strong>${token.client_name}</strong></td>
+                                    <td><small class="text-muted">${token.created}</small></td>
+                                    <td><small class="text-muted">${token.last_used}</small></td>
+                                    <td><small class="text-muted">${token.expires}</small></td>
+                                    <td><code class="small">${token.token_preview}</code></td>
+                                    <td>
+                                        <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="${token.uid}">
+                                            <span class="icon-markup">🗑️</span>
+                                            Revoke
+                                        </button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            container.innerHTML = tableHTML;
+        }
+    }
+    
+    function showLoading() {
+        document.getElementById('token-messages').style.display = 'block';
+        document.getElementById('token-loading').style.display = 'block';
+        document.getElementById('token-success').style.display = 'none';
+        document.getElementById('token-error').style.display = 'none';
+    }
+    
+    function hideLoading() {
+        document.getElementById('token-loading').style.display = 'none';
+    }
+    
+    function showSuccess(message) {
+        document.getElementById('token-messages').style.display = 'block';
+        document.getElementById('token-success').style.display = 'block';
+        document.getElementById('token-success').textContent = message;
+        document.getElementById('token-error').style.display = 'none';
+        
+        setTimeout(() => {
+            document.getElementById('token-messages').style.display = 'none';
+        }, 3000);
+    }
+    
+    function showError(message) {
+        document.getElementById('token-messages').style.display = 'block';
+        document.getElementById('token-error').style.display = 'block';
+        document.getElementById('token-error').textContent = message;
+        document.getElementById('token-success').style.display = 'none';
+    }
+});
+</script>
 
 </html>
