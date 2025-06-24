@@ -1,5 +1,5 @@
 {
-    "name": "hn/mcp-server",
+    "name": "hn/typo3-mcp-server",
     "type": "typo3-cms-extension",
     "description": "TYPO3 extension that provides a Model Context Protocol (MCP) server for interacting with TYPO3 pages and records",
     "license": "GPL-2.0-or-later",
