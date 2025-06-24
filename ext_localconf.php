@@ -18,3 +18,6 @@ $GLOBALS['TYPO3_CONF_VARS']['FE']['eID_include']['mcp_server_oauth_metadata'] =
 
 $GLOBALS['TYPO3_CONF_VARS']['FE']['eID_include']['mcp_server_oauth_register'] = 
     \Hn\McpServer\Http\OAuthRegisterEndpoint::class;
+
+$GLOBALS['TYPO3_CONF_VARS']['FE']['eID_include']['mcp_server_oauth_resource'] = 
+    \Hn\McpServer\Http\OAuthResourceMetadataEndpoint::class;

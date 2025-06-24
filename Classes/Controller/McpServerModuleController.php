@@ -15,7 +15,6 @@ use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\HtmlResponse;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\OAuthService;
-use TYPO3\CMS\Core\Core\Environment;
 
 /**
  * Backend module controller for MCP Server configuration
@@ -31,6 +30,13 @@ class McpServerModuleController
 
     public function mainAction(ServerRequestInterface $request): ResponseInterface
     {
+        $queryParams = $request->getQueryParams();
+        
+        // Check if this is an OAuth flow continuation after login
+        if (isset($queryParams['oauth_flow']) && $queryParams['oauth_flow'] === '1') {
+            return $this->handleOAuthFlowContinuation($request);
+        }
+        
         $moduleTemplate = $this->moduleTemplateFactory->create($request);
         
         // Get current user
@@ -49,9 +55,6 @@ class McpServerModuleController
         // Generate OAuth authorization URL
         $authUrl = $this->oauthService->generateAuthorizationUrl($baseUrl, 'Claude Desktop');
         
-        // Check .well-known file status
-        $wellKnownStatus = $this->checkWellKnownFile($baseUrl);
-        
         // Get available tools
         $tools = [];
         foreach ($this->toolRegistry->getTools() as $tool) {
@@ -63,19 +66,11 @@ class McpServerModuleController
         }
         
         
-        // OAuth configuration for Claude Desktop
-        $oauthConfigData = $this->generateOAuthConfig($baseUrl, $this->getSiteName());
-        $oauthConfig = json_encode(
-            $oauthConfigData,
-            JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
-        );
-
-        // Extract just the server configuration part
-        $serverKey = array_keys($oauthConfigData['mcpServers'])[0];
-        $serverConfig = json_encode(
-            $oauthConfigData['mcpServers'][$serverKey],
-            JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
-        );
+        // Generate mcp-remote token URL (for clients that don't support auth headers)
+        $mcpRemoteUrl = $this->generateMcpRemoteUrl($baseUrl, $tokens);
+        
+        // Generate server key
+        $serverKey = $this->generateServerKey($this->getSiteName());
         
         // Prepare template variables
         $templateVariables = [
@@ -85,12 +80,8 @@ class McpServerModuleController
             'tools' => $tools,
             'username' => $backendUser->user['username'],
             'userId' => $userId,
-            'isAdmin' => (bool)($backendUser->user['admin'] ?? false),
-            'oauthConfig' => $oauthConfig,
-            'oauthConfigLines' => substr_count($oauthConfig, "\n") + 1,
-            'serverConfig' => $serverConfig,
+            'mcpRemoteUrl' => $mcpRemoteUrl,
             'serverKey' => $serverKey,
-            'wellKnownStatus' => $wellKnownStatus,
         ];
         
         // Include JavaScript for copy functionality
@@ -104,6 +95,31 @@ class McpServerModuleController
     }
     
     /**
+     * Handle OAuth flow continuation after login
+     */
+    private function handleOAuthFlowContinuation(ServerRequestInterface $request): ResponseInterface
+    {
+        $queryParams = $request->getQueryParams();
+        
+        // Extract OAuth parameters
+        $oauthParams = [];
+        foreach (['client_id', 'response_type', 'client_name', 'redirect_uri', 'code_challenge', 'code_challenge_method'] as $param) {
+            if (isset($queryParams[$param])) {
+                $oauthParams[$param] = $queryParams[$param];
+            }
+        }
+        
+        if (empty($oauthParams)) {
+            return new HtmlResponse('Invalid OAuth request - missing parameters', 400);
+        }
+        
+        // Redirect back to OAuth authorization endpoint with parameters
+        $oauthUrl = '/index.php?eID=mcp_server_oauth_authorize&' . http_build_query($oauthParams);
+        
+        return new \TYPO3\CMS\Core\Http\RedirectResponse($oauthUrl, 302);
+    }
+    
+    /**
      * Revoke a specific token
      */
     public function revokeTokenAction(ServerRequestInterface $request): ResponseInterface
@@ -113,7 +129,21 @@ class McpServerModuleController
             return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
         }
 
+        $rawBody = $request->getBody()->getContents();
+        
+        // Reset body stream position for further processing
+        $request->getBody()->rewind();
+        
         $parsedBody = $request->getParsedBody();
+        
+        // If parsedBody is null, try to decode JSON manually
+        if ($parsedBody === null && !empty($rawBody)) {
+            $jsonData = json_decode($rawBody, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $parsedBody = $jsonData;
+            }
+        }
+        
         $tokenId = (int)($parsedBody['tokenId'] ?? 0);
         $userId = (int)$backendUser->user['uid'];
 
@@ -143,6 +173,40 @@ class McpServerModuleController
         }
     }
     
+    /**
+     * Revoke all tokens for the current user
+     */
+    public function revokeAllTokensAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $backendUser = $this->getBackendUser();
+        if (!$backendUser) {
+            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
+        }
+
+        $userId = (int)$backendUser->user['uid'];
+
+        try {
+            $revokedCount = $this->oauthService->revokeAllUserTokens($userId);
+            
+            if ($revokedCount > 0) {
+                return new JsonResponse([
+                    'success' => true,
+                    'message' => sprintf('Successfully revoked %d token%s', $revokedCount, $revokedCount === 1 ? '' : 's')
+                ]);
+            } else {
+                return new JsonResponse([
+                    'success' => false,
+                    'message' => 'No tokens found to revoke'
+                ], 404);
+            }
+        } catch (\Throwable $e) {
+            return new JsonResponse([
+                'success' => false,
+                'message' => 'Error revoking tokens: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+    
     private function getBaseUrl(ServerRequestInterface $request): string
     {
         // Try to get from TYPO3 configuration first
@@ -163,40 +227,6 @@ class McpServerModuleController
         return rtrim($baseUrl, '/');
     }
     
-    private function generateOAuthConfig(string $baseUrl, string $siteName): array
-    {
-        // Create a safe identifier from the site name
-        $serverKey = strtolower(preg_replace('/[^a-zA-Z0-9]/', '-', $siteName));
-        $serverKey = preg_replace('/--+/', '-', $serverKey); // Remove multiple dashes
-        $serverKey = trim($serverKey, '-'); // Remove leading/trailing dashes
-        
-        if (empty($serverKey)) {
-            $serverKey = 'typo3-mcp';
-        }
-        
-        $endpointUrl = $baseUrl . '/index.php?eID=mcp_server';
-        $authUrl = $baseUrl . '/index.php?eID=mcp_server_oauth_authorize';
-        $tokenUrl = $baseUrl . '/index.php?eID=mcp_server_oauth_token';
-        
-        return [
-            'mcpServers' => [
-                $serverKey => [
-                    'command' => 'npx',
-                    'args' => [
-                        'mcp-remote',
-                        $endpointUrl,
-                        '--transport',
-                        'http-only'
-                    ],
-                    'auth' => [
-                        'authorization_url' => $authUrl,
-                        'token_url' => $tokenUrl,
-                        'client_id' => 'typo3-mcp-server'
-                    ]
-                ]
-            ]
-        ];
-    }
     
     private function getSiteName(): string
     {
@@ -223,105 +253,6 @@ class McpServerModuleController
     private function getBackendUser(): ?BackendUserAuthentication
     {
         return $GLOBALS['BE_USER'] ?? null;
-    }
-    
-    /**
-     * Check .well-known OAuth discovery file status and try to create if missing
-     */
-    private function checkWellKnownFile(string $baseUrl): array
-    {
-        $webRoot = Environment::getPublicPath();
-        $wellKnownDir = $webRoot . '/.well-known';
-        $wellKnownFile = $wellKnownDir . '/oauth-authorization-server';
-        
-        $status = [
-            'exists' => false,
-            'writable' => false,
-            'created' => false,
-            'error' => null,
-            'path' => $wellKnownFile,
-            'url' => $baseUrl . '/.well-known/oauth-authorization-server'
-        ];
-        
-        // Check if file exists
-        if (file_exists($wellKnownFile)) {
-            $status['exists'] = true;
-            $status['writable'] = is_writable($wellKnownFile);
-            return $status;
-        }
-        
-        // Try to create the directory if it doesn't exist
-        if (!is_dir($wellKnownDir)) {
-            if (!@mkdir($wellKnownDir, 0755, true)) {
-                $status['error'] = 'Cannot create .well-known directory. Please create it manually: ' . $wellKnownDir;
-                return $status;
-            }
-        }
-        
-        // Check if directory is writable
-        if (!is_writable($wellKnownDir)) {
-            $status['error'] = 'Directory .well-known is not writable. Please check permissions: ' . $wellKnownDir;
-            return $status;
-        }
-        
-        // Generate OAuth metadata content
-        $metadata = $this->oauthService->getMetadata($baseUrl);
-        $content = json_encode($metadata, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-        
-        // Try to create the file
-        if (@file_put_contents($wellKnownFile, $content) !== false) {
-            $status['created'] = true;
-            $status['exists'] = true;
-            $status['writable'] = true;
-        } else {
-            $status['error'] = 'Failed to write .well-known file. Please create it manually: ' . $wellKnownFile;
-        }
-        
-        return $status;
-    }
-    
-    /**
-     * AJAX endpoint to manually create .well-known file
-     */
-    public function createWellKnownFileAction(ServerRequestInterface $request): ResponseInterface
-    {
-        $backendUser = $this->getBackendUser();
-        if (!$backendUser) {
-            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
-        }
-        
-        $baseUrl = $this->getBaseUrl($request);
-        $status = $this->checkWellKnownFile($baseUrl);
-        
-        if ($status['exists']) {
-            return new JsonResponse([
-                'success' => true,
-                'message' => 'OAuth discovery file already exists',
-                'status' => $status
-            ]);
-        }
-        
-        if ($status['error']) {
-            return new JsonResponse([
-                'success' => false,
-                'message' => $status['error'],
-                'status' => $status
-            ], 500);
-        }
-        
-        if ($status['created']) {
-            return new JsonResponse([
-                'success' => true,
-                'message' => 'OAuth discovery file created successfully',
-                'status' => $status
-            ]);
-        }
-        
-        return new JsonResponse([
-            'success' => false,
-            'message' => 'Unknown error creating .well-known file',
-            'status' => $status
-        ], 500);
     }
 
     /**
@@ -362,4 +293,89 @@ class McpServerModuleController
             ], 500);
         }
     }
+
+    /**
+     * Generate mcp-remote URL with token parameter for clients that don't support auth headers
+     */
+    private function generateMcpRemoteUrl(string $baseUrl, array $tokens): array
+    {
+        $endpointUrl = $baseUrl . '/index.php?eID=mcp_server';
+        
+        // Filter tokens to only include mcp-remote tokens
+        $mcpRemoteTokens = array_filter($tokens, function($token) {
+            return $token['client_name'] === 'mcp-remote token';
+        });
+        
+        return [
+            'baseUrl' => $endpointUrl,
+            'hasTokens' => !empty($mcpRemoteTokens),
+            'tokenUrl' => !empty($mcpRemoteTokens) ? $endpointUrl . '&token=' . array_values($mcpRemoteTokens)[0]['token'] : null,
+            'description' => 'For MCP clients that don\'t support Authorization headers (like mcp-remote without auth)',
+        ];
+    }
+
+    /**
+     * Generate server key from site name
+     */
+    private function generateServerKey(string $siteName): string
+    {
+        // Create a safe identifier from the site name
+        $serverKey = strtolower(preg_replace('/[^a-zA-Z0-9]/', '-', $siteName));
+        $serverKey = preg_replace('/--+/', '-', $serverKey); // Remove multiple dashes
+        $serverKey = trim($serverKey, '-'); // Remove leading/trailing dashes
+        
+        if (empty($serverKey)) {
+            $serverKey = 'typo3-mcp';
+        }
+        
+        return $serverKey;
+    }
+
+    /**
+     * Create an mcp-remote token via AJAX
+     */
+    public function createTokenAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $backendUser = $this->getBackendUser();
+        if (!$backendUser) {
+            return new JsonResponse(['success' => false, 'message' => 'Access denied'], 403);
+        }
+
+        try {
+            $userId = (int)$backendUser->user['uid'];
+            
+            // Check if user already has an mcp-remote token
+            $existingTokens = $this->oauthService->getUserTokens($userId);
+            $mcpRemoteTokenExists = false;
+            foreach ($existingTokens as $token) {
+                if ($token['client_name'] === 'mcp-remote token') {
+                    $mcpRemoteTokenExists = true;
+                    break;
+                }
+            }
+            
+            if ($mcpRemoteTokenExists) {
+                return new JsonResponse([
+                    'success' => false,
+                    'message' => 'You already have an mcp-remote token. Please revoke it first if you want to create a new one.'
+                ], 400);
+            }
+            
+            // Create new mcp-remote token
+            $token = $this->oauthService->createDirectAccessToken($userId, 'mcp-remote token');
+            
+            return new JsonResponse([
+                'success' => true,
+                'message' => 'mcp-remote token created successfully',
+                'token' => $token
+            ]);
+            
+        } catch (\Throwable $e) {
+            return new JsonResponse([
+                'success' => false,
+                'message' => 'Error creating token: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
 }

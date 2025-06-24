@@ -11,7 +11,6 @@ use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Core\Http\Stream;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
-use TYPO3\CMS\Core\Context\Context;
 
 /**
  * OAuth authorization endpoint
@@ -19,6 +18,16 @@ use TYPO3\CMS\Core\Context\Context;
 class OAuthAuthorizeEndpoint
 {
     use CorsHeadersTrait;
+    
+    private function handlePreflightRequest(): ResponseInterface
+    {
+        $stream = new Stream('php://temp', 'rw');
+        $stream->write('');
+        $stream->rewind();
+
+        $response = new Response($stream, 200);
+        return $this->addCorsHeaders($response);
+    }
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
@@ -30,6 +39,9 @@ class OAuthAuthorizeEndpoint
         try {
             $queryParams = $request->getQueryParams();
             $postParams = $request->getParsedBody() ?: [];
+            
+            // Initialize backend user context for eID
+            $this->initializeBackendUserContext($request);
             
             // Check if user is authenticated
             if (!$this->isBackendUserAuthenticated()) {
@@ -52,16 +64,34 @@ class OAuthAuthorizeEndpoint
         }
     }
 
+    private function initializeBackendUserContext(ServerRequestInterface $request): void
+    {
+        // Initialize backend user context for eID endpoints
+        if (!isset($GLOBALS['BE_USER']) || !($GLOBALS['BE_USER'] instanceof BackendUserAuthentication)) {
+            $GLOBALS['BE_USER'] = GeneralUtility::makeInstance(BackendUserAuthentication::class);
+            $GLOBALS['BE_USER']->start($request);
+        }
+    }
+    
     private function isBackendUserAuthenticated(): bool
     {
         $beUser = $GLOBALS['BE_USER'] ?? null;
-        return $beUser instanceof BackendUserAuthentication && $beUser->user['uid'] > 0;
+        return $beUser instanceof BackendUserAuthentication && 
+               is_array($beUser->user) && 
+               isset($beUser->user['uid']) && 
+               $beUser->user['uid'] > 0;
     }
+
 
     private function redirectToLogin(ServerRequestInterface $request): ResponseInterface
     {
-        $currentUrl = (string)$request->getUri();
-        $loginUrl = '/typo3/index.php?loginProvider=1450629977&login_status=login&redirect_url=' . urlencode($currentUrl);
+        $queryParams = $request->getQueryParams();
+        
+        // Store OAuth parameters for retrieval after login
+        $oauthParams = http_build_query($queryParams);
+        $backendModuleUrl = '/typo3/module/user/mcp-server?oauth_flow=1&' . $oauthParams;
+        
+        $loginUrl = '/typo3/index.php?loginProvider=1450629977&login_status=login&redirect_url=' . urlencode($backendModuleUrl);
         
         $stream = new Stream('php://temp', 'rw');
         $stream->write('');
@@ -116,11 +146,13 @@ class OAuthAuthorizeEndpoint
         $stream->write($html);
         $stream->rewind();
 
-        return new Response(
+        $response = new Response(
             $stream,
             200,
             ['Content-Type' => 'text/html; charset=utf-8']
         );
+        
+        return $this->addCorsHeaders($response);
     }
 
     private function showConsentForm(ServerRequestInterface $request): ResponseInterface
@@ -148,18 +180,22 @@ class OAuthAuthorizeEndpoint
             'redirect_uri' => htmlspecialchars($redirectUri),
             'code_challenge' => htmlspecialchars($codeChallenge),
             'code_challenge_method' => htmlspecialchars($challengeMethod),
+            'user_id' => $beUser->user['uid'],
         ]);
 
         $stream = new Stream('php://temp', 'rw');
         $stream->write($html);
         $stream->rewind();
 
-        return new Response(
+        $response = new Response(
             $stream,
             200,
             ['Content-Type' => 'text/html; charset=utf-8']
         );
+        
+        return $this->addCorsHeaders($response);
     }
+
 
     private function createErrorResponse(string $error, string $description = ''): ResponseInterface
     {
@@ -178,6 +214,7 @@ class OAuthAuthorizeEndpoint
             ['Content-Type' => 'application/json']
         );
     }
+
 
     private function generateConsentTemplate(array $data): string
     {
@@ -313,6 +350,7 @@ class OAuthAuthorizeEndpoint
             <input type="hidden" name="redirect_uri" value="' . $data['redirect_uri'] . '">
             <input type="hidden" name="code_challenge" value="' . $data['code_challenge'] . '">
             <input type="hidden" name="code_challenge_method" value="' . $data['code_challenge_method'] . '">
+            <input type="hidden" name="user_id" value="' . $data['user_id'] . '">
 
             <div class="buttons">
                 <button type="submit" name="approve" value="1" class="approve">Authorize Access</button>

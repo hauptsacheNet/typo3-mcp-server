@@ -60,6 +60,9 @@ class OAuthTokenEndpoint
                 return $this->createErrorResponse('invalid_grant', 'Invalid or expired authorization code');
             }
 
+            // Log successful token exchange for debugging
+            error_log("OAuth: Successfully exchanged code for token: " . substr($tokenData['access_token'], 0, 20) . "...");
+            
             // Return token response
             $stream = new Stream('php://temp', 'rw');
             $stream->write(json_encode($tokenData));

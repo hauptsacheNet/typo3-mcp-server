@@ -35,19 +35,37 @@ class McpEndpoint
             $container = GeneralUtility::getContainer();
             $toolRegistry = $container->get(ToolRegistry::class);
             
+            // Debug: Log all request details
+            $headers = [];
+            foreach ($request->getHeaders() as $name => $values) {
+                $headers[$name] = implode(', ', $values);
+            }
+            $queryParams = $request->getQueryParams();
+            
+            error_log("MCP: Request method: " . $request->getMethod());
+            error_log("MCP: Request headers: " . json_encode($headers));
+            error_log("MCP: Query params: " . json_encode($queryParams));
+            
             // Authenticate via Bearer token or query parameter
             $token = $this->extractToken($request);
             
             if (!$token) {
+                error_log("MCP: No token found in Authorization header or query params");
                 return $this->createUnauthorizedResponse('Missing authentication token');
             }
+
+            // Log token for debugging (first 20 chars only for security)
+            error_log("MCP: Received token: " . substr($token, 0, 20) . "...");
 
             $oauthService = GeneralUtility::makeInstance(OAuthService::class);
             $tokenInfo = $oauthService->validateToken($token);
             
             if (!$tokenInfo) {
+                error_log("MCP: Token validation failed for: " . substr($token, 0, 20) . "...");
                 return $this->createUnauthorizedResponse('Invalid or expired token');
             }
+            
+            error_log("MCP: Token validation successful for user: " . $tokenInfo['be_user_uid']);
 
             // Set up TYPO3 backend context for the authenticated user
             $this->setupBackendUserContext($tokenInfo['be_user_uid']);
@@ -188,6 +206,13 @@ class McpEndpoint
         // Try Authorization header first (preferred method)
         $authHeader = $request->getHeaderLine('Authorization');
         if (!empty($authHeader) && preg_match('/Bearer\s+(.+)/', $authHeader, $matches)) {
+            return $matches[1];
+        }
+
+        // Try HTTP_AUTHORIZATION from Apache environment (fallback for Apache)
+        $serverParams = $request->getServerParams();
+        $httpAuth = $serverParams['HTTP_AUTHORIZATION'] ?? '';
+        if (!empty($httpAuth) && preg_match('/Bearer\s+(.+)/', $httpAuth, $matches)) {
             return $matches[1];
         }
 

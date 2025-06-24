@@ -347,6 +347,41 @@ class OAuthService
     }
 
     /**
+     * Create access token directly (bypassing authorization code flow)
+     */
+    public function createDirectAccessToken(int $beUserId, string $clientName): string
+    {
+        $accessToken = $this->generateSecureToken();
+        $expires = time() + self::TOKEN_EXPIRY_SECONDS;
+
+        // Get client IP
+        $request = $GLOBALS['TYPO3_REQUEST'] ?? ServerRequest::fromGlobals();
+        $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
+
+        // Create access token
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens');
+
+        $connection->insert(
+            'tx_mcpserver_access_tokens',
+            [
+                'pid' => 0,
+                'tstamp' => time(),
+                'crdate' => time(),
+                'token' => $accessToken,
+                'be_user_uid' => $beUserId,
+                'client_name' => $clientName,
+                'expires' => $expires,
+                'last_used' => time(),
+                'created_ip' => $clientIp,
+                'last_used_ip' => $clientIp,
+            ]
+        );
+
+        return $accessToken;
+    }
+
+    /**
      * Generate cryptographically secure token
      */
     private function generateSecureToken(): string

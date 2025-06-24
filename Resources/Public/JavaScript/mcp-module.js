@@ -288,14 +288,18 @@ function refreshToken() {
 /**
  * Show loading indicator
  */
-function showLoading(show) {
+function showLoading(show = true) {
     const messagesContainer = document.getElementById('token-messages');
     const loadingDiv = document.getElementById('token-loading');
+    const successDiv = document.getElementById('token-success');
+    const errorDiv = document.getElementById('token-error');
     
     if (messagesContainer && loadingDiv) {
         if (show) {
             messagesContainer.style.display = 'block';
             loadingDiv.style.display = 'block';
+            if (successDiv) successDiv.style.display = 'none';
+            if (errorDiv) errorDiv.style.display = 'none';
         } else {
             loadingDiv.style.display = 'none';
         }
@@ -305,14 +309,22 @@ function showLoading(show) {
 /**
  * Show success message
  */
-function showSuccessMessage(message) {
+function showSuccessMessage(message, autoHide = false) {
     const messagesContainer = document.getElementById('token-messages');
     const successDiv = document.getElementById('token-success');
+    const errorDiv = document.getElementById('token-error');
     
     if (messagesContainer && successDiv) {
         messagesContainer.style.display = 'block';
         successDiv.style.display = 'block';
         successDiv.textContent = message;
+        if (errorDiv) errorDiv.style.display = 'none';
+        
+        if (autoHide) {
+            setTimeout(() => {
+                messagesContainer.style.display = 'none';
+            }, 3000);
+        }
     }
 }
 
@@ -322,11 +334,13 @@ function showSuccessMessage(message) {
 function showErrorMessage(message) {
     const messagesContainer = document.getElementById('token-messages');
     const errorDiv = document.getElementById('token-error');
+    const successDiv = document.getElementById('token-success');
     
     if (messagesContainer && errorDiv) {
         messagesContainer.style.display = 'block';
         errorDiv.style.display = 'block';
         errorDiv.textContent = message;
+        if (successDiv) successDiv.style.display = 'none';
     }
 }
 
@@ -336,12 +350,16 @@ function showErrorMessage(message) {
 function hideMessages() {
     const successDiv = document.getElementById('token-success');
     const errorDiv = document.getElementById('token-error');
+    const loadingDiv = document.getElementById('token-loading');
     
     if (successDiv) {
         successDiv.style.display = 'none';
     }
     if (errorDiv) {
         errorDiv.style.display = 'none';
+    }
+    if (loadingDiv) {
+        loadingDiv.style.display = 'none';
     }
 }
 
@@ -366,4 +384,243 @@ document.addEventListener('DOMContentLoaded', function() {
     if (refreshBtn) {
         refreshBtn.addEventListener('click', refreshToken);
     }
+    
+    // Add event listener for token refresh (OAuth tokens table)
+    const refreshTokensBtn = document.getElementById('refresh-tokens-btn');
+    if (refreshTokensBtn) {
+        refreshTokensBtn.addEventListener('click', refreshTokens);
+    }
+    
+    // Add event listener for revoke all tokens
+    const revokeAllTokensBtn = document.getElementById('revoke-all-tokens-btn');
+    if (revokeAllTokensBtn) {
+        revokeAllTokensBtn.addEventListener('click', revokeAllTokens);
+    }
+    
+    // Add event listener for create mcp-remote token
+    const createMcpRemoteTokenBtn = document.getElementById('create-mcp-remote-token-btn');
+    if (createMcpRemoteTokenBtn) {
+        createMcpRemoteTokenBtn.addEventListener('click', createMcpRemoteToken);
+    }
+    
+    // Add event delegation for token revocation buttons (dynamically created)
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('revoke-token-btn') || e.target.closest('.revoke-token-btn')) {
+            const button = e.target.classList.contains('revoke-token-btn') ? e.target : e.target.closest('.revoke-token-btn');
+            const tokenId = button.getAttribute('data-token-id');
+            
+            console.log('Revoke button clicked, tokenId:', tokenId, 'button:', button);
+            
+            if (tokenId && confirm('Are you sure you want to revoke this token? The associated MCP client will lose access immediately.')) {
+                revokeToken(tokenId);
+            }
+        }
+    });
 });
+
+/**
+ * Token Management Functions for OAuth Tokens Table
+ */
+
+/**
+ * Refresh the OAuth tokens table
+ */
+function refreshTokens() {
+    showLoading();
+    
+    fetch(TYPO3.settings.ajaxUrls.mcp_server_get_tokens, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+    })
+    .then(response => response.json())
+    .then(data => {
+        showLoading(false);
+        if (data.success) {
+            updateTokensTable(data.tokens);
+        } else {
+            showErrorMessage('Failed to refresh tokens: ' + data.message);
+        }
+    })
+    .catch(error => {
+        showLoading(false);
+        showErrorMessage('Error refreshing tokens: ' + error.message);
+    });
+}
+
+/**
+ * Revoke a specific token
+ */
+function revokeToken(tokenId) {
+    showLoading();
+    
+    // Ensure tokenId is an integer
+    const tokenIdInt = parseInt(tokenId, 10);
+    
+    if (!tokenIdInt || tokenIdInt <= 0) {
+        showErrorMessage('Invalid token ID: ' + tokenId);
+        showLoading(false);
+        return;
+    }
+    
+    fetch(TYPO3.settings.ajaxUrls.mcp_server_revoke_token, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            tokenId: tokenIdInt
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        showLoading(false);
+        if (data.success) {
+            showSuccessMessage(data.message, true);
+            refreshTokens(); // Refresh the token list
+        } else {
+            showErrorMessage('Failed to revoke token: ' + data.message);
+        }
+    })
+    .catch(error => {
+        showLoading(false);
+        showErrorMessage('Error revoking token: ' + error.message);
+    });
+}
+
+/**
+ * Revoke all tokens for the current user
+ */
+function revokeAllTokens() {
+    if (!confirm('Are you sure you want to revoke ALL tokens? This will disconnect all MCP clients and require re-authentication.')) {
+        return;
+    }
+    
+    showLoading();
+    
+    fetch(TYPO3.settings.ajaxUrls.mcp_server_revoke_all_tokens, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        showLoading(false);
+        if (data.success) {
+            showSuccessMessage(data.message, true);
+            refreshTokens(); // Refresh the token list to show empty state
+        } else {
+            showErrorMessage('Failed to revoke all tokens: ' + data.message);
+        }
+    })
+    .catch(error => {
+        showLoading(false);
+        showErrorMessage('Error revoking all tokens: ' + error.message);
+    });
+}
+
+/**
+ * Update the tokens table with new data
+ */
+function updateTokensTable(tokens) {
+    const container = document.getElementById('tokens-container');
+    
+    if (!container) {
+        console.error('Tokens container not found');
+        return;
+    }
+    
+    if (tokens.length === 0) {
+        container.innerHTML = `
+            <div id="no-tokens-message" class="text-center text-muted py-4">
+                <div class="mb-3">
+                    <span style="font-size: 2rem;">🔑</span>
+                </div>
+                <p>No active OAuth tokens found.</p>
+                <p class="small">Use the Remote MCP Setup above to connect your first MCP client.</p>
+            </div>
+        `;
+    } else {
+        const tableHTML = `
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Client Name</th>
+                            <th>Created</th>
+                            <th>Last Used</th>
+                            <th>Expires</th>
+                            <th>Token</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tokens-table-body">
+                        ${tokens.map(token => `
+                            <tr data-token-id="${token.uid}">
+                                <td><strong>${token.client_name}</strong></td>
+                                <td><small class="text-muted">${token.created}</small></td>
+                                <td><small class="text-muted">${token.last_used}</small></td>
+                                <td><small class="text-muted">${token.expires}</small></td>
+                                <td><code class="small">${token.token_preview}</code></td>
+                                <td>
+                                    <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="${token.uid}">
+                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-delete" data-identifier="actions-delete">
+                                            <span class="icon-markup">🗑️</span>
+                                        </span>
+                                        Revoke
+                                    </button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+        container.innerHTML = tableHTML;
+    }
+}
+
+/**
+ * Create mcp-remote token
+ */
+function createMcpRemoteToken() {
+    showLoading();
+    
+    const button = document.getElementById('create-mcp-remote-token-btn');
+    if (button) {
+        button.disabled = true;
+    }
+    
+    fetch(TYPO3.settings.ajaxUrls.mcp_server_create_token, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        showLoading(false);
+        if (data.success) {
+            showSuccessMessage('mcp-remote token created successfully! Refreshing page to show the token URL.');
+            // Reload page after 2 seconds to show updated token status
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            showErrorMessage(data.message || 'Failed to create mcp-remote token');
+            if (button) {
+                button.disabled = false;
+            }
+        }
+    })
+    .catch(error => {
+        showLoading(false);
+        showErrorMessage('Error creating token: ' + error.message);
+        if (button) {
+            button.disabled = false;
+        }
+    });
+}
+
