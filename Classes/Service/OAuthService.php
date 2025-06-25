@@ -21,10 +21,9 @@ class OAuthService
     /**
      * Generate authorization URL for OAuth flow
      */
-    public function generateAuthorizationUrl(string $baseUrl, string $clientName = '', string $redirectUri = '', string $codeChallenge = '', string $challengeMethod = 'S256'): string
+    public function generateAuthorizationUrl(string $baseUrl, string $clientName = '', string $redirectUri = '', string $codeChallenge = '', string $challengeMethod = 'S256', string $state = ''): string
     {
         $params = [
-            'eID' => 'mcp_server_oauth_authorize',
             'client_id' => self::CLIENT_ID,
             'response_type' => 'code',
             'client_name' => $clientName,
@@ -39,7 +38,11 @@ class OAuthService
             $params['code_challenge_method'] = $challengeMethod;
         }
 
-        return rtrim($baseUrl, '/') . '/index.php?' . http_build_query($params);
+        if (!empty($state)) {
+            $params['state'] = $state;
+        }
+
+        return rtrim($baseUrl, '/') . '/mcp_oauth/authorize?' . http_build_query($params);
     }
 
     /**
@@ -335,9 +338,9 @@ class OAuthService
         
         return [
             'issuer' => $baseUrl,
-            'authorization_endpoint' => $baseUrl . '/index.php?eID=mcp_server_oauth_authorize',
-            'token_endpoint' => $baseUrl . '/index.php?eID=mcp_server_oauth_token',
-            'registration_endpoint' => $baseUrl . '/index.php?eID=mcp_server_oauth_register',
+            'authorization_endpoint' => $baseUrl . '/mcp_oauth/authorize',
+            'token_endpoint' => $baseUrl . '/mcp_oauth/token',
+            'registration_endpoint' => $baseUrl . '/mcp_oauth/register',
             'response_types_supported' => ['code'],
             'grant_types_supported' => ['authorization_code'],
             'code_challenge_methods_supported' => ['S256', 'plain'],

@@ -113,6 +113,7 @@ class OAuthAuthorizeEndpoint
         $redirectUri = $queryParams['redirect_uri'] ?? '';
         $pkceChallenge = $queryParams['code_challenge'] ?? '';
         $challengeMethod = $queryParams['code_challenge_method'] ?? 'S256';
+        $state = $postParams['state'] ?? $queryParams['state'] ?? '';
 
         $oauthService = GeneralUtility::makeInstance(OAuthService::class);
         $code = $oauthService->createAuthorizationCode(
@@ -127,6 +128,11 @@ class OAuthAuthorizeEndpoint
         if (!empty($redirectUri)) {
             $separator = strpos($redirectUri, '?') !== false ? '&' : '?';
             $redirectUrl = $redirectUri . $separator . 'code=' . urlencode($code);
+            
+            // Add state parameter if provided
+            if (!empty($state)) {
+                $redirectUrl .= '&state=' . urlencode($state);
+            }
             
             $stream = new Stream('php://temp', 'rw');
             $stream->write('');
@@ -164,6 +170,7 @@ class OAuthAuthorizeEndpoint
         $redirectUri = $queryParams['redirect_uri'] ?? '';
         $codeChallenge = $queryParams['code_challenge'] ?? '';
         $challengeMethod = $queryParams['code_challenge_method'] ?? 'S256';
+        $state = $queryParams['state'] ?? '';
 
         // Validate required parameters
         if (empty($clientId) || $clientId !== 'typo3-mcp-server') {
@@ -180,6 +187,7 @@ class OAuthAuthorizeEndpoint
             'redirect_uri' => htmlspecialchars($redirectUri),
             'code_challenge' => htmlspecialchars($codeChallenge),
             'code_challenge_method' => htmlspecialchars($challengeMethod),
+            'state' => htmlspecialchars($state),
             'user_id' => $beUser->user['uid'],
         ]);
 
@@ -350,6 +358,7 @@ class OAuthAuthorizeEndpoint
             <input type="hidden" name="redirect_uri" value="' . $data['redirect_uri'] . '">
             <input type="hidden" name="code_challenge" value="' . $data['code_challenge'] . '">
             <input type="hidden" name="code_challenge_method" value="' . $data['code_challenge_method'] . '">
+            <input type="hidden" name="state" value="' . $data['state'] . '">
             <input type="hidden" name="user_id" value="' . $data['user_id'] . '">
 
             <div class="buttons">

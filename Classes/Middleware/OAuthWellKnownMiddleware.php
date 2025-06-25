@@ -75,7 +75,7 @@ class OAuthWellKnownMiddleware implements MiddlewareInterface
             'authorization_servers' => [$baseUrl],
             'bearer_methods_supported' => ['header', 'query'],
             'resource_documentation' => $baseUrl . '/typo3/module/user/mcp-server',
-            'revocation_endpoint' => $baseUrl . '/index.php?eID=mcp_server_oauth_token',
+            'revocation_endpoint' => $baseUrl . '/mcp_oauth/token',
             'revocation_endpoint_auth_methods_supported' => ['none']
         ];
         
