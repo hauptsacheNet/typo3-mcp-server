@@ -28,7 +28,7 @@ class OAuthResourceMetadataEndpoint
         $baseUrl = $this->getBaseUrl($request);
         
         $metadata = [
-            'resource' => $baseUrl . '/index.php?eID=mcp_server',
+            'resource' => $baseUrl . '/mcp',
             'authorization_servers' => [
                 $baseUrl
             ],
@@ -37,7 +37,7 @@ class OAuthResourceMetadataEndpoint
                 'query'
             ],
             'resource_documentation' => $baseUrl . '/typo3/module/user/mcp-server',
-            'revocation_endpoint' => $baseUrl . '/index.php?eID=mcp_server_oauth_token',
+            'revocation_endpoint' => $baseUrl . '/mcp_oauth/token',
             'revocation_endpoint_auth_methods_supported' => [
                 'none'
             ]
