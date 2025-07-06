@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Hn\McpServer\Utility;
 
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Core\Localization\LanguageService;
+use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 
 /**
  * Utility for formatting TCA and FlexForm information
@@ -18,6 +20,12 @@ class TcaFormattingUtility
     {
         // If the label is a LLL reference, translate it
         if (strpos($label, 'LLL:') === 0) {
+            // Initialize language service if needed
+            if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof LanguageService) {
+                $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
+                $GLOBALS['LANG'] = $languageServiceFactory->create('default');
+            }
+            
             return $GLOBALS['LANG']->sL($label) ?: $label;
         }
         

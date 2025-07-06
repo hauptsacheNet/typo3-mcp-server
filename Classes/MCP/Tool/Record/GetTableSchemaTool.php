@@ -196,7 +196,7 @@ class GetTableSchemaTool extends AbstractRecordTool
             // Skip dividers when selecting the default type
             foreach ($types as $typeValue => $typeLabel) {
                 if ($typeValue !== '--div--') {
-                    $filterType = $typeValue;
+                    $filterType = (string)$typeValue;
                     break;
                 }
             }

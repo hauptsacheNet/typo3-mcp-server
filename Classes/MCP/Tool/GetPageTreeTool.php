@@ -150,7 +150,7 @@ class GetPageTreeTool extends AbstractTool
         $query = $queryBuilder->count('uid')
             ->from('pages')
             ->where(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
             );
 
         if (!$includeHidden) {
