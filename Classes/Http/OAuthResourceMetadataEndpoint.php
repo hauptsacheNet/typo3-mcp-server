@@ -59,15 +59,6 @@ class OAuthResourceMetadataEndpoint
         return $this->addCorsHeaders($response);
     }
     
-    private function handlePreflightRequest(): ResponseInterface
-    {
-        $stream = new Stream('php://temp', 'rw');
-        $stream->write('');
-        $stream->rewind();
-
-        $response = new Response($stream, 200);
-        return $this->addCorsHeaders($response);
-    }
     
     private function getBaseUrl(ServerRequestInterface $request): string
     {

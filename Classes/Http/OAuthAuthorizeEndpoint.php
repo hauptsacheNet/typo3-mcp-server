@@ -17,25 +17,10 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class OAuthAuthorizeEndpoint
 {
-    use CorsHeadersTrait;
     
-    private function handlePreflightRequest(): ResponseInterface
-    {
-        $stream = new Stream('php://temp', 'rw');
-        $stream->write('');
-        $stream->rewind();
-
-        $response = new Response($stream, 200);
-        return $this->addCorsHeaders($response);
-    }
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
-        // Handle preflight OPTIONS request
-        if ($request->getMethod() === 'OPTIONS') {
-            return $this->handlePreflightRequest();
-        }
-
         try {
             $queryParams = $request->getQueryParams();
             $postParams = $request->getParsedBody() ?: [];
@@ -87,11 +72,25 @@ class OAuthAuthorizeEndpoint
     {
         $queryParams = $request->getQueryParams();
         
-        // Store OAuth parameters for retrieval after login
-        $oauthParams = http_build_query($queryParams);
-        $backendModuleUrl = '/typo3/module/user/mcp-server?oauth_flow=1&' . $oauthParams;
+        // Store OAuth parameters in cookie
+        $oauthData = [
+            'client_id' => $queryParams['client_id'] ?? '',
+            'client_name' => $queryParams['client_name'] ?? '',
+            'redirect_uri' => $queryParams['redirect_uri'] ?? '',
+            'code_challenge' => $queryParams['code_challenge'] ?? '',
+            'code_challenge_method' => $queryParams['code_challenge_method'] ?? '',
+            'state' => $queryParams['state'] ?? ''
+        ];
         
-        $loginUrl = '/typo3/index.php?loginProvider=1450629977&login_status=login&redirect_url=' . urlencode($backendModuleUrl);
+        $oauthDataEncoded = base64_encode(json_encode($oauthData));
+        $loginUrl = '/typo3/index.php?loginProvider=1450629977&login_status=login';
+        
+        // Build cookie string with environment-aware security flags
+        $isHttps = $request->getUri()->getScheme() === 'https';
+        $cookieFlags = 'Max-Age=600; Path=/; HttpOnly; SameSite=Lax';
+        if ($isHttps) {
+            $cookieFlags .= '; Secure';
+        }
         
         $stream = new Stream('php://temp', 'rw');
         $stream->write('');
@@ -100,7 +99,10 @@ class OAuthAuthorizeEndpoint
         return new Response(
             $stream,
             302,
-            ['Location' => $loginUrl]
+            [
+                'Location' => $loginUrl,
+                'Set-Cookie' => 'tx_mcpserver_oauth=' . $oauthDataEncoded . '; ' . $cookieFlags
+            ]
         );
     }
 
@@ -152,13 +154,11 @@ class OAuthAuthorizeEndpoint
         $stream->write($html);
         $stream->rewind();
 
-        $response = new Response(
+        return new Response(
             $stream,
             200,
             ['Content-Type' => 'text/html; charset=utf-8']
         );
-        
-        return $this->addCorsHeaders($response);
     }
 
     private function showConsentForm(ServerRequestInterface $request): ResponseInterface
@@ -195,13 +195,21 @@ class OAuthAuthorizeEndpoint
         $stream->write($html);
         $stream->rewind();
 
-        $response = new Response(
+        // Build cookie cleanup string with environment-aware security flags
+        $isHttps = $request->getUri()->getScheme() === 'https';
+        $cookieCleanupFlags = 'Max-Age=0; Path=/; HttpOnly; SameSite=Lax';
+        if ($isHttps) {
+            $cookieCleanupFlags .= '; Secure';
+        }
+
+        return new Response(
             $stream,
             200,
-            ['Content-Type' => 'text/html; charset=utf-8']
+            [
+                'Content-Type' => 'text/html; charset=utf-8',
+                'Set-Cookie' => 'tx_mcpserver_oauth=; ' . $cookieCleanupFlags
+            ]
         );
-        
-        return $this->addCorsHeaders($response);
     }
 
 

@@ -17,6 +17,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class OAuthMetadataEndpoint
 {
     use CorsHeadersTrait;
+
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
         // Handle preflight OPTIONS request

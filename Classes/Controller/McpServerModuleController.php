@@ -30,13 +30,6 @@ class McpServerModuleController
 
     public function mainAction(ServerRequestInterface $request): ResponseInterface
     {
-        $queryParams = $request->getQueryParams();
-        
-        // Check if this is an OAuth flow continuation after login
-        if (isset($queryParams['oauth_flow']) && $queryParams['oauth_flow'] === '1') {
-            return $this->handleOAuthFlowContinuation($request);
-        }
-        
         $moduleTemplate = $this->moduleTemplateFactory->create($request);
         
         // Get current user
@@ -94,30 +87,6 @@ class McpServerModuleController
         return $moduleTemplate->renderResponse('McpServerModule');
     }
     
-    /**
-     * Handle OAuth flow continuation after login
-     */
-    private function handleOAuthFlowContinuation(ServerRequestInterface $request): ResponseInterface
-    {
-        $queryParams = $request->getQueryParams();
-        
-        // Extract OAuth parameters
-        $oauthParams = [];
-        foreach (['client_id', 'response_type', 'client_name', 'redirect_uri', 'code_challenge', 'code_challenge_method'] as $param) {
-            if (isset($queryParams[$param])) {
-                $oauthParams[$param] = $queryParams[$param];
-            }
-        }
-        
-        if (empty($oauthParams)) {
-            return new HtmlResponse('Invalid OAuth request - missing parameters', 400);
-        }
-        
-        // Redirect back to OAuth authorization endpoint with parameters
-        $oauthUrl = '/index.php?eID=mcp_server_oauth_authorize&' . http_build_query($oauthParams);
-        
-        return new \TYPO3\CMS\Core\Http\RedirectResponse($oauthUrl, 302);
-    }
     
     /**
      * Revoke a specific token
@@ -299,7 +268,7 @@ class McpServerModuleController
      */
     private function generateMcpRemoteUrl(string $baseUrl, array $tokens): array
     {
-        $endpointUrl = $baseUrl . '/index.php?eID=mcp_server';
+        $endpointUrl = $baseUrl . '/mcp';
         
         // Filter tokens to only include mcp-remote tokens
         $mcpRemoteTokens = array_filter($tokens, function($token) {
