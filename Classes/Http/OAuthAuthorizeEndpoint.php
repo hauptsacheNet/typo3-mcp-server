@@ -67,6 +67,52 @@ class OAuthAuthorizeEndpoint
                $beUser->user['uid'] > 0;
     }
 
+    /**
+     * Resolve client name with proper fallback to hostname from Referer header
+     */
+    private function resolveClientName(ServerRequestInterface $request): string
+    {
+        $queryParams = $request->getQueryParams();
+        
+        // Check query params
+        if (!empty($queryParams['client_name'])) {
+            return $queryParams['client_name'];
+        }
+        
+        // Fall back to hostname from Referer header
+        $referer = $request->getHeaderLine('Referer');
+        if (!empty($referer)) {
+            $hostname = $this->extractHostnameFromUrl($referer);
+            if (!empty($hostname)) {
+                return $hostname;
+            }
+        }
+        
+        // Ultimate fallback
+        return 'MCP Client';
+    }
+
+    /**
+     * Extract hostname from URL, handling edge cases
+     */
+    private function extractHostnameFromUrl(string $url): string
+    {
+        // Handle malformed URLs
+        if (empty($url)) {
+            return '';
+        }
+        
+        // Add protocol if missing to make parse_url work properly
+        if (!preg_match('/^https?:\/\//', $url)) {
+            $url = 'http://' . $url;
+        }
+        
+        $parsed = parse_url($url);
+        
+        // Return hostname or empty string if parsing failed
+        return $parsed['host'] ?? $url;
+    }
+
 
     private function redirectToLogin(ServerRequestInterface $request): ResponseInterface
     {
@@ -75,7 +121,7 @@ class OAuthAuthorizeEndpoint
         // Store OAuth parameters in cookie
         $oauthData = [
             'client_id' => $queryParams['client_id'] ?? '',
-            'client_name' => $queryParams['client_name'] ?? '',
+            'client_name' => $this->resolveClientName($request),
             'redirect_uri' => $queryParams['redirect_uri'] ?? '',
             'code_challenge' => $queryParams['code_challenge'] ?? '',
             'code_challenge_method' => $queryParams['code_challenge_method'] ?? '',
@@ -111,7 +157,7 @@ class OAuthAuthorizeEndpoint
         $queryParams = $request->getQueryParams();
         $postParams = $request->getParsedBody() ?: [];
 
-        $clientName = $postParams['client_name'] ?? $queryParams['client_name'] ?? 'MCP Client';
+        $clientName = $postParams['client_name'] ?? $this->resolveClientName($request);
         $redirectUri = $queryParams['redirect_uri'] ?? '';
         $pkceChallenge = $queryParams['code_challenge'] ?? '';
         $challengeMethod = $queryParams['code_challenge_method'] ?? 'S256';
@@ -166,7 +212,7 @@ class OAuthAuthorizeEndpoint
         $queryParams = $request->getQueryParams();
         
         $clientId = $queryParams['client_id'] ?? '';
-        $clientName = $queryParams['client_name'] ?? 'MCP Client';
+        $clientName = $this->resolveClientName($request);
         $redirectUri = $queryParams['redirect_uri'] ?? '';
         $codeChallenge = $queryParams['code_challenge'] ?? '';
         $challengeMethod = $queryParams['code_challenge_method'] ?? 'S256';

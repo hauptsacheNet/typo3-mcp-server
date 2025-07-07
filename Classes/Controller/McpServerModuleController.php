@@ -62,9 +62,6 @@ class McpServerModuleController
         // Generate mcp-remote token URL (for clients that don't support auth headers)
         $mcpRemoteUrl = $this->generateMcpRemoteUrl($baseUrl, $tokens);
         
-        // Generate server key
-        $serverKey = $this->generateServerKey($this->getSiteName());
-        
         // Prepare template variables
         $templateVariables = [
             'tokens' => $tokens,
@@ -74,7 +71,7 @@ class McpServerModuleController
             'username' => $backendUser->user['username'],
             'userId' => $userId,
             'mcpRemoteUrl' => $mcpRemoteUrl,
-            'serverKey' => $serverKey,
+            'siteName' => $this->getSiteName(),
         ];
         
         // Include JavaScript for copy functionality
@@ -199,23 +196,6 @@ class McpServerModuleController
     
     private function getSiteName(): string
     {
-        // Try to get site name from TYPO3 site configuration
-        try {
-            $siteConfiguration = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Site\SiteFinder::class);
-            $sites = $siteConfiguration->getAllSites();
-            
-            if (!empty($sites)) {
-                $firstSite = array_values($sites)[0];
-                $siteName = $firstSite->getConfiguration()['websiteTitle'] ?? '';
-                if (!empty($siteName)) {
-                    return $siteName;
-                }
-            }
-        } catch (\Exception $e) {
-            // Fallback if site configuration fails
-        }
-        
-        // Fallback to global TYPO3 site name
         return $GLOBALS['TYPO3_CONF_VARS']['SYS']['sitename'] ?? 'TYPO3 MCP Server';
     }
     
@@ -281,23 +261,6 @@ class McpServerModuleController
             'tokenUrl' => !empty($mcpRemoteTokens) ? $endpointUrl . '&token=' . array_values($mcpRemoteTokens)[0]['token'] : null,
             'description' => 'For MCP clients that don\'t support Authorization headers (like mcp-remote without auth)',
         ];
-    }
-
-    /**
-     * Generate server key from site name
-     */
-    private function generateServerKey(string $siteName): string
-    {
-        // Create a safe identifier from the site name
-        $serverKey = strtolower(preg_replace('/[^a-zA-Z0-9]/', '-', $siteName));
-        $serverKey = preg_replace('/--+/', '-', $serverKey); // Remove multiple dashes
-        $serverKey = trim($serverKey, '-'); // Remove leading/trailing dashes
-        
-        if (empty($serverKey)) {
-            $serverKey = 'typo3-mcp';
-        }
-        
-        return $serverKey;
     }
 
     /**

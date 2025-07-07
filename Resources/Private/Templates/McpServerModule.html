@@ -1,205 +1,263 @@
 <html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers" data-namespace-typo3-fluid="true">
 
 <div class="module-body">
-    <!-- Remote MCP Setup (Claude Desktop) -->
+    <!-- MCP Connection Setup -->
     <div class="row">
-        <div class="col-md-12">
+        <div class="col-xs-12" style="max-width: 800px;">
             <div class="card">
                 <div class="card-header">
                     <h3 class="card-title">
-                        🌐 Remote MCP Setup (Claude Desktop)
+                        🌐 MCP Connection Setup
                     </h3>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted">
-                        Connect Claude Desktop or other OAuth-capable MCP clients to this TYPO3 instance.
+                    <p class="text-muted mb-0">
+                        Choose your preferred method to connect MCP clients to this TYPO3 instance.
                     </p>
-                    
-                    <!-- Claude Desktop Integration Instructions -->
-                    <div class="alert alert-success">
-                        <h5>🚀 Claude Desktop Integration</h5>
-                        <p class="mb-2">To connect Claude Desktop to this TYPO3 instance:</p>
-                        <ol class="mb-2">
-                            <li>Copy the Server URL below</li>
-                            <li>In Claude Desktop, go to <strong>Settings → Integrations</strong></li>
-                            <li>Click <strong>"Integration hinzufügen"</strong> (Add Integration)</li>
-                            <li>Enter the name and paste the Server URL</li>
-                            <li>Claude Desktop will automatically handle OAuth authentication</li>
-                        </ol>
-                        <p class="mb-0"><strong>Simple setup!</strong> Just one URL - Claude Desktop handles the rest automatically.</p>
-                    </div>
-
-                    <!-- Server URL for Claude Desktop -->
-                    <div class="input-group mb-3">
-                        <input type="text" class="form-control form-control-lg" value="{baseUrl}/mcp" readonly id="claude-server-url" style="font-family: monospace; font-weight: bold;">
-                        <div class="input-group-append">
-                            <button class="btn btn-success btn-lg copy-button" type="button" data-copy-target="claude-server-url">
-                                <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                    <span class="icon-markup">📋</span>
-                                </span>
-                                Copy Server URL
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <div class="alert alert-info">
-                        <h6><strong>How it works:</strong></h6>
-                        <ol class="mb-0">
-                            <li>
-                                Claude Desktop discovers OAuth endpoints automatically
-                                <ul class="my-0">
-                                    <li><code>{baseUrl}/.well-known/oauth-authorization-server</code></li>
-                                    <li><code>{baseUrl}/.well-known/oauth-protected-resource</code></li>
-                                </ul>
-                            </li>
-                            <li>You'll be redirected to this TYPO3 backend for authentication</li>
-                            <li>After authorization, Claude Desktop gets secure access</li>
-                            <li>All future requests use OAuth tokens automatically</li>
-                        </ol>
-                    </div>
                 </div>
-            </div>
-        </div>
-    </div>
+                <div class="card-body pb-0">
+                    <!-- Main Navigation Tabs -->
+                    <ul class="nav nav-tabs" id="mcpSetupTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link active" id="remote-setup-tab" data-toggle="tab" data-bs-toggle="tab" href="#remote-setup" role="tab" aria-controls="remote-setup" aria-selected="true">
+                                🌐 Remote MCP Setup
+                            </a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" id="local-mcp-remote-tab" data-toggle="tab" data-bs-toggle="tab" href="#local-mcp-remote" role="tab" aria-controls="local-mcp-remote" aria-selected="false">
+                                🔗 Local Setup (mcp-remote)
+                            </a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" id="local-cli-tab" data-toggle="tab" data-bs-toggle="tab" href="#local-cli" role="tab" aria-controls="local-cli" aria-selected="false">
+                                💻 Local Setup (TYPO3 CLI)
+                            </a>
+                        </li>
+                    </ul>
 
-    <!-- mcp-remote Setup -->
-    <div class="row mt-4">
-        <div class="col-md-12">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">
-                        🔗 mcp-remote Setup
-                    </h3>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted">
-                        For MCP clients that don't support remote MCP connections natively. mcp-remote is a Node.js module that bridges this gap. Some configurations don't support Authorization headers, so we include the token in the URL as a workaround.
-                    </p>
+                    <!-- Tab Content -->
+                    <div class="tab-content mt-3" id="mcpSetupTabsContent">
+                        
+                        <!-- Remote MCP Setup Tab -->
+                        <div class="tab-pane fade show active" id="remote-setup" role="tabpanel" aria-labelledby="remote-setup-tab">
+                            <p class="text-muted mb-3">
+                                Connect MCP clients to this TYPO3 instance over the internet using OAuth authentication. This is the recommended method for most use cases.
+                            </p>
+                            
+                            <!-- Nested tabs for different clients -->
+                            <ul class="nav nav-pills mb-3" id="remoteClientTabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <a class="nav-link active" id="claude-desktop-pill" data-toggle="pill" data-bs-toggle="pill" href="#claude-desktop" role="tab" aria-controls="claude-desktop" aria-selected="true">
+                                        Claude Desktop
+                                    </a>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <a class="nav-link" id="other-clients-pill" data-toggle="pill" data-bs-toggle="pill" href="#other-clients" role="tab" aria-controls="other-clients" aria-selected="false">
+                                        Other MCP Clients
+                                    </a>
+                                </li>
+                            </ul>
 
-                    <f:if condition="{mcpRemoteUrl.hasTokens}">
-                        <f:then>
-                            <!-- Token URL for mcp-remote -->
-                            <div class="alert alert-info">
-                                <h6><strong>Using your active token:</strong></h6>
-                                <p class="mb-2">Your existing OAuth token will be included in the URL as a query parameter.</p>
-                            </div>
+                            <div class="tab-content" id="remoteClientTabsContent">
+                                
+                                <!-- Claude Desktop Instructions -->
+                                <div class="tab-pane fade show active" id="claude-desktop" role="tabpanel" aria-labelledby="claude-desktop-pill">
+                                    <h5>🚀 Claude Desktop Integration</h5>
+                                    <p class="mb-2">To connect Claude Desktop to this TYPO3 instance:</p>
+                                    <ol class="mb-3">
+                                        <li>Copy the Integration Name and Server URL below</li>
+                                        <li>In Claude Desktop, go to <strong>Settings → Integrations</strong></li>
+                                        <li>Click <strong>"Add Integration"</strong></li>
+                                        <li>Enter the <strong>Integration Name</strong></li>
+                                        <li>Paste the <strong>Server URL</strong></li>
+                                        <li>Claude Desktop will automatically handle OAuth authentication</li>
+                                    </ol>
+                                    <p class="mb-0"><strong>Simple setup!</strong> Just copy both fields - Claude Desktop handles the rest automatically.</p>
+                                </div>
 
-                            <div class="input-group mb-3">
-                                <input type="text" class="form-control" value="{mcpRemoteUrl.tokenUrl}" readonly id="mcp-remote-url" style="font-family: monospace;">
-                                <div class="input-group-append">
-                                    <button class="btn btn-outline-primary copy-button" type="button" data-copy-target="mcp-remote-url">
-                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                            <span class="icon-markup">📋</span>
-                                        </span>
-                                        Copy Token URL
-                                    </button>
+                                <!-- Other MCP Clients Instructions -->
+                                <div class="tab-pane fade" id="other-clients" role="tabpanel" aria-labelledby="other-clients-pill">
+                                    <h5>🔧 Generic MCP Client Setup</h5>
+                                    <p class="mb-2">For MCP clients that support OAuth and remote connections:</p>
+                                    <ol class="mb-3">
+                                        <li>Copy the Integration Name and Server URL below</li>
+                                        <li>Configure your client with the integration name (optional but recommended)</li>
+                                        <li>Use the Server URL for connection</li>
+                                        <li>Your client should automatically discover OAuth endpoints</li>
+                                        <li>During authentication, you'll be redirected to this TYPO3 backend</li>
+                                        <li>After authorization, your client will receive secure access tokens</li>
+                                    </ol>
+                                    <p class="mb-0"><strong>Note:</strong> Your MCP client must support OAuth 2.0 and automatic endpoint discovery.</p>
                                 </div>
                             </div>
 
-                            <!-- mcp-remote Configuration Example -->
-                            <div class="mt-3">
-                                <h6><strong>Example mcp-remote configuration:</strong></h6>
-                                <textarea class="form-control mb-2" rows="9" readonly id="mcp-remote-config" style="font-family: monospace; font-size: 12px;"><f:format.raw>{
+                            <!-- Shared Integration Name -->
+                            <div class="my-3">
+                                <label for="integration-name" class="form-label"><strong>Integration Name</strong> <small class="text-muted">(recommended)</small></label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control form-control-lg" value="{siteName}" readonly id="integration-name" style="font-family: monospace; font-weight: bold;">
+                                    <div class="input-group-append">
+                                        <button class="btn btn-success btn-lg copy-button" type="button" data-copy-target="integration-name">
+                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                                <span class="icon-markup">📋</span>
+                                            </span>
+                                            Copy Name
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Shared Server URL -->
+                            <div class="my-3">
+                                <label for="remote-server-url" class="form-label"><strong>Server URL</strong></label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control form-control-lg" value="{baseUrl}/mcp" readonly id="remote-server-url" style="font-family: monospace; font-weight: bold;">
+                                    <div class="input-group-append">
+                                        <button class="btn btn-success btn-lg copy-button" type="button" data-copy-target="remote-server-url">
+                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                                <span class="icon-markup">📋</span>
+                                            </span>
+                                            Copy Server URL
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Technical details (shared across all remote clients) -->
+                            <div class="alert alert-info mt-3">
+                                <h6><strong>How it works:</strong></h6>
+                                <ol class="mb-0">
+                                    <li>
+                                        MCP clients discover OAuth endpoints automatically
+                                        <ul class="my-0">
+                                            <li><code>{baseUrl}/.well-known/oauth-authorization-server</code></li>
+                                            <li><code>{baseUrl}/.well-known/oauth-protected-resource</code></li>
+                                        </ul>
+                                    </li>
+                                    <li>You'll be redirected to this TYPO3 backend for authentication</li>
+                                    <li>After authorization, your MCP client gets secure access</li>
+                                    <li>All future requests use OAuth tokens automatically</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <!-- Local Setup (mcp-remote) Tab -->
+                        <div class="tab-pane fade" id="local-mcp-remote" role="tabpanel" aria-labelledby="local-mcp-remote-tab">
+                            <p class="text-muted mb-3">
+                                For MCP clients that don't support remote connections natively. The mcp-remote package acts as a local bridge, connecting to this TYPO3 instance on behalf of your MCP client.
+                            </p>
+
+                            <f:if condition="{mcpRemoteUrl.hasTokens}">
+                                <f:then>
+                                    <!-- Token URL for mcp-remote -->
+                                    <div class="alert alert-info">
+                                        <h6><strong>Using your active token:</strong></h6>
+                                        <p class="mb-2">Your existing OAuth token will be included in the URL as a query parameter.</p>
+                                    </div>
+
+                                    <div class="input-group mb-3">
+                                        <input type="text" class="form-control" value="{mcpRemoteUrl.tokenUrl}" readonly id="mcp-remote-url" style="font-family: monospace;">
+                                        <div class="input-group-append">
+                                            <button class="btn btn-outline-primary copy-button" type="button" data-copy-target="mcp-remote-url">
+                                                <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                                    <span class="icon-markup">📋</span>
+                                                </span>
+                                                Copy Token URL
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <!-- mcp-remote Configuration Example -->
+                                    <div class="mt-3">
+                                        <h6><strong>Example mcp-remote configuration:</strong></h6>
+                                        <textarea class="form-control mb-2" rows="9" readonly id="mcp-remote-config" style="font-family: monospace; font-size: 12px;"><f:format.raw>{
   "mcpServers": {
-    "</f:format.raw>{serverKey}<f:format.raw>": {
+    "</f:format.raw>{siteName}<f:format.raw>": {
       "command": "npx",
       "args": ["mcp-remote", "--transport", "http-only", "</f:format.raw>{mcpRemoteUrl.tokenUrl}<f:format.raw>"]
     }
   }
 }</f:format.raw></textarea>
-                                <button class="btn btn-sm btn-outline-secondary copy-button" type="button" data-copy-target="mcp-remote-config">
-                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                        <span class="icon-markup">📋</span>
-                                    </span>
-                                    Copy Configuration
-                                </button>
+                                        <button class="btn btn-sm btn-outline-secondary copy-button" type="button" data-copy-target="mcp-remote-config">
+                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                                <span class="icon-markup">📋</span>
+                                            </span>
+                                            Copy Configuration
+                                        </button>
+                                    </div>
+                                </f:then>
+                                <f:else>
+                                    <div class="alert alert-info">
+                                        <h6><strong>No mcp-remote token found</strong></h6>
+                                        <p class="mb-3">Create an mcp-remote token to use with clients that require URL-based authentication.</p>
+                                        
+                                        <div class="mb-3">
+                                            <button id="create-mcp-remote-token-btn" class="btn btn-primary btn-lg">
+                                                <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
+                                                    <span class="icon-markup">➕</span>
+                                                </span>
+                                                Create mcp-remote Token
+                                            </button>
+                                        </div>
+                                        
+                                        <div class="small text-muted">
+                                            <p class="mb-1"><strong>What happens:</strong></p>
+                                            <ul class="mb-2">
+                                                <li>A secure 30-day token will be created instantly</li>
+                                                <li>This token is specifically for mcp-remote configurations</li>
+                                                <li>The token URL will appear above for copying</li>
+                                            </ul>
+                                            <p class="mb-0"><em>For remote-capable clients:</em> Use the Remote MCP Setup tab instead.</p>
+                                        </div>
+                                    </div>
+                                </f:else>
+                            </f:if>
+
+                            <div class="alert alert-secondary mt-3">
+                                <h6><strong>⚠️ Security Note:</strong></h6>
+                                <p class="mb-0">The token URL includes your authentication token in the URL. Only use this method when your MCP client doesn't support Authorization headers or when using mcp-remote configurations that require tokens in the URL.</p>
                             </div>
-                        </f:then>
-                        <f:else>
-                            <div class="alert alert-info">
-                                <h6><strong>No mcp-remote token found</strong></h6>
-                                <p class="mb-3">Create an mcp-remote token to use with clients that require URL-based authentication.</p>
-                                
-                                <div class="text-center mb-3">
-                                    <button id="create-mcp-remote-token-btn" class="btn btn-primary btn-lg">
-                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
-                                            <span class="icon-markup">➕</span>
-                                        </span>
-                                        Create mcp-remote Token
-                                    </button>
-                                </div>
-                                
-                                <div class="small text-muted">
-                                    <p class="mb-1"><strong>What happens:</strong></p>
-                                    <ul class="mb-2">
-                                        <li>A secure 30-day token will be created instantly</li>
-                                        <li>This token is specifically for mcp-remote configurations</li>
-                                        <li>The token URL will appear above for copying</li>
-                                    </ul>
-                                    <p class="mb-0"><em>For Claude Desktop:</em> Use the Remote MCP Setup above instead.</p>
-                                </div>
-                            </div>
-                        </f:else>
-                    </f:if>
+                        </div>
 
-                    <div class="alert alert-secondary mt-3">
-                        <h6><strong>⚠️ Security Note:</strong></h6>
-                        <p class="mb-0">The token URL includes your authentication token in the URL. Only use this method when your MCP client doesn't support Authorization headers or when using mcp-remote configurations that require tokens in the URL.</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
+                        <!-- Local Setup (TYPO3 CLI) Tab -->
+                        <div class="tab-pane fade" id="local-cli" role="tabpanel" aria-labelledby="local-cli-tab">
+                            <p class="text-muted mb-3">
+                                For local development where your MCP client has direct shell access to this TYPO3 installation.
+                            </p>
 
-    <!-- CLI/Developer Setup -->
-    <div class="row mt-4">
-        <div class="col-md-12">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">
-                        💻 CLI/Developer Setup
-                    </h3>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted">
-                        For local development using command-line access to TYPO3.
-                    </p>
-
-                    <div class="row">
-                        <div class="col-md-12">
-                            <textarea class="form-control mb-2" rows="8" readonly id="cli-config" style="font-family: monospace; font-size: 12px;"><f:format.raw>{
+                            <div class="row">
+                                <div class="col-md-12">
+                                    <textarea class="form-control mb-2" rows="8" readonly id="cli-config" style="font-family: monospace; font-size: 12px;"><f:format.raw>{
   "mcpServers": {
-    "</f:format.raw>{serverKey}<f:format.raw>": {
+    "</f:format.raw>{siteName}<f:format.raw>": {
       "command": "php",
       "args": ["vendor/bin/typo3","mcp:server"]
     }
   }
 }</f:format.raw></textarea>
-                            <button class="btn btn-sm btn-outline-secondary copy-button" type="button" data-copy-target="cli-config">
-                                <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                    <span class="icon-markup">📋</span>
-                                </span>
-                                Copy Configuration
-                            </button>
-                        </div>
-                    </div>
+                                    <button class="btn btn-sm btn-outline-secondary copy-button" type="button" data-copy-target="cli-config">
+                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                            <span class="icon-markup">📋</span>
+                                        </span>
+                                        Copy Configuration
+                                    </button>
+                                </div>
+                            </div>
 
-                    <div class="alert alert-info mt-3">
-                        <h6><strong>How CLI access works:</strong></h6>
-                        <ul class="mb-0">
-                            <li><strong>Direct access:</strong> No OAuth needed</li>
-                            <li><strong>Local only:</strong> Only works when your client has shell access to typo3</li>
-                            <li><strong>Development friendly:</strong> Perfect for local development and testing</li>
-                        </ul>
+                            <div class="alert alert-info mt-3">
+                                <h6><strong>How CLI access works:</strong></h6>
+                                <ul class="mb-0">
+                                    <li><strong>Direct access:</strong> No OAuth needed</li>
+                                    <li><strong>Local only:</strong> Only works when your client has shell access to TYPO3</li>
+                                    <li><strong>Development friendly:</strong> Perfect for local development and testing</li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Active Tokens -->
-    <div class="row mt-4">
-        <div class="col-md-12">
+        <!-- Active Tokens -->
+        <div class="col-xs-12" style="max-width: 800px">
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <h3 class="card-title mb-0">
@@ -220,7 +278,7 @@
                         </button>
                     </div>
                 </div>
-                <div class="card-body">
+                <div class="card-body pb-0">
                     <p class="text-muted">
                         Manage your active OAuth tokens. Each token represents an authorized MCP client connection.
                     </p>
@@ -296,37 +354,33 @@
                 </div>
             </div>
         </div>
-    </div>
-        
-    <!-- Available Tools -->
-    <div class="row mt-4">
-        <div class="col-md-12">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">
-                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:available_tools" />
-                    </h3>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted">
-                        <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:tools_description" />
-                    </p>
-                    
-                    <div class="row">
+
+        <f:comment>
+            <!-- Available Tools -->
+            <div class="col-md-12" style="max-width: 800px;">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">
+                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:available_tools" />
+                        </h3>
+                    </div>
+                    <div class="card-body pb-0">
+                        <p class="text-muted">
+                            <f:translate key="LLL:EXT:mcp_server/Resources/Private/Language/locallang_mod.xlf:tools_description" />
+                        </p>
+
                         <f:for each="{tools}" as="tool">
-                            <div class="col-md-6 col-lg-4 mb-3">
-                                <div class="card card-sm">
-                                    <div class="card-body">
-                                        <h6 class="card-title">{tool.name}</h6>
-                                        <p class="card-text text-muted small">{tool.description -> f:format.nl2br()}</p>
-                                    </div>
+                            <div class="card card-sm">
+                                <div class="card-body">
+                                    <h6 class="card-title">{tool.name}</h6>
+                                    <p class="card-text text-muted small">{tool.description -> f:format.nl2br()}</p>
                                 </div>
                             </div>
                         </f:for>
                     </div>
                 </div>
             </div>
-        </div>
+        </f:comment>
     </div>
 </div>
 
