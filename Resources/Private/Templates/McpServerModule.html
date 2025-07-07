@@ -95,7 +95,7 @@
                                 <div class="input-group">
                                     <input type="text" class="form-control form-control-lg" value="{siteName}" readonly id="integration-name" style="font-family: monospace; font-weight: bold;">
                                     <div class="input-group-append">
-                                        <button class="btn btn-success btn-lg copy-button" type="button" data-copy-target="integration-name">
+                                        <button class="btn btn-outline-secondary btn-lg copy-button" type="button" data-copy-target="integration-name">
                                             <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
                                                 <span class="icon-markup">📋</span>
                                             </span>
@@ -111,7 +111,7 @@
                                 <div class="input-group">
                                     <input type="text" class="form-control form-control-lg" value="{baseUrl}/mcp" readonly id="remote-server-url" style="font-family: monospace; font-weight: bold;">
                                     <div class="input-group-append">
-                                        <button class="btn btn-success btn-lg copy-button" type="button" data-copy-target="remote-server-url">
+                                        <button class="btn btn-outline-secondary btn-lg copy-button" type="button" data-copy-target="remote-server-url">
                                             <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
                                                 <span class="icon-markup">📋</span>
                                             </span>
@@ -311,7 +311,7 @@
                                                         </f:if>
                                                     </small></td>
                                                     <td><small class="text-muted">{token.expires -> f:format.date(format: 'Y-m-d H:i:s')}</small></td>
-                                                    <td><code class="small">{token.token -> f:format.crop(maxCharacters: 20)}...</code></td>
+                                                    <td><code class="small">{token.token -> f:format.crop(maxCharacters: 8)}</code></td>
                                                     <td>
                                                         <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="{token.uid}">
                                                             <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-delete" data-identifier="actions-delete">

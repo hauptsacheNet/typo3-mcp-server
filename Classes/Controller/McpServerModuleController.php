@@ -258,7 +258,7 @@ class McpServerModuleController
         return [
             'baseUrl' => $endpointUrl,
             'hasTokens' => !empty($mcpRemoteTokens),
-            'tokenUrl' => !empty($mcpRemoteTokens) ? $endpointUrl . '&token=' . array_values($mcpRemoteTokens)[0]['token'] : null,
+            'tokenUrl' => !empty($mcpRemoteTokens) ? $endpointUrl . '?token=' . array_values($mcpRemoteTokens)[0]['token'] : null,
             'description' => 'For MCP clients that don\'t support Authorization headers (like mcp-remote without auth)',
         ];
     }
