@@ -27,44 +27,15 @@ class ListTablesTool extends AbstractRecordTool
     public function getSchema(): array
     {
         return [
-            'description' => 'List available tables in TYPO3, organized by extension. By default, only shows workspace-capable tables.',
+            'description' => 'List available tables in TYPO3 that can be accessed via MCP, organized by extension.',
             'parameters' => [
                 'type' => 'object',
-                'properties' => [
-                    'includeHidden' => [
-                        'type' => 'boolean',
-                        'description' => 'Whether to include hidden tables',
-                        'default' => false,
-                    ],
-                    'includeNonWorkspace' => [
-                        'type' => 'boolean',
-                        'description' => 'Whether to include tables that are not workspace-capable',
-                        'default' => false,
-                    ],
-                    'workspaceOnly' => [
-                        'type' => 'boolean',
-                        'description' => 'Show only workspace-capable tables (default behavior)',
-                        'default' => true,
-                    ],
-                ],
+                'properties' => [],
             ],
             'examples' => [
                 [
-                    'description' => 'List workspace-capable tables (default)',
+                    'description' => 'List all accessible tables',
                     'parameters' => []
-                ],
-                [
-                    'description' => 'List all tables including non-workspace-capable ones',
-                    'parameters' => [
-                        'includeNonWorkspace' => true
-                    ]
-                ],
-                [
-                    'description' => 'List all tables including hidden and non-workspace',
-                    'parameters' => [
-                        'includeHidden' => true,
-                        'includeNonWorkspace' => true
-                    ]
                 ]
             ]
         ];
@@ -75,61 +46,43 @@ class ListTablesTool extends AbstractRecordTool
      */
     public function execute(array $params): CallToolResult
     {
-        $includeHidden = $params['includeHidden'] ?? false;
-        $includeNonWorkspace = $params['includeNonWorkspace'] ?? false;
-        $workspaceOnly = $params['workspaceOnly'] ?? true;
-        
-        // If includeNonWorkspace is true, disable workspaceOnly filter
-        if ($includeNonWorkspace) {
-            $workspaceOnly = false;
-        }
-        
         try {
-            // Get all tables from TCA
-            $tables = $this->getTables($includeHidden, $workspaceOnly);
+            // Get all accessible tables from TableAccessService (include all, regardless of read-only status)
+            $tables = $this->tableAccessService->getAccessibleTables(true);
+            
+            // Convert to the expected format
+            $formattedTables = $this->formatAccessibleTables($tables);
             
             // Group tables by extension
-            $groupedTables = $this->groupTablesByExtension($tables);
+            $groupedTables = $this->groupTablesByExtension($formattedTables);
             
             // Format the result
-            return $this->createSuccessResult($this->formatTablesAsText($groupedTables, $workspaceOnly));
+            return $this->createSuccessResult($this->formatTablesAsText($groupedTables));
         } catch (\Throwable $e) {
             return $this->createErrorResult('Error listing tables: ' . $e->getMessage());
         }
     }
     
     /**
-     * Get all tables from TCA
+     * Format accessible tables from TableAccessService to the expected format
      */
-    protected function getTables(bool $includeHidden = false, bool $workspaceOnly = true): array
+    protected function formatAccessibleTables(array $accessibleTables): array
     {
         $tables = [];
         
-        foreach (array_keys($GLOBALS['TCA']) as $table) {
-            // Skip hidden tables if not explicitly included
-            if (!$includeHidden && $this->isTableHidden($table)) {
-                continue;
-            }
-            
-            // Check workspace capability
-            $workspaceInfo = $this->getWorkspaceCapabilityInfo($table);
-            $isWorkspaceCapable = $workspaceInfo['workspace_capable'];
-            
-            // Skip non-workspace tables if workspaceOnly is true
-            if ($workspaceOnly && !$isWorkspaceCapable) {
-                continue;
-            }
-            
+        foreach ($accessibleTables as $table => $accessInfo) {
             $tables[$table] = [
                 'name' => $table,
                 'label' => $this->getTableLabel($table),
                 'extension' => $this->getExtensionFromTable($table),
                 'description' => $this->getTableDescription($table),
-                'hidden' => $this->isTableHidden($table),
-                'readOnly' => $this->isTableReadOnly($table),
+                'readOnly' => $accessInfo['read_only'],
                 'type' => $this->getTableType($table),
-                'workspace_capable' => $isWorkspaceCapable,
-                'workspace_info' => $workspaceInfo['reason'],
+                'workspace_capable' => $accessInfo['workspace_capable'],
+                'workspace_info' => $accessInfo['workspace_capable'] 
+                    ? 'Workspace-capable' 
+                    : 'Not workspace-capable',
+                'restrictions' => $accessInfo['restrictions'],
             ];
         }
         
@@ -166,17 +119,13 @@ class ListTablesTool extends AbstractRecordTool
     /**
      * Format tables as text
      */
-    protected function formatTablesAsText(array $groupedTables, bool $workspaceOnly = true): string
+    protected function formatTablesAsText(array $groupedTables): string
     {
-        $result = $workspaceOnly 
-            ? "WORKSPACE-CAPABLE TABLES IN TYPO3\n" 
-            : "AVAILABLE TABLES IN TYPO3\n";
-        $result .= "===================================\n\n";
+        $result = "ACCESSIBLE TABLES IN TYPO3 (via MCP)\n";
+        $result .= "=====================================\n\n";
         
-        if ($workspaceOnly) {
-            $result .= "Note: Only showing tables that support workspace operations.\n";
-            $result .= "Use 'includeNonWorkspace: true' to see all tables.\n\n";
-        }
+        $result .= "All tables listed are workspace-capable and accessible by the current user.\n";
+        $result .= "Tables marked as [READ-ONLY] can be read but not modified.\n\n";
         
         foreach ($groupedTables as $extension => $extensionInfo) {
             $extensionLabel = $extensionInfo['extensionLabel'];
@@ -200,12 +149,9 @@ class ListTablesTool extends AbstractRecordTool
                     $result .= " [READ-ONLY]";
                 }
                 
-                if (!$workspaceOnly) {
-                    if ($tableInfo['workspace_capable']) {
-                        $result .= " [WORKSPACE-CAPABLE]";
-                    } else {
-                        $result .= " [NO WORKSPACE: " . $tableInfo['workspace_info'] . "]";
-                    }
+                // Show any restrictions
+                if (!empty($tableInfo['restrictions'])) {
+                    $result .= " [" . implode(', ', $tableInfo['restrictions']) . "]";
                 }
                 
                 $result .= "\n";
@@ -241,32 +187,6 @@ class ListTablesTool extends AbstractRecordTool
         return ucfirst(str_replace('_', ' ', $extension));
     }
     
-    /**
-     * Check if a table is read-only
-     */
-    protected function isTableReadOnly(string $table): bool
-    {
-        if (!$this->tableExists($table)) {
-            return true;
-        }
-        
-        // Tables without a TCA ctrl section are considered read-only
-        if (empty($GLOBALS['TCA'][$table]['ctrl'])) {
-            return true;
-        }
-        
-        // Tables with readOnly flag are read-only
-        if (!empty($GLOBALS['TCA'][$table]['ctrl']['readOnly'])) {
-            return true;
-        }
-        
-        // Tables without a label field are typically not editable
-        if (empty($GLOBALS['TCA'][$table]['ctrl']['label'])) {
-            return true;
-        }
-        
-        return false;
-    }
     
     /**
      * Get the type of a table (content, system, etc.)
@@ -308,30 +228,6 @@ class ListTablesTool extends AbstractRecordTool
         }
         
         return 'other';
-    }
-    
-    /**
-     * Check if a table has a pid field
-     */
-    protected function tableHasPidField(string $table): bool
-    {
-        if (!$this->tableExists($table)) {
-            return false;
-        }
-        
-        // Most tables in TYPO3 have a pid field, but some system tables don't
-        // We could check the actual database schema, but for simplicity we'll use a heuristic
-        
-        // These tables definitely don't have a pid field
-        $tablesWithoutPid = [
-            'sys_registry', 'sys_log', 'sys_history', 'sys_file', 'be_sessions', 'fe_sessions'
-        ];
-        
-        if (in_array($table, $tablesWithoutPid)) {
-            return false;
-        }
-        
-        return true;
     }
     
 }

@@ -78,6 +78,13 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
             return $this->createErrorResult('Identifier parameter is required');
         }
 
+        // Validate table access using TableAccessService
+        try {
+            $this->ensureTableAccess($table, 'read');
+        } catch (\InvalidArgumentException $e) {
+            return $this->createErrorResult($e->getMessage());
+        }
+
         // Check if the table and field exist
         if (!isset($GLOBALS['TCA'][$table]['columns'][$field])) {
             return $this->createErrorResult("Field '$field' not found in table '$table'");

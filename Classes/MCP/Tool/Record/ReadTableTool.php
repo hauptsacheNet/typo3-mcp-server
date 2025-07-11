@@ -106,8 +106,11 @@ class ReadTableTool extends AbstractRecordTool
             return $this->createErrorResult('Table name is required');
         }
 
-        if (!$this->tableExists($table)) {
-            return $this->createErrorResult('Table "' . $table . '" does not exist in TCA');
+        // Validate table access using TableAccessService
+        try {
+            $this->ensureTableAccess($table, 'read');
+        } catch (\InvalidArgumentException $e) {
+            return $this->createErrorResult($e->getMessage());
         }
 
         try {
@@ -637,8 +640,8 @@ class ReadTableTool extends AbstractRecordTool
                 if (!empty($fieldConfig['config']['foreign_table'])) {
                     $foreignTable = $fieldConfig['config']['foreign_table'];
 
-                    // Skip if the foreign table doesn't exist in TCA
-                    if (!$this->tableExists($foreignTable)) {
+                    // Skip if the foreign table doesn't exist or isn't accessible
+                    if (!$this->tableAccessService->canAccessTable($foreignTable)) {
                         continue;
                     }
 
@@ -749,8 +752,8 @@ class ReadTableTool extends AbstractRecordTool
                 $foreignTable = $fieldConfig['config']['foreign_table'];
                 $foreignField = $fieldConfig['config']['foreign_field'] ?? '';
 
-                // Skip if the foreign table doesn't exist in TCA or no foreign field
-                if (!$this->tableExists($foreignTable) || empty($foreignField)) {
+                // Skip if the foreign table isn't accessible or no foreign field
+                if (!$this->tableAccessService->canAccessTable($foreignTable) || empty($foreignField)) {
                     continue;
                 }
 

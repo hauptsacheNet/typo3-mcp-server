@@ -33,17 +33,18 @@ class SearchTool extends AbstractRecordTool
      */
     public function getSchema(): array
     {
-        $languageRecommendations = $this->getLanguageRecommendations();
+        //$languageRecommendations = $this->getLanguageRecommendations();
         
         return [
-            'description' => $this->buildSearchDescription($languageRecommendations),
+            'description' => "Search for records across workspace-capable TYPO3 tables using TCA-based searchable fields. " .
+                "Uses SQL LIKE queries for pattern matching.\n\n",
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
                     'terms' => [
                         'type' => 'array',
                         'items' => ['type' => 'string'],
-                        'description' => 'Search terms to find in record content. Can be a single term or multiple keywords.',
+                        'description' => 'Search terms to find in record content. Use multiple search terms with synonyms for best results.',
                     ],
                     'termLogic' => [
                         'type' => 'string',
@@ -62,10 +63,6 @@ class SearchTool extends AbstractRecordTool
                     'includeHidden' => [
                         'type' => 'boolean',
                         'description' => 'Whether to include hidden records (default: false)',
-                    ],
-                    'limit' => [
-                        'type' => 'integer',
-                        'description' => 'Maximum number of results per table (default: 10, max: 50)',
                     ],
                 ],
                 'required' => ['terms'],
@@ -108,34 +105,6 @@ class SearchTool extends AbstractRecordTool
                 ]
             ]
         ];
-    }
-
-    /**
-     * Build comprehensive search description with recommendations
-     */
-    protected function buildSearchDescription(string $languageRecommendations): string
-    {
-        return "Search for records across workspace-capable TYPO3 tables using TCA-based searchable fields. " .
-               "Uses SQL LIKE queries for pattern matching.\n\n" .
-
-               "SEARCH RECOMMENDATIONS:\n" .
-               "• Use SHORT, SPECIFIC terms (2-6 characters work best)\n" .
-               "• Try EXACT words rather than partial matches\n" .
-               "• Use multiple terms with OR logic to find variations\n" .
-               "• Search is case-INSENSITIVE\n" .
-               "• Avoid very long phrases (not fuzzy search)\n\n" .
-
-               "MULTIPLE TERMS:\n" .
-               "• OR logic: Finds records matching ANY term\n" .
-               "• AND logic: Finds records matching ALL terms\n" .
-               "• Use OR for broader discovery, AND for precise filtering\n\n" .
-
-               $languageRecommendations .
-
-               "SECURITY:\n" .
-               "• Only searches workspace-capable tables\n" .
-               "• Respects TYPO3 permissions and restrictions\n" .
-               "• Safe for production use";
     }
 
     /**
@@ -194,7 +163,7 @@ class SearchTool extends AbstractRecordTool
         $table = trim($params['table'] ?? '');
         $pageId = isset($params['pageId']) ? (int)$params['pageId'] : null;
         $includeHidden = (bool)($params['includeHidden'] ?? false);
-        $limit = max(1, min(50, (int)($params['limit'] ?? 10)));
+        $limit = 50;
 
         // Validate search parameters
         $searchTerms = $this->validateAndNormalizeSearchTerms($terms);
@@ -282,10 +251,10 @@ class SearchTool extends AbstractRecordTool
         $searchResults = [];
         $inlineTableMetadata = [];
         
-        // Get primary tables to search (workspace-capable, non-hidden)
+        // Get primary tables to search (accessible tables with searchable fields)
         $primaryTables = $this->getTablesToSearch($table);
         
-        // Discover hidden inline tables referenced by primary tables
+        // Discover related tables referenced by primary tables (inline/select relations)
         $inlineTableInfo = $this->getInlineRelatedHiddenTables($primaryTables);
         
         // Create lookup for inline table metadata
@@ -455,49 +424,38 @@ class SearchTool extends AbstractRecordTool
     }
 
     /**
-     * Get tables to search (workspace-capable only)
+     * Get tables to search (accessible tables with searchable fields)
      */
     protected function getTablesToSearch(string $specificTable = ''): array
     {
         if (!empty($specificTable)) {
-            if (!isset($GLOBALS['TCA'][$specificTable])) {
-                throw new \InvalidArgumentException('Table "' . $specificTable . '" does not exist in TCA');
-            }
-            
-            // Validate that the specific table is workspace-capable
-            $workspaceInfo = $this->getWorkspaceCapabilityInfo($specificTable);
-            if (!$workspaceInfo['workspace_capable']) {
-                throw new \InvalidArgumentException('Table "' . $specificTable . '" is not workspace-capable and cannot be searched via MCP');
+            // Validate table access using TableAccessService
+            try {
+                $this->ensureTableAccess($specificTable, 'read');
+            } catch (\InvalidArgumentException $e) {
+                throw new \InvalidArgumentException('Cannot search table "' . $specificTable . '": ' . $e->getMessage());
             }
             
             return [$specificTable];
         }
 
-        // Get workspace-capable tables that have searchable fields
-        $tables = [];
-        foreach (array_keys($GLOBALS['TCA']) as $tableName) {
-            // Skip hidden tables
-            if ($this->isTableHidden($tableName)) {
-                continue;
-            }
-            
-            // Only include workspace-capable tables
-            $workspaceInfo = $this->getWorkspaceCapabilityInfo($tableName);
-            if (!$workspaceInfo['workspace_capable']) {
-                continue;
-            }
-            
-            // Only include tables that have searchable fields
+        // Get all accessible tables from TableAccessService
+        $accessibleTables = $this->tableAccessService->getAccessibleTables(true); // Include read-only tables for searching
+        
+        // Filter for tables that have searchable fields
+        $searchableTables = [];
+        foreach ($accessibleTables as $tableName => $accessInfo) {
+            // Only include tables that have searchable fields defined in TCA
             if (!empty($this->getSearchableFields($tableName))) {
-                $tables[] = $tableName;
+                $searchableTables[] = $tableName;
             }
         }
         
-        return $tables;
+        return $searchableTables;
     }
 
     /**
-     * Discover hidden inline tables that are referenced by primary tables
+     * Discover related tables that are referenced by primary tables (including relation tables)
      */
     protected function getInlineRelatedHiddenTables(array $primaryTables): array
     {
@@ -508,7 +466,7 @@ class SearchTool extends AbstractRecordTool
                 continue;
             }
             
-            // Look through all columns for inline relations
+            // Look through all columns for relations
             foreach ($GLOBALS['TCA'][$primaryTable]['columns'] as $fieldName => $fieldConfig) {
                 $fieldType = $fieldConfig['config']['type'] ?? '';
                 
@@ -517,8 +475,8 @@ class SearchTool extends AbstractRecordTool
                     $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
                     
                     if (!empty($foreignTable) && isset($GLOBALS['TCA'][$foreignTable])) {
-                        // Check if the foreign table is hidden and has searchable fields
-                        if ($this->isTableHidden($foreignTable) && !empty($this->getSearchableFields($foreignTable))) {
+                        // Use TableAccessService to check if table is accessible and has searchable fields
+                        if ($this->tableAccessService->canAccessTable($foreignTable) && !empty($this->getSearchableFields($foreignTable))) {
                             $inlineTables[$foreignTable] = [
                                 'table' => $foreignTable,
                                 'parent_table' => $primaryTable,
@@ -534,8 +492,8 @@ class SearchTool extends AbstractRecordTool
                     $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
                     
                     if (!empty($foreignTable) && isset($GLOBALS['TCA'][$foreignTable])) {
-                        // Check if the foreign table is hidden and has searchable fields
-                        if ($this->isTableHidden($foreignTable) && !empty($this->getSearchableFields($foreignTable))) {
+                        // Use TableAccessService to check if table is accessible and has searchable fields
+                        if ($this->tableAccessService->canAccessTable($foreignTable) && !empty($this->getSearchableFields($foreignTable))) {
                             $inlineTables[$foreignTable] = [
                                 'table' => $foreignTable,
                                 'parent_table' => $primaryTable,

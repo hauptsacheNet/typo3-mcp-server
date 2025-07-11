@@ -263,6 +263,9 @@ class McpEndpoint
             $beUser->user = $userData;
             $GLOBALS['BE_USER'] = $beUser;
             
+            // Initialize language service (required for DataHandler and other core components)
+            $this->initializeLanguageService($beUser);
+            
             // Set up workspace context
             $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
             $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
@@ -273,6 +276,25 @@ class McpEndpoint
         
         // Ensure TCA is loaded
         $this->ensureTcaLoaded();
+    }
+
+    /**
+     * Initialize language service for the backend user
+     */
+    private function initializeLanguageService(BackendUserAuthentication $beUser): void
+    {
+        // Get user's preferred language or fall back to default
+        $userLanguage = $beUser->user['lang'] ?? 'default';
+        
+        // Create language service
+        $languageServiceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
+        $languageService = $languageServiceFactory->createFromUserPreferences($beUser);
+        
+        // Set global language service
+        $GLOBALS['LANG'] = $languageService;
+        
+        // Also set it on the backend user for consistency
+        $beUser->setLanguageService($languageService);
     }
 
     /**

@@ -137,22 +137,11 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Table name is required');
         }
         
-        if (!$this->tableExists($table)) {
-            return $this->createErrorResult('Table "' . $table . '" does not exist in TCA');
-        }
-        
-        if ($this->isTableReadOnly($table)) {
-            return $this->createErrorResult('Table "' . $table . '" is read-only');
-        }
-        
-        // Check workspace capability
-        $workspaceInfo = $this->getWorkspaceCapabilityInfo($table);
-        if (!$workspaceInfo['workspace_capable']) {
-            return $this->createErrorResult(
-                'Table "' . $table . '" is not workspace-capable and cannot be modified via MCP. ' .
-                'Reason: ' . $workspaceInfo['reason'] . '. ' .
-                'This table requires direct database access or TYPO3 backend administration.'
-            );
+        // Validate table access using TableAccessService
+        try {
+            $this->ensureTableAccess($table, $action === 'delete' ? 'delete' : 'write');
+        } catch (\InvalidArgumentException $e) {
+            return $this->createErrorResult($e->getMessage());
         }
         
         // Validate action-specific parameters
@@ -378,9 +367,8 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function validateRecordData(string $table, array $data, string $action)
     {
-        if (!isset($GLOBALS['TCA'][$table])) {
-            return 'Table "' . $table . '" does not exist in TCA';
-        }
+        // Table access has already been validated by ensureTableAccess() before this method is called
+        // No need to re-check table existence here
         
         $tca = $GLOBALS['TCA'][$table];
         
@@ -561,35 +549,6 @@ class WriteTableTool extends AbstractRecordTool
         return true;
     }
     
-    /**
-     * Check if a table is read-only
-     */
-    protected function isTableReadOnly(string $table): bool
-    {
-        // Check if the table is in the list of read-only tables
-        $readOnlyTables = [
-            'sys_log',
-            'sys_history',
-            'sys_refindex',
-            'sys_registry',
-            'sys_lockedrecords',
-            'sys_filemounts',
-            'sys_file_processedfile',
-            'sys_file_reference',
-            'sys_file_metadata',
-            'sys_file_storage',
-            'sys_file',
-            'sys_collection',
-            'sys_category',
-            'sys_action',
-            'sys_domain',
-            'sys_template',
-            'be_users',
-            'be_groups',
-        ];
-        
-        return in_array($table, $readOnlyTables);
-    }
     
     /**
      * Check if a field is a FlexForm field

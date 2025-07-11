@@ -76,8 +76,11 @@ class GetTableSchemaTool extends AbstractRecordTool
             return $this->createErrorResult('Table parameter is required');
         }
         
-        if (!isset($GLOBALS['TCA'][$table])) {
-            return $this->createErrorResult('Table not found in TCA: ' . $table);
+        // Validate table access using TableAccessService
+        try {
+            $this->ensureTableAccess($table, 'read');
+        } catch (\InvalidArgumentException $e) {
+            return $this->createErrorResult($e->getMessage());
         }
         
         try {
@@ -106,17 +109,13 @@ class GetTableSchemaTool extends AbstractRecordTool
         $result .= "TABLE SCHEMA: " . $table . " (" . $tableLabel . ")\n";
         $result .= "=======================================\n\n";
         
-        // Check if the table is read-only
-        $readOnly = !empty($GLOBALS['TCA'][$table]['ctrl']['readOnly']);
-        
-        // Get workspace capability info
-        $workspaceInfo = $this->getWorkspaceCapabilityInfo($table);
+        // Get access info from TableAccessService
+        $accessInfo = $this->tableAccessService->getTableAccessInfo($table);
         
         $result .= "Type: content\n";
-        $result .= "Read-Only: " . ($readOnly ? "Yes" : "No") . "\n";
-        $result .= "Workspace-Capable: " . ($workspaceInfo['workspace_capable'] ? "Yes" : "No") . "\n";
-        if (!$workspaceInfo['workspace_capable']) {
-            $result .= "Workspace Info: " . $workspaceInfo['reason'] . "\n";
+        $result .= "Read-Only: " . ($accessInfo['read_only'] ? "Yes" : "No") . "\n";
+        if (!empty($accessInfo['restrictions'])) {
+            $result .= "Restrictions: " . implode(', ', $accessInfo['restrictions']) . "\n";
         }
         $result .= "\n";
         
@@ -214,16 +213,24 @@ class GetTableSchemaTool extends AbstractRecordTool
         $result .= "FIELDS:\n";
         $result .= "-------\n";
         
-        // Get the columns for this type
+        // Get available fields using TableAccessService (includes access control)
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $filterType);
+        
+        if (empty($availableFields)) {
+            $result .= "No accessible fields defined for this type.\n";
+            return $result;
+        }
+        
+        // Get the type configuration to understand field organization (tabs, palettes)
         $typeConfig = $GLOBALS['TCA'][$table]['types'][$filterType] ?? [];
         $showitem = $typeConfig['showitem'] ?? '';
         
         if (empty($showitem)) {
-            $result .= "No fields defined for this type.\n";
+            $result .= "No field layout defined for this type.\n";
             return $result;
         }
         
-        // Parse the showitem string
+        // Parse the showitem string for organization info
         $fields = GeneralUtility::trimExplode(',', $showitem, true);
         
         // Group fields by tab
@@ -294,9 +301,9 @@ class GetTableSchemaTool extends AbstractRecordTool
                                 continue;
                             }
                             
-                            // Add the field to the result if it exists in the TCA
-                            if (isset($GLOBALS['TCA'][$table]['columns'][$paletteFieldName])) {
-                                $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$paletteFieldName];
+                            // Add the field to the result if it's accessible
+                            if (isset($availableFields[$paletteFieldName])) {
+                                $fieldConfig = $availableFields[$paletteFieldName];
                                 
                                 // Mark as processed
                                 $processedFields[$paletteFieldName] = true;
@@ -315,8 +322,8 @@ class GetTableSchemaTool extends AbstractRecordTool
                     }
                 } else {
                     // Regular field
-                    if (isset($GLOBALS['TCA'][$table]['columns'][$fieldName])) {
-                        $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName];
+                    if (isset($availableFields[$fieldName])) {
+                        $fieldConfig = $availableFields[$fieldName];
                         
                         // Mark as processed
                         $processedFields[$fieldName] = true;

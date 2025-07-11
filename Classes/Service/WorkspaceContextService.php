@@ -103,19 +103,19 @@ class WorkspaceContextService
                     $queryBuilder->expr()->or(
                         $queryBuilder->expr()->eq(
                             'adminusers',
-                            $queryBuilder->createNamedParameter($beUser->user['uid'])
+                            $queryBuilder->createNamedParameter($beUser->user['uid'] ?? 0)
                         ),
                         $queryBuilder->expr()->like(
                             'adminusers',
-                            $queryBuilder->createNamedParameter('%,' . $beUser->user['uid'] . ',%')
+                            $queryBuilder->createNamedParameter('%,' . ($beUser->user['uid'] ?? 0) . ',%')
                         ),
                         $queryBuilder->expr()->eq(
                             'members',
-                            $queryBuilder->createNamedParameter($beUser->user['uid'])
+                            $queryBuilder->createNamedParameter($beUser->user['uid'] ?? 0)
                         ),
                         $queryBuilder->expr()->like(
                             'members',
-                            $queryBuilder->createNamedParameter('%,' . $beUser->user['uid'] . ',%')
+                            $queryBuilder->createNamedParameter('%,' . ($beUser->user['uid'] ?? 0) . ',%')
                         )
                     )
                 )
@@ -157,14 +157,17 @@ class WorkspaceContextService
     protected function createMcpWorkspace(BackendUserAuthentication $beUser): int
     {
         try {
-            $workspaceTitle = 'MCP Workspace for ' . ($beUser->user['realName'] ?: $beUser->user['username']);
+            $realName = $beUser->user['realName'] ?? '';
+            $username = $beUser->user['username'] ?? 'unknown_user';
+            $workspaceTitle = 'MCP Workspace for ' . ($realName ?: $username);
             $workspaceDescription = 'Automatically created workspace for Model Context Protocol operations';
             
             // Create workspace record data
             $workspaceData = [
+                'pid' => 0, // Workspaces are created at root level
                 'title' => $workspaceTitle,
                 'description' => $workspaceDescription,
-                'adminusers' => $beUser->user['uid'],
+                'adminusers' => $beUser->user['uid'] ?? 0,
                 'members' => '',
                 'reviewers' => '',
                 'publish_access' => 1, // Allow publishing

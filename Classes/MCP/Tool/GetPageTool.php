@@ -16,12 +16,21 @@ use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Site\Entity\Site;
+use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 
 /**
  * Tool for retrieving detailed information about a TYPO3 page
  */
-class GetPageTool extends AbstractTool
+class GetPageTool extends AbstractRecordTool
 {
+    /**
+     * Get the tool type
+     */
+    public function getToolType(): string
+    {
+        return 'read';
+    }
+
     /**
      * Get the tool schema
      */
@@ -168,22 +177,17 @@ class GetPageTool extends AbstractTool
     }
     
     /**
-     * Get a list of content tables that can be on a page using TYPO3's TCA
+     * Get a list of content tables that can be on a page using TableAccessService
      */
     protected function getContentTables(): array
     {
-        // Get all tables defined in the TCA
-        $allTables = array_keys($GLOBALS['TCA']);
+        // Get all accessible tables from TableAccessService (include read-only tables)
+        $accessibleTables = $this->tableAccessService->getAccessibleTables(true);
         
-        // Filter tables to only include those that can be on a page
+        // Filter to only include tables that can be on a page (have pid field)
         $contentTables = [];
         
-        foreach ($allTables as $table) {
-            // Skip hidden tables
-            if (!empty($GLOBALS['TCA'][$table]['ctrl']['hideTable'])) {
-                continue;
-            }
-            
+        foreach (array_keys($accessibleTables) as $table) {
             // Check if the table has a pid column in its TCA configuration
             // This means it can be associated with a page
             if (isset($GLOBALS['TCA'][$table]['ctrl'])) {
@@ -199,8 +203,8 @@ class GetPageTool extends AbstractTool
      */
     protected function getTableRecordsInfo(string $table, int $pageId, bool $includeHidden): array
     {
-        // Skip if table is not in TCA
-        if (!isset($GLOBALS['TCA'][$table])) {
+        // Skip if table is not accessible
+        if (!$this->tableAccessService->canAccessTable($table)) {
             return [
                 'total' => 0,
                 'records' => []

@@ -5,15 +5,51 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Hn\McpServer\MCP\Tool\AbstractTool;
+use Hn\McpServer\Service\TableAccessService;
+use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * Abstract base class for record-related MCP tools
  */
 abstract class AbstractRecordTool extends AbstractTool implements RecordToolInterface
 {
+    protected TableAccessService $tableAccessService;
+    protected WorkspaceContextService $workspaceContextService;
+    
+    public function __construct()
+    {
+        $this->tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+        $this->workspaceContextService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+    }
+    
+    /**
+     * Initialize workspace context for the current operation
+     */
+    protected function initializeWorkspaceContext(): void
+    {
+        if (isset($GLOBALS['BE_USER'])) {
+            $this->workspaceContextService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+        }
+    }
+    
+    /**
+     * Ensure a table can be accessed for the given operation
+     * 
+     * @param string $table Table name
+     * @param string $operation Operation type (read, write, delete)
+     * @throws \InvalidArgumentException If access is denied
+     */
+    protected function ensureTableAccess(string $table, string $operation = 'read'): void
+    {
+        // Ensure workspace context is initialized before checking access
+        $this->initializeWorkspaceContext();
+        
+        $this->tableAccessService->validateTableAccess($table, $operation);
+    }
     /**
      * Create a successful result with text content
      */
@@ -39,11 +75,11 @@ abstract class AbstractRecordTool extends AbstractTool implements RecordToolInte
     }
     
     /**
-     * Check if a table exists in the TCA
+     * Check if a table exists and is accessible
      */
     protected function tableExists(string $table): bool
     {
-        return isset($GLOBALS['TCA'][$table]);
+        return $this->tableAccessService->canAccessTable($table);
     }
     
     /**
@@ -72,12 +108,8 @@ abstract class AbstractRecordTool extends AbstractTool implements RecordToolInte
      */
     protected function isTableWorkspaceCapable(string $table): bool
     {
-        if (!$this->tableExists($table)) {
-            return false;
-        }
-        
-        // Use TYPO3's built-in method (most reliable)
-        return BackendUtility::isTableWorkspaceEnabled($table);
+        $accessInfo = $this->tableAccessService->getTableAccessInfo($table);
+        return $accessInfo['workspace_capable'];
     }
     
     /**
@@ -85,55 +117,20 @@ abstract class AbstractRecordTool extends AbstractTool implements RecordToolInte
      */
     protected function getWorkspaceCapabilityInfo(string $table): array
     {
-        if (!$this->tableExists($table)) {
+        $accessInfo = $this->tableAccessService->getTableAccessInfo($table);
+        
+        if (!$accessInfo['accessible']) {
             return [
                 'workspace_capable' => false,
-                'reason' => 'Table does not exist in TCA'
-            ];
-        }
-        
-        $isWorkspaceCapable = $this->isTableWorkspaceCapable($table);
-        
-        if (!$isWorkspaceCapable) {
-            // Determine why it's not workspace capable
-            $tca = $GLOBALS['TCA'][$table];
-            $ctrl = $tca['ctrl'] ?? [];
-            
-            $reasons = [];
-            
-            if (empty($ctrl['versioningWS'])) {
-                $reasons[] = 'No versioningWS setting in TCA';
-            }
-            
-            if (!empty($ctrl['rootLevel'])) {
-                $reasons[] = 'Root-level table (rootLevel = 1)';
-            }
-            
-            if (!empty($ctrl['adminOnly'])) {
-                $reasons[] = 'Admin-only table';
-            }
-            
-            if (!empty($ctrl['hideTable'])) {
-                $reasons[] = 'Hidden system table';
-            }
-            
-            if (strpos($table, 'sys_') === 0) {
-                $reasons[] = 'System table (sys_* prefix)';
-            }
-            
-            if (in_array($table, ['be_users', 'be_groups', 'sys_file', 'sys_file_storage', 'sys_filemounts'])) {
-                $reasons[] = 'Core system/configuration table';
-            }
-            
-            return [
-                'workspace_capable' => false,
-                'reason' => !empty($reasons) ? implode(', ', $reasons) : 'Not enabled for workspace operations'
+                'reason' => implode(', ', $accessInfo['reasons'])
             ];
         }
         
         return [
-            'workspace_capable' => true,
-            'reason' => 'Table supports workspace operations'
+            'workspace_capable' => $accessInfo['workspace_capable'],
+            'reason' => $accessInfo['workspace_capable'] 
+                ? 'Table supports workspace operations' 
+                : 'Table is not workspace-capable'
         ];
     }
     
@@ -174,14 +171,12 @@ abstract class AbstractRecordTool extends AbstractTool implements RecordToolInte
     }
     
     /**
-     * Check if a table is hidden in the TCA
+     * Check if a table is hidden (not accessible through TableAccessService)
      */
     protected function isTableHidden(string $table): bool
     {
-        if (!$this->tableExists($table)) {
-            return false;
-        }
-        
-        return !empty($GLOBALS['TCA'][$table]['ctrl']['hideTable']);
+        // Use TableAccessService to determine if table is accessible
+        // If it's not accessible, it's effectively "hidden" from MCP
+        return !$this->tableAccessService->canAccessTable($table);
     }
 }
