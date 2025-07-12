@@ -1,0 +1,7 @@
+"sys_category"
+,"uid","pid","title","description","deleted","tstamp","crdate","parent","items"
+,1,0,"Technology","Tech related content",0,1734875000,1734875000,0,0
+,2,0,"Business","Business content",0,1734875000,1734875000,0,0
+,3,0,"News Category","News and updates",0,1734875000,1734875000,0,0
+,4,1,"Web Development","Web development topics",0,1734875000,1734875000,1,0
+,5,1,"Programming","Programming topics",0,1734875000,1734875000,1,0
