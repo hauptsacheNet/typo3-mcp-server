@@ -88,10 +88,10 @@ class GetPageTreeToolTest extends FunctionalTestCase
         
         $content = $result->content[0]->text;
         
-        // Should only contain subpages of Home
+        // Should contain subpages of Home (now includes Contact)
         $this->assertStringContainsString('[2] About Us', $content);
         $this->assertStringNotContainsString('[1] Home', $content);
-        $this->assertStringNotContainsString('[6] Contact', $content);
+        $this->assertStringContainsString('[6] Contact', $content);
         
         // Should include sub-subpages
         $this->assertStringContainsString('[4] Our Team', $content);
@@ -114,12 +114,12 @@ class GetPageTreeToolTest extends FunctionalTestCase
         
         $content = $result->content[0]->text;
         
-        // Should contain root pages
+        // Should contain only root page (Home)
         $this->assertStringContainsString('[1] Home', $content);
-        $this->assertStringContainsString('[6] Contact', $content);
+        $this->assertStringNotContainsString('[6] Contact', $content); // Contact is now a subpage
         
-        // Should show subpage count but not the actual subpages
-        $this->assertStringContainsString('(1 subpages)', $content);
+        // Should show subpage count but not the actual subpages (Home now has 3 subpages: About, Contact, News)
+        $this->assertStringContainsString('(3 subpages)', $content);
         
         // Should not contain second-level pages
         $this->assertStringNotContainsString('[2] About Us', $content);
@@ -149,7 +149,7 @@ class GetPageTreeToolTest extends FunctionalTestCase
         
         $content = $result->content[0]->text;
         $this->assertStringContainsString('[1] Home', $content);
-        $this->assertStringContainsString('[6] Contact', $content);
+        $this->assertStringNotContainsString('[6] Contact', $content); // Contact is now a subpage of Home
     }
 
     /**

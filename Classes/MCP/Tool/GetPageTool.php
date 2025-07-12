@@ -79,8 +79,8 @@ class GetPageTool extends AbstractRecordTool
             // Get page data
             $pageData = $this->getPageData($uid);
             
-            // Get page URL
-            $pageUrl = $this->getPageUrl($uid, $languageId);
+            // Get page URL using page data
+            $pageUrl = $this->getPageUrl($pageData, $languageId);
             
             // Get records on this page
             $recordsInfo = $this->getPageRecords($uid, $includeHidden);
@@ -133,26 +133,27 @@ class GetPageTool extends AbstractRecordTool
     }
 
     /**
-     * Generate URL for a page
+     * Generate URL for a page with slug fallback
      */
-    protected function getPageUrl(int $pageId, int $languageId = 0): ?string
+    protected function getPageUrl(array $pageData, int $languageId = 0): ?string
     {
+        $pageId = (int)$pageData['uid'];
+        
         try {
             $siteFinder = GeneralUtility::makeInstance(SiteFinder::class);
             $site = $siteFinder->getSiteByPageId($pageId);
             
-            if (!$site instanceof Site) {
-                return null;
+            if ($site instanceof Site) {
+                $language = $site->getLanguageById($languageId);
+                $uri = $site->getRouter()->generateUri($pageId, ['_language' => $language]);
+                return (string)$uri;
             }
-            
-            $language = $site->getLanguageById($languageId);
-            $uri = $site->getRouter()->generateUri($pageId, ['_language' => $language]);
-            
-            return (string)$uri;
         } catch (\Throwable $e) {
-            // Return null if URL generation fails
-            return null;
+            // Continue to fallback
         }
+        
+        // Fallback: return slug from page data
+        return $pageData['slug'] ?? null;
     }
 
     /**
@@ -297,11 +298,7 @@ class GetPageTool extends AbstractRecordTool
         $result .= "Doktype: " . $pageData['doktype'] . "\n";
         $result .= "Hidden: " . ($pageData['hidden'] ? 'Yes' : 'No') . "\n";
         $result .= "Created: " . date('Y-m-d H:i:s', (int)$pageData['crdate']) . "\n";
-        $result .= "Last Modified: " . date('Y-m-d H:i:s', (int)$pageData['tstamp']) . "\n\n";        
-        
-        if (!empty($pageData['slug'])) {
-            $result .= "Slug: " . $pageData['slug'] . "\n";
-        }
+        $result .= "Last Modified: " . date('Y-m-d H:i:s', (int)$pageData['tstamp']) . "\n\n";
         
         // Records on the page
         $result .= "RECORDS ON THIS PAGE\n";
