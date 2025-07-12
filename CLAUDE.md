@@ -1,0 +1,2 @@
+- This project is about developing the mcp_server extension
+- Run the tests using `composer test`
