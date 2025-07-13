@@ -7,6 +7,7 @@ namespace Hn\McpServer\MCP\Tool\Record;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\ParameterType;
 use Mcp\Types\CallToolResult;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
@@ -177,9 +178,48 @@ class ReadTableTool extends AbstractRecordTool
 
         // Filter by uid if specified
         if ($uid !== null) {
-            $queryBuilder->andWhere(
-                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-            );
+            // For workspace transparency, we need to handle both cases:
+            // 1. The UID is a workspace UID (for new records)
+            // 2. The UID is a live UID (for existing records with workspace versions)
+            
+            // First check if we're in a workspace
+            $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+            if ($currentWorkspace > 0) {
+                // In a workspace, we need to check for delete placeholders
+                // If a delete placeholder exists for this UID, we should not return any record
+                $deletePlaceholderCheck = clone $queryBuilder;
+                $deletePlaceholderCheck->getRestrictions()->removeAll();
+                
+                $hasDeletePlaceholder = $deletePlaceholderCheck
+                    ->count('uid')
+                    ->from($table)
+                    ->where(
+                        $deletePlaceholderCheck->expr()->eq('t3ver_oid', $deletePlaceholderCheck->createNamedParameter($uid, ParameterType::INTEGER)),
+                        $deletePlaceholderCheck->expr()->eq('t3ver_state', $deletePlaceholderCheck->createNamedParameter(2, ParameterType::INTEGER)),
+                        $deletePlaceholderCheck->expr()->eq('t3ver_wsid', $deletePlaceholderCheck->createNamedParameter($currentWorkspace, ParameterType::INTEGER))
+                    )
+                    ->executeQuery()
+                    ->fetchOne();
+                
+                if ($hasDeletePlaceholder > 0) {
+                    // There's a delete placeholder, so we should not return any records
+                    // Add an impossible condition to ensure no records are returned
+                    $queryBuilder->andWhere('1 = 0');
+                } else {
+                    // No delete placeholder, proceed with normal query
+                    $queryBuilder->andWhere(
+                        $queryBuilder->expr()->or(
+                            $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
+                            $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
+                        )
+                    );
+                }
+            } else {
+                // In live workspace, just filter by UID
+                $queryBuilder->andWhere(
+                    $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
+                );
+            }
         }
 
         // Apply custom condition if specified
@@ -230,18 +270,52 @@ class ReadTableTool extends AbstractRecordTool
         $countQueryBuilder->count('uid')->from($table);
         
         // Apply the same WHERE conditions as the main query
-        if (!empty($where)) {
-            foreach ($where as $field => $value) {
-                if (is_array($value)) {
-                    $countQueryBuilder->andWhere(
-                        $countQueryBuilder->expr()->in($field, $countQueryBuilder->createNamedParameter($value, Connection::PARAM_STR_ARRAY))
-                    );
+        if ($pid !== null && $this->tableHasPidField($table)) {
+            $countQueryBuilder->andWhere(
+                $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
+            );
+        }
+        
+        if ($uid !== null) {
+            // Apply the same delete placeholder logic for count query
+            $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+            if ($currentWorkspace > 0) {
+                // Check for delete placeholder
+                $deletePlaceholderCheck = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable($table);
+                $deletePlaceholderCheck->getRestrictions()->removeAll();
+                
+                $hasDeletePlaceholder = $deletePlaceholderCheck
+                    ->count('uid')
+                    ->from($table)
+                    ->where(
+                        $deletePlaceholderCheck->expr()->eq('t3ver_oid', $deletePlaceholderCheck->createNamedParameter($uid, ParameterType::INTEGER)),
+                        $deletePlaceholderCheck->expr()->eq('t3ver_state', $deletePlaceholderCheck->createNamedParameter(2, ParameterType::INTEGER)),
+                        $deletePlaceholderCheck->expr()->eq('t3ver_wsid', $deletePlaceholderCheck->createNamedParameter($currentWorkspace, ParameterType::INTEGER))
+                    )
+                    ->executeQuery()
+                    ->fetchOne();
+                
+                if ($hasDeletePlaceholder > 0) {
+                    // There's a delete placeholder, ensure count is 0
+                    $countQueryBuilder->andWhere('1 = 0');
                 } else {
                     $countQueryBuilder->andWhere(
-                        $countQueryBuilder->expr()->eq($field, $countQueryBuilder->createNamedParameter($value, ParameterType::INTEGER))
+                        $countQueryBuilder->expr()->or(
+                            $countQueryBuilder->expr()->eq('uid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
+                            $countQueryBuilder->expr()->eq('t3ver_oid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
+                        )
                     );
                 }
+            } else {
+                $countQueryBuilder->andWhere(
+                    $countQueryBuilder->expr()->eq('uid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
+                );
             }
+        }
+        
+        if (!empty($condition)) {
+            $countQueryBuilder->andWhere($condition);
         }
         
         $totalCount = $countQueryBuilder->executeQuery()->fetchOne();
@@ -274,6 +348,16 @@ class ReadTableTool extends AbstractRecordTool
     protected function processRecord(array $record, string $table, array $fields = []): array
     {
         $processedRecord = [];
+        
+        // For workspace transparency, replace workspace UID with live UID
+        if (isset($record['t3ver_oid']) && $record['t3ver_oid'] > 0) {
+            // This is a workspace version of an existing record - use the live UID instead
+            $record['uid'] = $record['t3ver_oid'];
+        } elseif (isset($record['t3ver_state']) && $record['t3ver_state'] == 1) {
+            // This is a new record in workspace - keep its UID as is
+            // New records don't have a live counterpart until published
+            // No change needed
+        }
         
         // Define essential fields that should always be included
         $essentialFields = ['uid', 'pid'];
@@ -821,10 +905,13 @@ class ReadTableTool extends AbstractRecordTool
             ->executeQuery()
             ->fetchAllAssociative();
 
-        // Index records by UID
+        // Index records by UID and process for workspace transparency
         $indexedRecords = [];
         foreach ($records as $record) {
-            $indexedRecords[$record['uid']] = $record;
+            // Process the record to use live UIDs
+            $processedRecord = $this->processRecord($record, $table);
+            // Index by the (potentially modified) UID
+            $indexedRecords[$processedRecord['uid']] = $processedRecord;
         }
 
         return $indexedRecords;
@@ -861,7 +948,13 @@ class ReadTableTool extends AbstractRecordTool
             ->executeQuery()
             ->fetchAllAssociative();
 
-        return $records;
+        // Process records for workspace transparency
+        $processedRecords = [];
+        foreach ($records as $record) {
+            $processedRecords[] = $this->processRecord($record, $table);
+        }
+
+        return $processedRecords;
     }
 
     /**

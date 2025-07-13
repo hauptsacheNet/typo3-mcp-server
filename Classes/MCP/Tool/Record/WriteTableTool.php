@@ -6,9 +6,11 @@ namespace Hn\McpServer\MCP\Tool\Record;
 
 use Doctrine\DBAL\ParameterType;
 use Mcp\Types\CallToolResult;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 
 /**
  * Tool for writing records to TYPO3 tables
@@ -284,21 +286,25 @@ class WriteTableTool extends AbstractRecordTool
             // Check for errors in the move operation
             if (!empty($moveDataHandler->errorLog)) {
                 // The record was created but positioning failed
+                $liveUid = $this->getLiveUid($table, $newUid);
                 return $this->createJsonResult([
                     'action' => 'create',
                     'table' => $table,
-                    'uid' => $newUid,
+                    'uid' => $liveUid,
                     'data' => $data,
                     'warning' => 'Record created but positioning failed: ' . implode(', ', $moveDataHandler->errorLog)
                 ]);
             }
         }
         
-        // Return the result
+        // Get the live UID for workspace transparency
+        $liveUid = $this->getLiveUid($table, $newUid);
+        
+        // Return the result with live UID
         return $this->createJsonResult([
             'action' => 'create',
             'table' => $table,
-            'uid' => $newUid,
+            'uid' => $liveUid,
             'data' => $data,
         ]);
     }
@@ -317,10 +323,13 @@ class WriteTableTool extends AbstractRecordTool
         // Convert data for storage
         $data = $this->convertDataForStorage($table, $data);
         
+        // Resolve the live UID to workspace UID
+        $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
+        
         // Update the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $dataHandler->BE_USER = $GLOBALS['BE_USER'];
-        $dataHandler->start([$table => [$uid => $data]], []);
+        $dataHandler->start([$table => [$workspaceUid => $data]], []);
         $dataHandler->process_datamap();
         
         // Check for errors
@@ -328,11 +337,11 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Error updating record: ' . implode(', ', $dataHandler->errorLog));
         }
         
-        // Return the result
+        // Return the result with the original live UID
         return $this->createJsonResult([
             'action' => 'update',
             'table' => $table,
-            'uid' => $uid,
+            'uid' => $uid, // Return the live UID that was passed in
             'data' => $data,
         ]);
     }
@@ -342,10 +351,13 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function deleteRecord(string $table, int $uid): CallToolResult
     {
+        // Resolve the live UID to workspace UID
+        $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
+        
         // Delete the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $dataHandler->BE_USER = $GLOBALS['BE_USER'];
-        $dataHandler->start([], [$table => [$uid => ['delete' => 1]]]);
+        $dataHandler->start([], [$table => [$workspaceUid => ['delete' => 1]]]);
         $dataHandler->process_cmdmap();
         
         // Check for errors
@@ -356,7 +368,7 @@ class WriteTableTool extends AbstractRecordTool
         return $this->createJsonResult([
             'action' => 'delete',
             'table' => $table,
-            'uid' => $uid,
+            'uid' => $uid, // Return the live UID that was passed in
         ]);
     }
     
@@ -614,5 +626,83 @@ class WriteTableTool extends AbstractRecordTool
         }
         
         return $data;
+    }
+    
+    /**
+     * Get the live UID for a workspace record
+     * For workspace records, this returns the t3ver_oid (original/live UID)
+     * For new records (placeholders), this returns the placeholder UID
+     */
+    protected function getLiveUid(string $table, int $workspaceUid): int
+    {
+        // If we're in live workspace, the UID is already the live UID
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        if ($currentWorkspace === 0) {
+            return $workspaceUid;
+        }
+        
+        // Look up the record to get its t3ver_oid
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable($table);
+        
+        $queryBuilder->getRestrictions()->removeAll();
+        
+        $record = $queryBuilder
+            ->select('t3ver_oid', 't3ver_state', 't3ver_wsid')
+            ->from($table)
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($workspaceUid, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+        
+        if (!$record) {
+            // Record not found, return the original UID
+            return $workspaceUid;
+        }
+        
+        // If this is a workspace record with an original, return the original UID
+        if ($record['t3ver_oid'] > 0) {
+            return (int)$record['t3ver_oid'];
+        }
+        
+        // For new records (t3ver_state = 1), the workspace UID IS the UID we should use
+        // New records don't have a live counterpart until published
+        if ($record['t3ver_state'] == 1) {
+            return $workspaceUid;
+        }
+        
+        // Default: return the workspace UID
+        return $workspaceUid;
+    }
+    
+    /**
+     * Resolve a live UID to its workspace version
+     * Used for update/delete operations where we receive a live UID but need the workspace version
+     */
+    protected function resolveToWorkspaceUid(string $table, int $liveUid): int
+    {
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        
+        // If we're in live workspace, no resolution needed
+        if ($currentWorkspace === 0) {
+            return $liveUid;
+        }
+        
+        // Use BackendUtility to get the workspace version
+        $record = BackendUtility::getRecord($table, $liveUid);
+        if (!$record) {
+            return $liveUid;
+        }
+        
+        // Let BackendUtility handle the workspace overlay
+        BackendUtility::workspaceOL($table, $record);
+        
+        // If we got a different UID, that's the workspace version
+        if (isset($record['_ORIG_uid']) && $record['_ORIG_uid'] != $liveUid) {
+            return (int)$record['uid'];
+        }
+        
+        return $liveUid;
     }
 }

@@ -1,2 +1,4 @@
-- This project is about developing the mcp_server extension
-- Run the tests using `composer test`
+- This project is about developing the mcp_server typo3 extension, that allows someone without technical knowledge to edit content using LLM's.
+- Run the tests using `composer test`. Test must cover the TYPO3 integration.
+- The Tools for LLMs don't need backwards compatibility. We can completely change parameters or even their names if it better describes them without it being a breaking change.
+- Every Tool must use TYPO3 Workspaces. Live data must never be directly edited. However: Ensure that the workspaces are invisible to the LLM, for example, by only exposing the live id.

@@ -577,6 +577,37 @@ class SearchTool extends AbstractRecordTool
         if (!$includeHidden) {
             $queryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
         }
+        
+        // Check if we're in a workspace and need to exclude records with delete placeholders
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        if ($currentWorkspace > 0) {
+            // Get UIDs of records that have delete placeholders in this workspace
+            $deletePlaceholderQuery = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable($table);
+            $deletePlaceholderQuery->getRestrictions()->removeAll();
+            
+            $deletedUids = $deletePlaceholderQuery
+                ->select('t3ver_oid')
+                ->from($table)
+                ->where(
+                    $deletePlaceholderQuery->expr()->eq('t3ver_state', $deletePlaceholderQuery->createNamedParameter(2, ParameterType::INTEGER)),
+                    $deletePlaceholderQuery->expr()->eq('t3ver_wsid', $deletePlaceholderQuery->createNamedParameter($currentWorkspace, ParameterType::INTEGER)),
+                    $deletePlaceholderQuery->expr()->gt('t3ver_oid', $deletePlaceholderQuery->createNamedParameter(0, ParameterType::INTEGER))
+                )
+                ->executeQuery()
+                ->fetchAllAssociative();
+            
+            // If there are delete placeholders, exclude those live UIDs from results
+            if (!empty($deletedUids)) {
+                $excludeUids = array_column($deletedUids, 't3ver_oid');
+                $queryBuilder->andWhere(
+                    $queryBuilder->expr()->notIn(
+                        'uid',
+                        $queryBuilder->createNamedParameter($excludeUids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                    )
+                );
+            }
+        }
 
         // Select all fields
         $queryBuilder->select('*')->from($table);
@@ -636,6 +667,43 @@ class SearchTool extends AbstractRecordTool
 
         // Execute query
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
+        
+        // In workspace context, we need to filter out records that have delete placeholders
+        // even if they were returned by the query (since WorkspaceRestriction might not handle all cases)
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        if ($currentWorkspace > 0 && !empty($records)) {
+            // Get UIDs of records that have delete placeholders
+            $recordUids = array_column($records, 'uid');
+            if (!empty($recordUids)) {
+                $deletePlaceholderQuery = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable($table);
+                $deletePlaceholderQuery->getRestrictions()->removeAll();
+                
+                $deletedUids = $deletePlaceholderQuery
+                    ->select('t3ver_oid')
+                    ->from($table)
+                    ->where(
+                        $deletePlaceholderQuery->expr()->in(
+                            't3ver_oid',
+                            $deletePlaceholderQuery->createNamedParameter($recordUids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                        ),
+                        $deletePlaceholderQuery->expr()->eq('t3ver_state', $deletePlaceholderQuery->createNamedParameter(2, ParameterType::INTEGER)),
+                        $deletePlaceholderQuery->expr()->eq('t3ver_wsid', $deletePlaceholderQuery->createNamedParameter($currentWorkspace, ParameterType::INTEGER))
+                    )
+                    ->executeQuery()
+                    ->fetchAllAssociative();
+                
+                if (!empty($deletedUids)) {
+                    $excludeUids = array_column($deletedUids, 't3ver_oid');
+                    // Filter out records that have delete placeholders
+                    $records = array_filter($records, function($record) use ($excludeUids) {
+                        return !in_array($record['uid'], $excludeUids);
+                    });
+                    // Re-index array
+                    $records = array_values($records);
+                }
+            }
+        }
 
         // Return records in expected structure format
         return [
@@ -654,6 +722,30 @@ class SearchTool extends AbstractRecordTool
         if (empty($records)) {
             return $records;
         }
+
+        // Process records for workspace transparency
+        $processedRecords = [];
+        $seenUids = [];
+        
+        foreach ($records as $record) {
+            // For workspace transparency, replace workspace UID with live UID
+            if (isset($record['t3ver_oid']) && $record['t3ver_oid'] > 0) {
+                // This is a workspace version - use the live UID instead
+                $record['uid'] = $record['t3ver_oid'];
+            } elseif (isset($record['t3ver_state']) && $record['t3ver_state'] == 1) {
+                // This is a new placeholder record - its UID is already the "live" UID
+                // No change needed
+            }
+            
+            // De-duplicate records based on UID after processing
+            $uid = $record['uid'] ?? 0;
+            if (!isset($seenUids[$uid])) {
+                $processedRecords[] = $record;
+                $seenUids[$uid] = true;
+            }
+        }
+        
+        $records = $processedRecords;
 
         // Get unique page IDs
         $pageIds = [];
@@ -695,7 +787,8 @@ class SearchTool extends AbstractRecordTool
 
         $queryBuilder->getRestrictions()
             ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
         $pages = $queryBuilder->select('uid', 'title', 'slug', 'nav_title')
             ->from('pages')
