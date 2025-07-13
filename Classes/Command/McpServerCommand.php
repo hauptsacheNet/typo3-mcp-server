@@ -11,6 +11,7 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Core\Configuration\Tca\TcaFactory;
 use Hn\McpServer\MCP\ToolRegistry;
 use Mcp\Types\CallToolRequest;
 use Mcp\Types\CallToolRequestParams;
@@ -55,8 +56,9 @@ class McpServerCommand extends Command
             // Ensure we have admin rights for the backend user
             $this->ensureAdminRights();
             
-            // Ensure TCA is loaded
-            $this->ensureTcaLoaded();
+            // Ensure TCA is loaded using proper TYPO3 core method
+            $tcaFactory = GeneralUtility::getContainer()->get(TcaFactory::class);
+            $GLOBALS['TCA'] = $tcaFactory->get();
             
             // Set up debugging to stderr
             $debug = function($message) {
@@ -153,42 +155,6 @@ class McpServerCommand extends Command
             }
             $beUser->user['workspace_id'] = 0; // Set workspace ID to live workspace
             $beUser->workspace = 0; // Set workspace to live workspace
-        }
-    }
-    
-    /**
-     * Ensure TCA is loaded
-     */
-    protected function ensureTcaLoaded(): void
-    {
-        // Check if TCA is already loaded
-        if (empty($GLOBALS['TCA']) || empty($GLOBALS['TCA']['tt_content']['columns']['pi_flexform'])) {
-            // Load the TCA directly
-            $tcaPath = \TYPO3\CMS\Core\Core\Environment::getPublicPath() . '/typo3/sysext/core/Configuration/TCA/';
-            if (is_dir($tcaPath)) {
-                $files = glob($tcaPath . '*.php');
-                foreach ($files as $file) {
-                    require_once $file;
-                }
-            }
-            
-            // Load extension TCA
-            $extTcaPath = \TYPO3\CMS\Core\Core\Environment::getPublicPath() . '/typo3conf/ext/*/Configuration/TCA/';
-            $extFiles = glob($extTcaPath . '*.php');
-            if (is_array($extFiles)) {
-                foreach ($extFiles as $file) {
-                    require_once $file;
-                }
-            }
-            
-            // Load TCA overrides
-            $overridePath = \TYPO3\CMS\Core\Core\Environment::getPublicPath() . '/typo3conf/ext/*/Configuration/TCA/Overrides/';
-            $overrideFiles = glob($overridePath . '*.php');
-            if (is_array($overrideFiles)) {
-                foreach ($overrideFiles as $file) {
-                    require_once $file;
-                }
-            }
         }
     }
 }

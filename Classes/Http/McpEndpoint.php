@@ -12,6 +12,9 @@ use TYPO3\CMS\Core\Core\Environment;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Context\Context;
+use TYPO3\CMS\Core\Context\UserAspect;
+use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Core\Http\Stream;
 use Psr\Http\Message\ResponseInterface;
@@ -270,12 +273,18 @@ class McpEndpoint
             $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
             $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
             
+            // Set up TYPO3 Context API (following BackendUserAuthenticator pattern)
+            $context = GeneralUtility::makeInstance(Context::class);
+            $context->setAspect('backend.user', new UserAspect($beUser));
+            $context->setAspect('workspace', new WorkspaceAspect($workspaceId));
+            
             // Log workspace selection for debugging
             error_log("MCP: User {$userId} switched to workspace {$workspaceId}");
         }
         
-        // Ensure TCA is loaded
-        $this->ensureTcaLoaded();
+        // Ensure TCA is loaded using proper TYPO3 core method
+        $tcaFactory = GeneralUtility::getContainer()->get(\TYPO3\CMS\Core\Configuration\Tca\TcaFactory::class);
+        $GLOBALS['TCA'] = $tcaFactory->get();
     }
 
     /**
@@ -294,41 +303,7 @@ class McpEndpoint
         $GLOBALS['LANG'] = $languageService;
         
         // Also set it on the backend user for consistency
-        $beUser->setLanguageService($languageService);
+        //$beUser->setLanguageService($languageService);
     }
 
-    /**
-     * Ensure TCA is loaded (copied from CLI command)
-     */
-    private function ensureTcaLoaded(): void
-    {
-        if (empty($GLOBALS['TCA']) || empty($GLOBALS['TCA']['tt_content']['columns']['pi_flexform'])) {
-            // Load the TCA directly
-            $tcaPath = Environment::getPublicPath() . '/typo3/sysext/core/Configuration/TCA/';
-            if (is_dir($tcaPath)) {
-                $files = glob($tcaPath . '*.php');
-                foreach ($files as $file) {
-                    require_once $file;
-                }
-            }
-            
-            // Load extension TCA
-            $extTcaPath = Environment::getPublicPath() . '/typo3conf/ext/*/Configuration/TCA/';
-            $extFiles = glob($extTcaPath . '*.php');
-            if (is_array($extFiles)) {
-                foreach ($extFiles as $file) {
-                    require_once $file;
-                }
-            }
-            
-            // Load TCA overrides
-            $overridePath = Environment::getPublicPath() . '/typo3conf/ext/*/Configuration/TCA/Overrides/';
-            $overrideFiles = glob($overridePath . '*.php');
-            if (is_array($overrideFiles)) {
-                foreach ($overrideFiles as $file) {
-                    require_once $file;
-                }
-            }
-        }
-    }
 }
