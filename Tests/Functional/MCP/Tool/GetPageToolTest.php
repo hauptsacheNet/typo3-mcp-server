@@ -9,12 +9,19 @@ use Hn\McpServer\MCP\ToolRegistry;
 use Mcp\Types\TextContent;
 use Symfony\Component\Yaml\Yaml;
 use TYPO3\CMS\Core\Configuration\SiteConfiguration;
+use TYPO3\CMS\Core\Localization\LanguageService;
+use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 class GetPageToolTest extends FunctionalTestCase
 {
+    protected array $coreExtensionsToLoad = [
+        'workspaces',
+        'frontend',
+    ];
+    
     protected array $testExtensionsToLoad = [
         'mcp_server',
     ];
@@ -26,9 +33,20 @@ class GetPageToolTest extends FunctionalTestCase
         // Import enhanced page and content fixtures
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
+        
+        // Set up backend user for DataHandler and TableAccessService
+        $this->setUpBackendUserWithWorkspace(1);
         
         // Create proper site configuration for real URL testing
         $this->createTestSiteConfiguration();
+        
+        // Initialize language service to prevent LANG errors
+        if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof LanguageService) {
+            $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
+            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
+        }
     }
 
     /**
@@ -170,7 +188,7 @@ class GetPageToolTest extends FunctionalTestCase
         // Verify result structure
         $this->assertCount(1, $result->content);
         $this->assertInstanceOf(TextContent::class, $result->content[0]);
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         
         $content = $result->content[0]->text;
         
@@ -203,7 +221,7 @@ class GetPageToolTest extends FunctionalTestCase
             'languageId' => 0
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $content = $result->content[0]->text;
         
         // Verify page information
@@ -229,7 +247,7 @@ class GetPageToolTest extends FunctionalTestCase
             'includeHidden' => true
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $content = $result->content[0]->text;
         
         // Now hidden content should be included
@@ -253,7 +271,7 @@ class GetPageToolTest extends FunctionalTestCase
             'includeHidden' => false
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $content = $result->content[0]->text;
         
         // Verify content elements are properly listed
@@ -335,7 +353,7 @@ class GetPageToolTest extends FunctionalTestCase
             'includeHidden' => false
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $content = $result->content[0]->text;
         $this->assertStringContainsString('UID: 1', $content);
         $this->assertStringContainsString('Title: Home', $content);
@@ -442,5 +460,15 @@ class GetPageToolTest extends FunctionalTestCase
         $content = $result->content[0]->text;
         $this->assertStringContainsString('URL:', $content);
         $this->assertStringContainsString('https://example.com/about/team', $content);
+    }
+    
+    /**
+     * Helper method to set up backend user with workspace
+     */
+    protected function setUpBackendUserWithWorkspace(int $uid): void
+    {
+        $backendUser = $this->setUpBackendUser($uid);
+        $backendUser->workspace = 1; // Set to test workspace
+        $GLOBALS['BE_USER'] = $backendUser;
     }
 }

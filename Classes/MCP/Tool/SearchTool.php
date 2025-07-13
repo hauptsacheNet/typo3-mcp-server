@@ -10,6 +10,7 @@ use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
+use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\Utility\RecordFormattingUtility;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
@@ -63,6 +64,10 @@ class SearchTool extends AbstractRecordTool
                     'includeHidden' => [
                         'type' => 'boolean',
                         'description' => 'Whether to include hidden records (default: false)',
+                    ],
+                    'limit' => [
+                        'type' => 'integer',
+                        'description' => 'Maximum number of records to return per table (default: 50)',
                     ],
                 ],
                 'required' => ['terms'],
@@ -274,7 +279,7 @@ class SearchTool extends AbstractRecordTool
             
             $results = $this->searchInTable($tableName, $searchTerms, $termLogic, $searchableFields, $pageId, $includeHidden, $limit);
             
-            if (!empty($results)) {
+            if (!empty($results) && !empty($results['records'])) {
                 // Mark inline table results for attribution
                 if (isset($inlineTableMetadata[$tableName])) {
                     $results['_inline_metadata'] = $inlineTableMetadata[$tableName];
@@ -382,7 +387,8 @@ class SearchTool extends AbstractRecordTool
         
         $queryBuilder->getRestrictions()
             ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
         
         $queryBuilder->select('*')->from($parentTable);
         
@@ -439,8 +445,8 @@ class SearchTool extends AbstractRecordTool
             return [$specificTable];
         }
 
-        // Get all accessible tables from TableAccessService
-        $accessibleTables = $this->tableAccessService->getAccessibleTables(true); // Include read-only tables for searching
+        // Get all readable tables (includes non-workspace-capable tables for read operations)
+        $accessibleTables = $this->tableAccessService->getReadableTables();
         
         // Filter for tables that have searchable fields
         $searchableTables = [];
@@ -491,7 +497,8 @@ class SearchTool extends AbstractRecordTool
                 if ($fieldType === 'select') {
                     $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
                     
-                    if (!empty($foreignTable) && isset($GLOBALS['TCA'][$foreignTable])) {
+                    // Skip self-referential relations (like localization fields)
+                    if (!empty($foreignTable) && $foreignTable !== $primaryTable && isset($GLOBALS['TCA'][$foreignTable])) {
                         // Use TableAccessService to check if table is accessible and has searchable fields
                         if ($this->tableAccessService->canAccessTable($foreignTable) && !empty($this->getSearchableFields($foreignTable))) {
                             $inlineTables[$foreignTable] = [
@@ -563,9 +570,11 @@ class SearchTool extends AbstractRecordTool
         // Apply restrictions
         $queryBuilder->getRestrictions()
             ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
-        if (!$includeHidden && isset($GLOBALS['TCA'][$table]['ctrl']['enablecolumns']['disabled'])) {
+        // Don't include hidden records unless explicitly requested
+        if (!$includeHidden) {
             $queryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
         }
 
@@ -574,6 +583,7 @@ class SearchTool extends AbstractRecordTool
 
         // Validate searchable fields exist in database
         $validSearchFields = $this->validateSearchableFields($table, $searchableFields);
+        
         
         if (empty($validSearchFields)) {
             return [];
@@ -712,10 +722,6 @@ class SearchTool extends AbstractRecordTool
      */
     protected function formatSearchResults(array $searchResults, array $searchTerms, string $termLogic): string
     {
-        if (empty($searchResults)) {
-            $termsDisplay = count($searchTerms) === 1 ? '"' . $searchTerms[0] . '"' : '[' . implode(', ', array_map(fn($t) => '"'.$t.'"', $searchTerms)) . ']';
-            return "SEARCH RESULTS\n=============\n\nNo results found for search terms: $termsDisplay\n";
-        }
 
         $result = "SEARCH RESULTS\n";
         $result .= "==============\n";
@@ -742,9 +748,15 @@ class SearchTool extends AbstractRecordTool
         $result .= "Total Results: $totalResults\n";
         $result .= "Tables Searched: " . count($searchResults) . "\n\n";
 
-        // Format results by table
-        foreach ($searchResults as $table => $records) {
-            $result .= $this->formatTableResults($table, $records, $searchTerms);
+        // If no results, show no results message
+        if ($totalResults === 0) {
+            $termsDisplay = count($searchTerms) === 1 ? '"' . $searchTerms[0] . '"' : '[' . implode(', ', array_map(fn($t) => '"'.$t.'"', $searchTerms)) . ']';
+            $result .= "No results found for search terms: $termsDisplay\n";
+        } else {
+            // Format results by table
+            foreach ($searchResults as $table => $records) {
+                $result .= $this->formatTableResults($table, $records, $searchTerms);
+            }
         }
 
         return $result;
@@ -883,4 +895,5 @@ class SearchTool extends AbstractRecordTool
     {
         return RecordFormattingUtility::tableHasPidField($table);
     }
+
 }

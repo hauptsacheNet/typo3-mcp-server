@@ -66,6 +66,26 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
+     * Get all tables that are readable (less restrictive - no workspace capability required)
+     * 
+     * @return array Array of table names with access information
+     */
+    public function getReadableTables(): array
+    {
+        $readableTables = [];
+        
+        foreach (array_keys($GLOBALS['TCA']) as $table) {
+            $accessInfo = $this->getTableAccessInfo($table, false); // Don't require workspace capability
+            
+            if ($accessInfo['accessible']) {
+                $readableTables[$table] = $accessInfo;
+            }
+        }
+        
+        return $readableTables;
+    }
+    
+    /**
      * Check if a table can be accessed by the current user
      * 
      * @param string $table Table name
@@ -78,12 +98,25 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
+     * Check if a table can be accessed for read operations (less restrictive)
+     * 
+     * @param string $table Table name
+     * @return bool
+     */
+    public function canReadTable(string $table): bool
+    {
+        $accessInfo = $this->getTableAccessInfo($table, false); // Don't require workspace capability
+        return $accessInfo['accessible'];
+    }
+    
+    /**
      * Get detailed access information for a table
      * 
      * @param string $table Table name
+     * @param bool $requireWorkspaceCapability Whether workspace capability is required (default: true)
      * @return array Detailed access information
      */
-    public function getTableAccessInfo(string $table): array
+    public function getTableAccessInfo(string $table, bool $requireWorkspaceCapability = true): array
     {
         // Start with default values
         $info = [
@@ -111,10 +144,10 @@ class TableAccessService implements SingletonInterface
             return $info;
         }
         
-        // Check workspace capability (required for MCP operations)
+        // Check workspace capability (required for write operations)
         $info['workspace_capable'] = BackendUtility::isTableWorkspaceEnabled($table);
-        if (!$info['workspace_capable']) {
-            $info['reasons'][] = 'Table is not workspace-capable (required for MCP operations)';
+        if ($requireWorkspaceCapability && !$info['workspace_capable']) {
+            $info['reasons'][] = 'Table is not workspace-capable (required for write operations)';
             return $info;
         }
         
@@ -291,7 +324,8 @@ class TableAccessService implements SingletonInterface
             // Allow some safe root-level tables
             $allowedRootTables = [
                 'sys_file_storage', // File storage configuration
-                'sys_domain', // Domain configuration  
+                'sys_domain', // Domain configuration
+                'sys_category', // Category system - safe for read operations
             ];
             
             if (!in_array($table, $allowedRootTables)) {

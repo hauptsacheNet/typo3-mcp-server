@@ -11,6 +11,7 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
+use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Utility\MathUtility;
@@ -155,7 +156,8 @@ class ReadTableTool extends AbstractRecordTool
         // Apply restrictions
         $queryBuilder->getRestrictions()
             ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
         // Don't include hidden records unless explicitly requested
         if (!$includeHidden) {
@@ -216,8 +218,11 @@ class ReadTableTool extends AbstractRecordTool
         // Get total count (without pagination)
         $countQueryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable($table);
-        $countQueryBuilder->getRestrictions()->removeAll();
-        $countQueryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+        $countQueryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+        
         if (!$includeHidden) {
             $countQueryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
         }
@@ -801,6 +806,7 @@ class ReadTableTool extends AbstractRecordTool
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
             ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
 
         // Select all fields
@@ -840,6 +846,7 @@ class ReadTableTool extends AbstractRecordTool
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
             ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
 
         // Select all fields

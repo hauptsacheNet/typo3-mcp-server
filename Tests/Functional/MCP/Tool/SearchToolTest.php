@@ -12,6 +12,11 @@ use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 class SearchToolTest extends FunctionalTestCase
 {
+    protected array $coreExtensionsToLoad = [
+        'workspaces',
+        'frontend',
+    ];
+    
     protected array $testExtensionsToLoad = [
         'mcp_server',
     ];
@@ -25,6 +30,11 @@ class SearchToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category_record_mm.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
+        
+        // Set up backend user for DataHandler and TableAccessService
+        $this->setUpBackendUserWithWorkspace(1);
     }
 
     /**
@@ -34,12 +44,13 @@ class SearchToolTest extends FunctionalTestCase
     {
         $tool = new SearchTool();
         
+        
         // Search for "welcome"
         $result = $tool->execute([
             'terms' => ['welcome']
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertCount(1, $result->content);
         $this->assertInstanceOf(TextContent::class, $result->content[0]);
         
@@ -555,5 +566,15 @@ class SearchToolTest extends FunctionalTestCase
         // Should find the Web Development category directly
         $this->assertStringContainsString('Web Development', $content);
         $this->assertStringContainsString('[UID: 4] Web Development', $content);
+    }
+    
+    /**
+     * Helper method to set up backend user with workspace
+     */
+    protected function setUpBackendUserWithWorkspace(int $uid): void
+    {
+        $backendUser = $this->setUpBackendUser($uid);
+        $backendUser->workspace = 1; // Set to test workspace
+        $GLOBALS['BE_USER'] = $backendUser;
     }
 }
