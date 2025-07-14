@@ -39,6 +39,14 @@ services:
   Hn\McpServer\Service\OAuthService:
     public: true
     
+  # Make SiteInformationService public for eID access
+  Hn\McpServer\Service\SiteInformationService:
+    public: true
+    
+  # Make SiteInstructionsService public for server access
+  Hn\McpServer\Server\SiteInstructionsService:
+    public: true
+    
   # Explicitly configure the module controller
   Hn\McpServer\Controller\McpServerModuleController:
     public: true

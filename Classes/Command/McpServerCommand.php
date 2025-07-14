@@ -68,7 +68,7 @@ class McpServerCommand extends Command
             $debug('Starting MCP server using logiscape/mcp-sdk-php');
             
             // Create the MCP server using the SDK
-            $server = new Server('typo3-mcp-server');
+            $server = new Server($GLOBALS['TYPO3_CONF_VARS']['SYS']['sitename'] ?? 'TYPO3 MCP Server');
             
             // Register tool/list handler to return all available tools
             $server->registerHandler('tools/list', function() use ($debug) {

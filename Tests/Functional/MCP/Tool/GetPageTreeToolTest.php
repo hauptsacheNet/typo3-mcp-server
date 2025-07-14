@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\GetPageTreeTool;
 use Hn\McpServer\MCP\ToolRegistry;
+use Hn\McpServer\Service\SiteInformationService;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
@@ -29,7 +30,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
      */
     public function testGetPageTreeDirectly(): void
     {
-        $tool = new GetPageTreeTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTreeTool($siteInformationService);
         
         // Test getting page tree from root (pid=0)
         $result = $tool->execute([
@@ -58,7 +60,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
      */
     public function testGetPageTreeWithHiddenPages(): void
     {
-        $tool = new GetPageTreeTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTreeTool($siteInformationService);
         
         $result = $tool->execute([
             'startPage' => 0,
@@ -77,7 +80,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
      */
     public function testGetPageTreeFromSpecificPage(): void
     {
-        $tool = new GetPageTreeTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTreeTool($siteInformationService);
         
         // Get tree starting from page 1 (Home)
         $result = $tool->execute([
@@ -103,7 +107,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
      */
     public function testDepthLimitation(): void
     {
-        $tool = new GetPageTreeTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTreeTool($siteInformationService);
         
         // Get tree with depth 1
         $result = $tool->execute([
@@ -132,7 +137,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
     public function testGetPageTreeThroughRegistry(): void
     {
         // Create tool registry with the GetPageTreeTool
-        $tools = [new GetPageTreeTool()];
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tools = [new GetPageTreeTool($siteInformationService)];
         $registry = new ToolRegistry($tools);
         
         // Get tool from registry
@@ -157,7 +163,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
      */
     public function testToolName(): void
     {
-        $tool = new GetPageTreeTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTreeTool($siteInformationService);
         $this->assertEquals('GetPageTree', $tool->getName());
     }
 
@@ -166,7 +173,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
      */
     public function testToolSchema(): void
     {
-        $tool = new GetPageTreeTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTreeTool($siteInformationService);
         $schema = $tool->getSchema();
         
         $this->assertIsArray($schema);

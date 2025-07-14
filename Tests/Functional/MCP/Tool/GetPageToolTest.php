@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\GetPageTool;
 use Hn\McpServer\MCP\ToolRegistry;
+use Hn\McpServer\Service\SiteInformationService;
 use Mcp\Types\TextContent;
 use Symfony\Component\Yaml\Yaml;
 use TYPO3\CMS\Core\Configuration\SiteConfiguration;
@@ -176,7 +177,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testGetPageDirectly(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         
         // Test getting page information for Home page
         $result = $tool->execute([
@@ -214,7 +216,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testGetPageWithUrl(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         
         $result = $tool->execute([
             'uid' => 2,
@@ -240,7 +243,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testGetPageWithHiddenContent(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         
         $result = $tool->execute([
             'uid' => 1,
@@ -263,7 +267,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testGetPageWithContentElements(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         
         // Test page 2 (About) which has content elements
         $result = $tool->execute([
@@ -293,7 +298,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testGetNonExistentPage(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         
         $result = $tool->execute([
             'uid' => 999
@@ -313,7 +319,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testInvalidPageUid(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         
         $result = $tool->execute([
             'uid' => 0
@@ -339,7 +346,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testGetPageThroughRegistry(): void
     {
         // Create tool registry with the GetPageTool
-        $tools = [new GetPageTool()];
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tools = [new GetPageTool($siteInformationService)];
         $registry = new ToolRegistry($tools);
         
         // Get tool from registry
@@ -364,7 +372,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testToolName(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         $this->assertEquals('GetPage', $tool->getName());
     }
 
@@ -373,7 +382,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testToolSchema(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         $schema = $tool->getSchema();
         
         $this->assertIsArray($schema);
@@ -384,9 +394,13 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('includeHidden', $schema['parameters']['properties']);
         $this->assertArrayHasKey('languageId', $schema['parameters']['properties']);
         
-        // Verify required fields
-        $this->assertArrayHasKey('required', $schema['parameters']);
-        $this->assertContains('uid', $schema['parameters']['required']);
+        // Verify oneOf constraint (either uid or url is required)
+        $this->assertArrayHasKey('oneOf', $schema['parameters']);
+        $this->assertIsArray($schema['parameters']['oneOf']);
+        $this->assertCount(2, $schema['parameters']['oneOf']);
+        
+        // Check url parameter was added
+        $this->assertArrayHasKey('url', $schema['parameters']['properties']);
     }
 
     /**
@@ -394,7 +408,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testPageWithDifferentContentTypes(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         
         // Test Contact page which has a form
         $result = $tool->execute([
@@ -417,7 +432,8 @@ class GetPageToolTest extends FunctionalTestCase
      */
     public function testPageTreeStructure(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         
         // Test child page (Team - child of About)
         $result = $tool->execute([
@@ -434,11 +450,182 @@ class GetPageToolTest extends FunctionalTestCase
     }
 
     /**
+     * Test URL resolution with full URL
+     */
+    public function testUrlResolutionWithFullUrl(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
+        
+        // Test with full URL for About page
+        $result = $tool->execute([
+            'url' => 'https://example.com/about'
+        ]);
+        
+        $this->assertFalse($result->isError, 'Failed to resolve full URL: ' . json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        
+        // Verify we got the right page
+        $this->assertStringContainsString('UID: 2', $content);
+        $this->assertStringContainsString('Title: About', $content);
+    }
+
+    /**
+     * Test URL resolution with path only
+     */
+    public function testUrlResolutionWithPath(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
+        
+        // Test with just path for Contact page
+        $result = $tool->execute([
+            'url' => '/contact'
+        ]);
+        
+        $this->assertFalse($result->isError, 'Failed to resolve path: ' . json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        
+        // Verify we got the right page
+        $this->assertStringContainsString('UID: 6', $content);
+        $this->assertStringContainsString('Title: Contact', $content);
+    }
+
+    /**
+     * Test URL resolution with nested path
+     */
+    public function testUrlResolutionWithNestedPath(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
+        
+        // Test with nested path for Team page (under About)
+        $result = $tool->execute([
+            'url' => '/about/team'
+        ]);
+        
+        $this->assertFalse($result->isError, 'Failed to resolve nested path: ' . json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        
+        // Verify we got the right page
+        $this->assertStringContainsString('UID: 4', $content);
+        $this->assertStringContainsString('Title: Team', $content);
+    }
+
+    /**
+     * Test URL resolution without leading slash
+     */
+    public function testUrlResolutionWithoutLeadingSlash(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
+        
+        // Test without leading slash
+        $result = $tool->execute([
+            'url' => 'about'
+        ]);
+        
+        $this->assertFalse($result->isError, 'Failed to resolve path without leading slash: ' . json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        
+        // Verify we got the right page
+        $this->assertStringContainsString('UID: 2', $content);
+        $this->assertStringContainsString('Title: About', $content);
+    }
+
+    /**
+     * Test URL resolution for home page
+     */
+    public function testUrlResolutionForHomePage(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
+        
+        // Test with just domain (home page)
+        $result = $tool->execute([
+            'url' => 'https://example.com/'
+        ]);
+        
+        $this->assertFalse($result->isError, 'Failed to resolve home page URL: ' . json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        
+        // Verify we got the home page
+        $this->assertStringContainsString('UID: 1', $content);
+        $this->assertStringContainsString('Title: Home', $content);
+        
+        // Also test with just /
+        $result = $tool->execute([
+            'url' => '/'
+        ]);
+        
+        $this->assertFalse($result->isError, 'Failed to resolve home page path: ' . json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString('UID: 1', $content);
+    }
+
+    /**
+     * Test URL resolution with wrong domain
+     */
+    public function testUrlResolutionWithWrongDomain(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
+        
+        // Test with wrong domain - should fail because domain doesn't match site config
+        $result = $tool->execute([
+            'url' => 'https://wrong-domain.com/about'
+        ]);
+        
+        $this->assertTrue($result->isError, 'Expected error when using wrong domain, but got: ' . json_encode($result->jsonSerialize()));
+        $errorMessage = $result->content[0]->text;
+        $this->assertStringContainsString('Could not resolve URL', $errorMessage);
+        $this->assertStringContainsString('domain does not match', $errorMessage);
+    }
+
+    /**
+     * Test URL resolution with invalid path
+     */
+    public function testUrlResolutionWithInvalidPath(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
+        
+        // Test with non-existent path
+        $result = $tool->execute([
+            'url' => '/non-existent-page'
+        ]);
+        
+        $this->assertTrue($result->isError);
+        $errorMessage = $result->content[0]->text;
+        $this->assertStringContainsString('Could not resolve URL', $errorMessage);
+    }
+
+    /**
+     * Test URL resolution with language parameter
+     */
+    public function testUrlResolutionWithLanguage(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
+        
+        // Test URL resolution with language ID
+        $result = $tool->execute([
+            'url' => '/about',
+            'languageId' => 0  // Default language
+        ]);
+        
+        $this->assertFalse($result->isError);
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString('UID: 2', $content);
+    }
+
+    /**
      * Test URL generation for different pages with real site configuration
      */
     public function testRealUrlGenerationForDifferentPages(): void
     {
-        $tool = new GetPageTool();
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $tool = new GetPageTool($siteInformationService);
         
         // Test Home page (root) - should have base URL
         $result = $tool->execute(['uid' => 1]);

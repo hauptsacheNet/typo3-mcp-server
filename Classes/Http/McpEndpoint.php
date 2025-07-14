@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Http;
 
-use Mcp\Server\Server;
 use Mcp\Server\HttpServerRunner;
+use Mcp\Server\Server;
 use Mcp\Server\Transport\Http\StandardPhpAdapter;
 use Mcp\Server\Transport\Http\FileSessionStore;
 use TYPO3\CMS\Core\Core\Environment;
@@ -22,6 +22,7 @@ use Psr\Http\Message\ServerRequestInterface;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Hn\McpServer\Service\OAuthService;
+use Hn\McpServer\Service\SiteInformationService;
 
 /**
  * MCP HTTP Endpoint for remote access
@@ -73,8 +74,14 @@ class McpEndpoint
             // Set up TYPO3 backend context for the authenticated user
             $this->setupBackendUserContext($tokenInfo['be_user_uid']);
 
+            // Set current request context in SiteInformationService
+            $siteInformationService = $container->get(SiteInformationService::class);
+            if ($siteInformationService instanceof SiteInformationService) {
+                $siteInformationService->setCurrentRequest($request);
+            }
+
             // Create MCP server instance
-            $server = new Server('typo3-mcp-server');
+            $server = new Server($GLOBALS['TYPO3_CONF_VARS']['SYS']['sitename'] ?? 'TYPO3 MCP Server');
             
             // Register handlers
             $this->registerHandlers($server, $toolRegistry);

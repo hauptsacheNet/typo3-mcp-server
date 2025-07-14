@@ -10,12 +10,22 @@ use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Core\Site\SiteFinder;
+use TYPO3\CMS\Core\Site\Entity\Site;
+use Hn\McpServer\Service\SiteInformationService;
 
 /**
  * Tool for retrieving the TYPO3 page tree
  */
 class GetPageTreeTool extends AbstractTool
 {
+    protected SiteInformationService $siteInformationService;
+    
+    public function __construct(
+        SiteInformationService $siteInformationService
+    ) {
+        $this->siteInformationService = $siteInformationService;
+    }
     /**
      * Get the tool schema
      */
@@ -117,6 +127,7 @@ class GetPageTreeTool extends AbstractTool
                 'hidden' => (bool)$page['hidden'],
                 'doktype' => (int)$page['doktype'],
                 'subpageCount' => 0,
+                'url' => $this->siteInformationService->generatePageUrl((int)$page['uid']),
             ];
 
             // Check if there are subpages if depth > 1
@@ -176,6 +187,11 @@ class GetPageTreeTool extends AbstractTool
             
             $result .= $indent . '- [' . $page['uid'] . '] ' . $title . $hiddenMark;
             
+            // Add URL if available
+            if (!empty($page['url'])) {
+                $result .= ' - ' . $page['url'];
+            }
+            
             // If the page has subpages but we've reached max depth, show the count
             if (empty($page['subpages']) && $page['subpageCount'] > 0) {
                 $result .= ' (' . $page['subpageCount'] . ' subpages)';
@@ -190,4 +206,5 @@ class GetPageTreeTool extends AbstractTool
         
         return $result;
     }
+
 }
