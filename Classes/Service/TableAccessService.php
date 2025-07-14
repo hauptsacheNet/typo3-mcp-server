@@ -247,7 +247,11 @@ class TableAccessService implements SingletonInterface
         if (!empty($type) && isset($tca['types'][$type])) {
             $typeConfig = $tca['types'][$type];
         } elseif (isset($tca['types']['1'])) {
+            // Default to type '1' if no specific type provided
             $typeConfig = $tca['types']['1'];
+        } elseif (isset($tca['types']['0'])) {
+            // Some tables use '0' as default
+            $typeConfig = $tca['types']['0'];
         }
         
         // Parse showitem to get visible fields
@@ -284,6 +288,19 @@ class TableAccessService implements SingletonInterface
         }
         
         return $fields;
+    }
+    
+    /**
+     * Get field names for a table and type (without full configuration)
+     * 
+     * @param string $table Table name
+     * @param string $type Record type (optional)
+     * @return array List of field names
+     */
+    public function getFieldNamesForType(string $table, string $type = ''): array
+    {
+        $fields = $this->getAvailableFields($table, $type);
+        return array_keys($fields);
     }
     
     /**

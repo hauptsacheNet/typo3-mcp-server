@@ -315,7 +315,7 @@ class WriteTableTool extends AbstractRecordTool
     protected function updateRecord(string $table, int $uid, array $data): CallToolResult
     {
         // Validate the data
-        $validationResult = $this->validateRecordData($table, $data, 'update');
+        $validationResult = $this->validateRecordData($table, $data, 'update', $uid);
         if ($validationResult !== true) {
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
@@ -375,31 +375,33 @@ class WriteTableTool extends AbstractRecordTool
     /**
      * Validate record data against TCA
      * 
+     * @param int|null $uid Record UID (required for update actions)
      * @return true|string True if valid, error message if invalid
      */
-    protected function validateRecordData(string $table, array $data, string $action)
+    protected function validateRecordData(string $table, array $data, string $action, ?int $uid = null)
     {
         // Table access has already been validated by ensureTableAccess() before this method is called
         // No need to re-check table existence here
         
         $tca = $GLOBALS['TCA'][$table];
         
-        // Check required fields
-        foreach ($tca['columns'] as $fieldName => $fieldConfig) {
-            // Skip if field is not in the data
-            if (!isset($data[$fieldName])) {
-                // For create actions, check if the field is required
-                if ($action === 'create' && !empty($fieldConfig['config']['eval']) && strpos($fieldConfig['config']['eval'], 'required') !== false) {
-                    // Check if there's a default value
-                    if (!isset($fieldConfig['config']['default'])) {
-                        return 'Required field "' . $fieldName . '" is missing';
-                    }
-                }
-                
+        // Special handling for uid and pid
+        if (isset($data['uid'])) {
+            return "Field 'uid' cannot be modified directly";
+        }
+        if (isset($data['pid']) && $action !== 'create') {
+            return "Field 'pid' can only be set during record creation";
+        }
+        
+        
+        // Check required fields and validate field types
+        foreach ($data as $fieldName => $value) {
+            // Skip fields that don't exist in TCA
+            if (!isset($tca['columns'][$fieldName])) {
                 continue;
             }
             
-            $value = $data[$fieldName];
+            $fieldConfig = $tca['columns'][$fieldName];
             
             // Check field type
             switch ($fieldConfig['config']['type'] ?? '') {
@@ -555,6 +557,67 @@ class WriteTableTool extends AbstractRecordTool
                         }
                     }
                     break;
+            }
+        }
+        
+        // Check for required fields that are missing
+        foreach ($tca['columns'] as $fieldName => $fieldConfig) {
+            // Skip if field is in the data
+            if (isset($data[$fieldName])) {
+                continue;
+            }
+            
+            // For create actions, check if the field is required
+            if ($action === 'create' && !empty($fieldConfig['config']['eval']) && strpos($fieldConfig['config']['eval'], 'required') !== false) {
+                // Check if there's a default value
+                if (!isset($fieldConfig['config']['default'])) {
+                    return 'Required field "' . $fieldName . '" is missing';
+                }
+            }
+        }
+        
+        // After validating all field values, check field availability based on record type
+        // This ensures type field validation happens first
+        $recordType = '';
+        $typeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
+        if ($typeField) {
+            if ($action === 'update' && $uid !== null) {
+                // For updates, fetch the current record type
+                $currentRecord = BackendUtility::getRecord($table, $uid, $typeField);
+                if ($currentRecord && isset($currentRecord[$typeField])) {
+                    $recordType = (string)$currentRecord[$typeField];
+                }
+                // If type is being changed in the update, use the new type
+                if (isset($data[$typeField])) {
+                    $recordType = (string)$data[$typeField];
+                }
+            } else {
+                // For creates, get type from data
+                $recordType = isset($data[$typeField]) ? (string)$data[$typeField] : '';
+            }
+        }
+        
+        // Get available fields for this record type
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        
+        // The type field itself should always be available if it exists
+        if ($typeField && isset($GLOBALS['TCA'][$table]['columns'][$typeField])) {
+            $availableFields[$typeField] = $GLOBALS['TCA'][$table]['columns'][$typeField];
+        }
+        
+        // If we have type-specific configuration, validate field availability
+        if (!empty($availableFields) || !empty($typeField)) {
+            // Check each field in data is available
+            foreach ($data as $fieldName => $value) {
+                // Skip fields that don't exist in TCA (already validated above)
+                if (!isset($GLOBALS['TCA'][$table]['columns'][$fieldName])) {
+                    continue;
+                }
+                
+                // If we have available fields configured and this field is not in the list
+                if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
+                    return "Field '{$fieldName}' is not available for this record type";
+                }
             }
         }
         

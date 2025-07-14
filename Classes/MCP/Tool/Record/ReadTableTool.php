@@ -396,7 +396,12 @@ class ReadTableTool extends AbstractRecordTool
         
         if ($typeField && isset($record[$typeField])) {
             $recordType = (string)$record[$typeField];
-            $typeSpecificFields = $this->getTypeSpecificFields($table, $recordType);
+            $typeSpecificFields = $this->tableAccessService->getFieldNamesForType($table, $recordType);
+        }
+        
+        // If no type-specific fields are found, include all columns defined in TCA
+        if (empty($typeSpecificFields) && isset($GLOBALS['TCA'][$table]['columns'])) {
+            $typeSpecificFields = array_keys($GLOBALS['TCA'][$table]['columns']);
         }
         
         // Process each field
@@ -527,92 +532,6 @@ class ReadTableTool extends AbstractRecordTool
         return false;
     }
 
-    /**
-     * Get fields specific to a record type
-     */
-    protected function getTypeSpecificFields(string $table, string $recordType): array
-    {
-        $fields = [];
-        $tca = $GLOBALS['TCA'][$table] ?? [];
-
-        // Always include control fields
-        if (isset($tca['ctrl'])) {
-            foreach ($tca['ctrl'] as $key => $value) {
-                if (is_string($value) && !empty($value)) {
-                    $fields[] = $value;
-                }
-            }
-        }
-
-        // Check if this type exists in the TCA
-        if (!isset($tca['types'][$recordType])) {
-            return $fields;
-        }
-
-        $typeConfig = $tca['types'][$recordType];
-
-        // Process showitem to extract fields
-        if (!empty($typeConfig['showitem'])) {
-            $showItems = GeneralUtility::trimExplode(',', $typeConfig['showitem'], true);
-
-            foreach ($showItems as $item) {
-                $itemParts = GeneralUtility::trimExplode(';', $item, true);
-                $itemName = $itemParts[0];
-
-                // Handle palette references
-                if (strpos($itemName, '--palette--') === 0 && !empty($itemParts[1])) {
-                    $paletteName = $itemParts[1];
-                    $paletteFields = $this->getPaletteFields($table, $paletteName);
-                    $fields = array_merge($fields, $paletteFields);
-                }
-                // Handle div references (tabs)
-                elseif (strpos($itemName, '--div--') === 0) {
-                    continue;
-                }
-                // Regular field
-                else {
-                    $fields[] = $itemName;
-                }
-            }
-        }
-
-        return array_unique($fields);
-    }
-
-    /**
-     * Get fields from a palette
-     */
-    protected function getPaletteFields(string $table, string $paletteName): array
-    {
-        $fields = [];
-        $tca = $GLOBALS['TCA'][$table] ?? [];
-
-        // Check if this palette exists
-        if (!isset($tca['palettes'][$paletteName])) {
-            return $fields;
-        }
-
-        $paletteConfig = $tca['palettes'][$paletteName];
-
-        // Process showitem to extract fields
-        if (!empty($paletteConfig['showitem'])) {
-            $showItems = GeneralUtility::trimExplode(',', $paletteConfig['showitem'], true);
-
-            foreach ($showItems as $item) {
-                $itemParts = GeneralUtility::trimExplode(';', $item, true);
-                $itemName = $itemParts[0];
-
-                // Skip special items like --linebreak--
-                if (strpos($itemName, '--') === 0) {
-                    continue;
-                }
-
-                $fields[] = $itemName;
-            }
-        }
-
-        return $fields;
-    }
 
     /**
      * Check if a value is the default value for a field
