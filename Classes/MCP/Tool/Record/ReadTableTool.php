@@ -13,6 +13,7 @@ use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
+use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Utility\MathUtility;
@@ -158,7 +159,8 @@ class ReadTableTool extends AbstractRecordTool
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
         // Don't include hidden records unless explicitly requested
         if (!$includeHidden) {
@@ -181,39 +183,17 @@ class ReadTableTool extends AbstractRecordTool
             // For workspace transparency, we need to handle both cases:
             // 1. The UID is a workspace UID (for new records)
             // 2. The UID is a live UID (for existing records with workspace versions)
-            
-            // First check if we're in a workspace
+
             $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
             if ($currentWorkspace > 0) {
-                // In a workspace, we need to check for delete placeholders
-                // If a delete placeholder exists for this UID, we should not return any record
-                $deletePlaceholderCheck = clone $queryBuilder;
-                $deletePlaceholderCheck->getRestrictions()->removeAll();
-                
-                $hasDeletePlaceholder = $deletePlaceholderCheck
-                    ->count('uid')
-                    ->from($table)
-                    ->where(
-                        $deletePlaceholderCheck->expr()->eq('t3ver_oid', $deletePlaceholderCheck->createNamedParameter($uid, ParameterType::INTEGER)),
-                        $deletePlaceholderCheck->expr()->eq('t3ver_state', $deletePlaceholderCheck->createNamedParameter(2, ParameterType::INTEGER)),
-                        $deletePlaceholderCheck->expr()->eq('t3ver_wsid', $deletePlaceholderCheck->createNamedParameter($currentWorkspace, ParameterType::INTEGER))
+                // In workspace context, check both live and workspace UIDs
+                // The WorkspaceDeletePlaceholderRestriction will handle delete placeholders automatically
+                $queryBuilder->andWhere(
+                    $queryBuilder->expr()->or(
+                        $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
+                        $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
                     )
-                    ->executeQuery()
-                    ->fetchOne();
-                
-                if ($hasDeletePlaceholder > 0) {
-                    // There's a delete placeholder, so we should not return any records
-                    // Add an impossible condition to ensure no records are returned
-                    $queryBuilder->andWhere('1 = 0');
-                } else {
-                    // No delete placeholder, proceed with normal query
-                    $queryBuilder->andWhere(
-                        $queryBuilder->expr()->or(
-                            $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
-                            $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                        )
-                    );
-                }
+                );
             } else {
                 // In live workspace, just filter by UID
                 $queryBuilder->andWhere(
@@ -261,7 +241,8 @@ class ReadTableTool extends AbstractRecordTool
         $countQueryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
         
         if (!$includeHidden) {
             $countQueryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
@@ -277,37 +258,19 @@ class ReadTableTool extends AbstractRecordTool
         }
         
         if ($uid !== null) {
-            // Apply the same delete placeholder logic for count query
+            // Apply the same UID filtering logic for count query
             $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
             if ($currentWorkspace > 0) {
-                // Check for delete placeholder
-                $deletePlaceholderCheck = GeneralUtility::makeInstance(ConnectionPool::class)
-                    ->getQueryBuilderForTable($table);
-                $deletePlaceholderCheck->getRestrictions()->removeAll();
-                
-                $hasDeletePlaceholder = $deletePlaceholderCheck
-                    ->count('uid')
-                    ->from($table)
-                    ->where(
-                        $deletePlaceholderCheck->expr()->eq('t3ver_oid', $deletePlaceholderCheck->createNamedParameter($uid, ParameterType::INTEGER)),
-                        $deletePlaceholderCheck->expr()->eq('t3ver_state', $deletePlaceholderCheck->createNamedParameter(2, ParameterType::INTEGER)),
-                        $deletePlaceholderCheck->expr()->eq('t3ver_wsid', $deletePlaceholderCheck->createNamedParameter($currentWorkspace, ParameterType::INTEGER))
+                // In workspace context, check both live and workspace UIDs
+                // The WorkspaceDeletePlaceholderRestriction will handle delete placeholders automatically
+                $countQueryBuilder->andWhere(
+                    $countQueryBuilder->expr()->or(
+                        $countQueryBuilder->expr()->eq('uid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
+                        $countQueryBuilder->expr()->eq('t3ver_oid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
                     )
-                    ->executeQuery()
-                    ->fetchOne();
-                
-                if ($hasDeletePlaceholder > 0) {
-                    // There's a delete placeholder, ensure count is 0
-                    $countQueryBuilder->andWhere('1 = 0');
-                } else {
-                    $countQueryBuilder->andWhere(
-                        $countQueryBuilder->expr()->or(
-                            $countQueryBuilder->expr()->eq('uid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
-                            $countQueryBuilder->expr()->eq('t3ver_oid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                        )
-                    );
-                }
+                );
             } else {
+                // In live workspace, just filter by UID
                 $countQueryBuilder->andWhere(
                     $countQueryBuilder->expr()->eq('uid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
                 );
@@ -366,12 +329,12 @@ class ReadTableTool extends AbstractRecordTool
         if (isset($GLOBALS['TCA'][$table]['ctrl']['type'])) {
             $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['type'];
         }
-        
+
         // Add label field if it exists (important for record identification)
         if (isset($GLOBALS['TCA'][$table]['ctrl']['label'])) {
             $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['label'];
         }
-        
+
         // Add language field if it exists
         if (isset($GLOBALS['TCA'][$table]['ctrl']['languageField'])) {
             $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
@@ -384,7 +347,7 @@ class ReadTableTool extends AbstractRecordTool
         if (isset($GLOBALS['TCA'][$table]['ctrl']['crdate'])) {
             $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['crdate'];
         }
-        
+
         // Add hidden field if it exists
         if (isset($GLOBALS['TCA'][$table]['ctrl']['enablecolumns']['disabled'])) {
             $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['enablecolumns']['disabled'];
@@ -399,11 +362,11 @@ class ReadTableTool extends AbstractRecordTool
         $typeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
         $typeSpecificFields = [];
         $hasValidTypeConfig = false;
-        
+
         if ($typeField && isset($record[$typeField])) {
             $recordType = (string)$record[$typeField];
             $typeSpecificFields = $this->tableAccessService->getFieldNamesForType($table, $recordType);
-            
+
             // The TcaSchemaFactory will handle type validation internally
             // If the type is valid, we'll get the appropriate fields
             // If not, we'll get a reasonable fallback

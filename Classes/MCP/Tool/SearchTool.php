@@ -14,6 +14,7 @@ use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\Utility\RecordFormattingUtility;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
+use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use TYPO3\CMS\Core\Site\SiteFinder;
 
 /**
@@ -571,42 +572,12 @@ class SearchTool extends AbstractRecordTool
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
         // Don't include hidden records unless explicitly requested
         if (!$includeHidden) {
             $queryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
-        }
-        
-        // Check if we're in a workspace and need to exclude records with delete placeholders
-        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-        if ($currentWorkspace > 0) {
-            // Get UIDs of records that have delete placeholders in this workspace
-            $deletePlaceholderQuery = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getQueryBuilderForTable($table);
-            $deletePlaceholderQuery->getRestrictions()->removeAll();
-            
-            $deletedUids = $deletePlaceholderQuery
-                ->select('t3ver_oid')
-                ->from($table)
-                ->where(
-                    $deletePlaceholderQuery->expr()->eq('t3ver_state', $deletePlaceholderQuery->createNamedParameter(2, ParameterType::INTEGER)),
-                    $deletePlaceholderQuery->expr()->eq('t3ver_wsid', $deletePlaceholderQuery->createNamedParameter($currentWorkspace, ParameterType::INTEGER)),
-                    $deletePlaceholderQuery->expr()->gt('t3ver_oid', $deletePlaceholderQuery->createNamedParameter(0, ParameterType::INTEGER))
-                )
-                ->executeQuery()
-                ->fetchAllAssociative();
-            
-            // If there are delete placeholders, exclude those live UIDs from results
-            if (!empty($deletedUids)) {
-                $excludeUids = array_column($deletedUids, 't3ver_oid');
-                $queryBuilder->andWhere(
-                    $queryBuilder->expr()->notIn(
-                        'uid',
-                        $queryBuilder->createNamedParameter($excludeUids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
-                    )
-                );
-            }
         }
 
         // Select all fields
@@ -667,43 +638,6 @@ class SearchTool extends AbstractRecordTool
 
         // Execute query
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
-        
-        // In workspace context, we need to filter out records that have delete placeholders
-        // even if they were returned by the query (since WorkspaceRestriction might not handle all cases)
-        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-        if ($currentWorkspace > 0 && !empty($records)) {
-            // Get UIDs of records that have delete placeholders
-            $recordUids = array_column($records, 'uid');
-            if (!empty($recordUids)) {
-                $deletePlaceholderQuery = GeneralUtility::makeInstance(ConnectionPool::class)
-                    ->getQueryBuilderForTable($table);
-                $deletePlaceholderQuery->getRestrictions()->removeAll();
-                
-                $deletedUids = $deletePlaceholderQuery
-                    ->select('t3ver_oid')
-                    ->from($table)
-                    ->where(
-                        $deletePlaceholderQuery->expr()->in(
-                            't3ver_oid',
-                            $deletePlaceholderQuery->createNamedParameter($recordUids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
-                        ),
-                        $deletePlaceholderQuery->expr()->eq('t3ver_state', $deletePlaceholderQuery->createNamedParameter(2, ParameterType::INTEGER)),
-                        $deletePlaceholderQuery->expr()->eq('t3ver_wsid', $deletePlaceholderQuery->createNamedParameter($currentWorkspace, ParameterType::INTEGER))
-                    )
-                    ->executeQuery()
-                    ->fetchAllAssociative();
-                
-                if (!empty($deletedUids)) {
-                    $excludeUids = array_column($deletedUids, 't3ver_oid');
-                    // Filter out records that have delete placeholders
-                    $records = array_filter($records, function($record) use ($excludeUids) {
-                        return !in_array($record['uid'], $excludeUids);
-                    });
-                    // Re-index array
-                    $records = array_values($records);
-                }
-            }
-        }
 
         // Return records in expected structure format
         return [
