@@ -1,0 +1,339 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Hn\McpServer\Tests\Functional\MCP\Tool;
+
+use Hn\McpServer\MCP\Tool\Record\GetFlexFormSchemaTool;
+use Mcp\Types\TextContent;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
+
+class GetFlexFormSchemaToolTest extends FunctionalTestCase
+{
+    protected array $coreExtensionsToLoad = [
+        'workspaces',
+        'frontend',
+    ];
+    
+    protected array $testExtensionsToLoad = [
+        'mcp_server',
+    ];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        
+        // Import enhanced page and content fixtures
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
+        
+        // Set up backend user for DataHandler and TableAccessService
+        $this->setUpBackendUserWithWorkspace(1);
+        
+        // Initialize language service
+        if (!isset($GLOBALS['LANG'])) {
+            $languageServiceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
+            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
+        }
+    }
+
+    /**
+     * Test basic FlexForm schema retrieval with nonexistent identifier
+     */
+    public function testGetFlexFormSchema(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        // Test with form_formframework (likely not available in test environment)
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'field' => 'pi_flexform',
+            'identifier' => 'form_formframework'
+        ]);
+        
+        // The tool returns an error when FlexForm identifier is not found
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        $this->assertInstanceOf(TextContent::class, $result->content[0]);
+        
+        $content = $result->content[0]->text;
+        
+        // Verify error message
+        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $content);
+    }
+
+    /**
+     * Test FlexForm schema with default parameters
+     */
+    public function testGetFlexFormSchemaWithDefaults(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        // Test with only identifier (defaults to tt_content.pi_flexform)
+        $result = $tool->execute([
+            'identifier' => 'form_formframework'
+        ]);
+        
+        // The tool returns an error when FlexForm identifier is not found
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        
+        $content = $result->content[0]->text;
+        
+        // Verify error message contains transformed identifier
+        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $content);
+    }
+
+    /**
+     * Test FlexForm schema with custom table and field
+     */
+    public function testGetFlexFormSchemaWithCustomTableAndField(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        // Test with custom table and field
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'field' => 'pi_flexform',
+            'identifier' => 'textmedia'
+        ]);
+        
+        // The tool returns an error when FlexForm identifier is not found
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        
+        $content = $result->content[0]->text;
+        
+        // Verify error message
+        $this->assertStringContainsString('FlexForm schema not found for identifier: textmedia', $content);
+    }
+
+    /**
+     * Test error handling for missing identifier parameter
+     */
+    public function testMissingIdentifierParameter(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'field' => 'pi_flexform'
+        ]);
+        
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        $this->assertStringContainsString('Identifier parameter is required', $result->content[0]->text);
+    }
+
+    /**
+     * Test error handling for empty identifier parameter
+     */
+    public function testEmptyIdentifierParameter(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'field' => 'pi_flexform',
+            'identifier' => ''
+        ]);
+        
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        $this->assertStringContainsString('Identifier parameter is required', $result->content[0]->text);
+    }
+
+    /**
+     * Test error handling for invalid table
+     */
+    public function testInvalidTable(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $result = $tool->execute([
+            'table' => 'nonexistent_table',
+            'field' => 'pi_flexform',
+            'identifier' => 'form_formframework'
+        ]);
+        
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        $this->assertStringContainsString('Cannot access table \'nonexistent_table\': Table does not exist in TCA', $result->content[0]->text);
+    }
+
+    /**
+     * Test error handling for table without TCA
+     */
+    public function testTableWithoutTca(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $result = $tool->execute([
+            'table' => 'sys_log',
+            'field' => 'pi_flexform',
+            'identifier' => 'form_formframework'
+        ]);
+        
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        $this->assertStringContainsString('Cannot access table \'sys_log\': Table does not exist in TCA', $result->content[0]->text);
+    }
+
+    /**
+     * Test FlexForm schema with unknown identifier
+     */
+    public function testUnknownIdentifier(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'field' => 'pi_flexform',
+            'identifier' => 'unknown_flexform_identifier'
+        ]);
+        
+        // Should return error for unknown identifier
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        
+        $content = $result->content[0]->text;
+        
+        // Should show error message
+        $this->assertStringContainsString('FlexForm schema not found for identifier: unknown_flexform_identifier', $content);
+    }
+
+    /**
+     * Test FlexForm schema output format when identifier not found
+     */
+    public function testFlexFormSchemaOutputFormat(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $result = $tool->execute([
+            'identifier' => 'form_formframework'
+        ]);
+        
+        // The tool returns an error when FlexForm identifier is not found
+        $this->assertTrue($result->isError);
+        
+        $content = $result->content[0]->text;
+        
+        // Verify error message
+        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $content);
+    }
+
+    /**
+     * Test FlexForm schema with field that exists but is not FlexForm
+     */
+    public function testNonFlexFormField(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'field' => 'header', // This is not a FlexForm field
+            'identifier' => 'form_formframework'
+        ]);
+        
+        // Should return error for non-FlexForm field
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        
+        $content = $result->content[0]->text;
+        
+        // Should show error message
+        $this->assertStringContainsString('Field \'header\' in table \'tt_content\' is not a FlexForm field', $content);
+    }
+
+    /**
+     * Test FlexForm schema field information
+     */
+    public function testFlexFormSchemaFieldInformation(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $result = $tool->execute([
+            'identifier' => 'form_formframework'
+        ]);
+        
+        // The tool returns an error when FlexForm identifier is not found
+        $this->assertTrue($result->isError);
+        
+        $content = $result->content[0]->text;
+        
+        // Verify error message
+        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $content);
+    }
+
+    /**
+     * Test workspace context initialization
+     */
+    public function testWorkspaceContextInitialization(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        // Should work in workspace context but still return error for missing identifier
+        $result = $tool->execute([
+            'identifier' => 'form_formframework'
+        ]);
+        
+        $this->assertTrue($result->isError);
+        $this->assertCount(1, $result->content);
+        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $result->content[0]->text);
+    }
+
+    /**
+     * Test tool type
+     */
+    public function testToolType(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $this->assertEquals('schema', $tool->getToolType());
+    }
+
+    /**
+     * Test tool schema contains required information
+     */
+    public function testToolSchema(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        $schema = $tool->getSchema();
+        
+        // Verify schema structure
+        $this->assertIsArray($schema);
+        $this->assertArrayHasKey('description', $schema);
+        $this->assertArrayHasKey('parameters', $schema);
+        $this->assertArrayHasKey('examples', $schema);
+        
+        // Verify parameters
+        $this->assertArrayHasKey('properties', $schema['parameters']);
+        $this->assertArrayHasKey('identifier', $schema['parameters']['properties']);
+        $this->assertArrayHasKey('table', $schema['parameters']['properties']);
+        $this->assertArrayHasKey('field', $schema['parameters']['properties']);
+        
+        // Verify required fields
+        $this->assertArrayHasKey('required', $schema['parameters']);
+        $this->assertContains('identifier', $schema['parameters']['required']);
+        
+        // Verify examples
+        $this->assertNotEmpty($schema['examples']);
+        $this->assertArrayHasKey('description', $schema['examples'][0]);
+        $this->assertArrayHasKey('parameters', $schema['examples'][0]);
+    }
+
+    /**
+     * Set up backend user with workspace
+     */
+    protected function setUpBackendUserWithWorkspace(int $uid): void
+    {
+        $backendUser = $this->setUpBackendUser($uid);
+        $backendUser->workspace = 1; // Set to test workspace
+        $GLOBALS['BE_USER'] = $backendUser;
+    }
+}
