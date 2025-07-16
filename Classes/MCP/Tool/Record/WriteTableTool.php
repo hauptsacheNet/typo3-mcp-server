@@ -383,8 +383,6 @@ class WriteTableTool extends AbstractRecordTool
         // Table access has already been validated by ensureTableAccess() before this method is called
         // No need to re-check table existence here
         
-        $tca = $GLOBALS['TCA'][$table];
-        
         // Special handling for uid and pid
         if (isset($data['uid'])) {
             return "Field 'uid' cannot be modified directly";
@@ -397,11 +395,10 @@ class WriteTableTool extends AbstractRecordTool
         // Check required fields and validate field types
         foreach ($data as $fieldName => $value) {
             // Skip fields that don't exist in TCA
-            if (!isset($tca['columns'][$fieldName])) {
+            $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
+            if (!$fieldConfig) {
                 continue;
             }
-            
-            $fieldConfig = $tca['columns'][$fieldName];
             
             // Check field type
             switch ($fieldConfig['config']['type'] ?? '') {
@@ -561,6 +558,7 @@ class WriteTableTool extends AbstractRecordTool
         }
         
         // Check for required fields that are missing
+        $tca = $GLOBALS['TCA'][$table];
         foreach ($tca['columns'] as $fieldName => $fieldConfig) {
             // Skip if field is in the data
             if (isset($data[$fieldName])) {
@@ -579,7 +577,7 @@ class WriteTableTool extends AbstractRecordTool
         // After validating all field values, check field availability based on record type
         // This ensures type field validation happens first
         $recordType = '';
-        $typeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
         if ($typeField) {
             if ($action === 'update' && $uid !== null) {
                 // For updates, fetch the current record type
@@ -601,8 +599,11 @@ class WriteTableTool extends AbstractRecordTool
         $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
         
         // The type field itself should always be available if it exists
-        if ($typeField && isset($GLOBALS['TCA'][$table]['columns'][$typeField])) {
-            $availableFields[$typeField] = $GLOBALS['TCA'][$table]['columns'][$typeField];
+        if ($typeField) {
+            $typeFieldConfig = $this->tableAccessService->getFieldConfig($table, $typeField);
+            if ($typeFieldConfig) {
+                $availableFields[$typeField] = $typeFieldConfig;
+            }
         }
         
         // If we have type-specific configuration, validate field availability
@@ -610,7 +611,7 @@ class WriteTableTool extends AbstractRecordTool
             // Check each field in data is available
             foreach ($data as $fieldName => $value) {
                 // Skip fields that don't exist in TCA (already validated above)
-                if (!isset($GLOBALS['TCA'][$table]['columns'][$fieldName])) {
+                if (!$this->tableAccessService->getFieldConfig($table, $fieldName)) {
                     continue;
                 }
                 
@@ -636,7 +637,7 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function isFlexFormField(string $table, string $fieldName): bool
     {
-        return !empty($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['type']) && $GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['type'] === 'flex';
+        return $this->tableAccessService->isFlexFormField($table, $fieldName);
     }
     
     /**

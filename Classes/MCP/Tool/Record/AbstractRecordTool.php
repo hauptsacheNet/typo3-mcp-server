@@ -143,11 +143,7 @@ abstract class AbstractRecordTool extends AbstractTool implements RecordToolInte
             return $table;
         }
         
-        if (!empty($GLOBALS['TCA'][$table]['ctrl']['title'])) {
-            return $this->translateLabel($GLOBALS['TCA'][$table]['ctrl']['title']);
-        }
-        
-        return $table;
+        return $this->tableAccessService->translateLabel($this->tableAccessService->getTableTitle($table));
     }
     
     /**

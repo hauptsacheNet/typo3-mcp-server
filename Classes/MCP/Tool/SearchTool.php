@@ -523,12 +523,7 @@ class SearchTool extends AbstractRecordTool
      */
     protected function getSearchableFields(string $table): array
     {
-        if (!isset($GLOBALS['TCA'][$table]['ctrl']['searchFields'])) {
-            return [];
-        }
-        
-        $searchFields = $GLOBALS['TCA'][$table]['ctrl']['searchFields'];
-        return GeneralUtility::trimExplode(',', $searchFields, true);
+        return $this->tableAccessService->getSearchFields($table);
     }
 
     /**

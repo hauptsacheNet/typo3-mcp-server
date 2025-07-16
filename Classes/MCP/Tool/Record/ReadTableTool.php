@@ -322,44 +322,11 @@ class ReadTableTool extends AbstractRecordTool
             // No change needed
         }
         
-        // Define essential fields that should always be included
-        $essentialFields = ['uid', 'pid'];
-        
-        // Add type field if it exists (critical for understanding record structure)
-        if (isset($GLOBALS['TCA'][$table]['ctrl']['type'])) {
-            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['type'];
-        }
-
-        // Add label field if it exists (important for record identification)
-        if (isset($GLOBALS['TCA'][$table]['ctrl']['label'])) {
-            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['label'];
-        }
-
-        // Add language field if it exists
-        if (isset($GLOBALS['TCA'][$table]['ctrl']['languageField'])) {
-            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
-        }
-        
-        // Add timestamp fields if they exist
-        if (isset($GLOBALS['TCA'][$table]['ctrl']['tstamp'])) {
-            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['tstamp'];
-        }
-        if (isset($GLOBALS['TCA'][$table]['ctrl']['crdate'])) {
-            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['crdate'];
-        }
-
-        // Add hidden field if it exists
-        if (isset($GLOBALS['TCA'][$table]['ctrl']['enablecolumns']['disabled'])) {
-            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['enablecolumns']['disabled'];
-        }
-        
-        // Add sorting field if it exists
-        if (isset($GLOBALS['TCA'][$table]['ctrl']['sortby'])) {
-            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['sortby'];
-        }
+        // Get essential fields using TableAccessService
+        $essentialFields = $this->tableAccessService->getEssentialFields($table);
         
         // Get type-specific fields if a type field exists
-        $typeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
         $typeSpecificFields = [];
         $hasValidTypeConfig = false;
 
@@ -409,7 +376,7 @@ class ReadTableTool extends AbstractRecordTool
         }
         
         // Convert FlexForm XML to JSON
-        if ($this->isFlexFormField($table, $field) && is_string($value) && !empty($value) && strpos($value, '<?xml') === 0) {
+        if ($this->tableAccessService->isFlexFormField($table, $field) && is_string($value) && !empty($value) && strpos($value, '<?xml') === 0) {
             try {
                 // Use TYPO3's FlexFormService to convert XML to array
                 $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
@@ -473,32 +440,7 @@ class ReadTableTool extends AbstractRecordTool
      */
     protected function isDateField(string $table, string $field): bool
     {
-        if (empty($table) || empty($field)) {
-            return false;
-        }
-        
-        // Common date fields in TYPO3
-        $commonDateFields = ['tstamp', 'crdate', 'starttime', 'endtime', 'lastlogin', 'date'];
-        
-        if (in_array($field, $commonDateFields)) {
-            return true;
-        }
-        
-        // Check TCA eval for date/datetime/time
-        $tca = $GLOBALS['TCA'][$table]['columns'][$field]['config'] ?? [];
-        if (!empty($tca['eval'])) {
-            $evalRules = GeneralUtility::trimExplode(',', $tca['eval'], true);
-            if (in_array('date', $evalRules) || in_array('datetime', $evalRules) || in_array('time', $evalRules)) {
-                return true;
-            }
-        }
-        
-        // Check renderType for inputDateTime
-        if (($tca['renderType'] ?? '') === 'inputDateTime') {
-            return true;
-        }
-        
-        return false;
+        return $this->tableAccessService->isDateField($table, $field);
     }
 
 
@@ -553,36 +495,19 @@ class ReadTableTool extends AbstractRecordTool
      */
     protected function applyDefaultSorting(QueryBuilder $queryBuilder, string $table): void
     {
-        if (!isset($GLOBALS['TCA'][$table]['ctrl'])) {
-            return;
-        }
-
-        $ctrl = $GLOBALS['TCA'][$table]['ctrl'];
-
         // Check for sortby field
-        if (!empty($ctrl['sortby'])) {
-            $queryBuilder->orderBy($ctrl['sortby'], 'ASC');
+        $sortbyField = $this->tableAccessService->getSortingFieldName($table);
+        if ($sortbyField) {
+            $queryBuilder->orderBy($sortbyField, 'ASC');
             return;
         }
 
         // Check for default_sortby
-        if (!empty($ctrl['default_sortby'])) {
-            $sortParts = GeneralUtility::trimExplode(',', $ctrl['default_sortby'], true);
-
-            foreach ($sortParts as $sortPart) {
-                $sortPart = trim($sortPart);
-
-                // Extract field and direction
-                if (preg_match('/^(.*?)\s+(ASC|DESC)$/i', $sortPart, $matches)) {
-                    $field = trim($matches[1]);
-                    $direction = strtoupper($matches[2]);
-                    $queryBuilder->addOrderBy($field, $direction);
-                } else {
-                    // Default to ASC if no direction specified
-                    $queryBuilder->addOrderBy($sortPart, 'ASC');
-                }
+        $defaultSorting = $this->tableAccessService->parseDefaultSorting($table);
+        if (!empty($defaultSorting)) {
+            foreach ($defaultSorting as $sortConfig) {
+                $queryBuilder->addOrderBy($sortConfig['field'], $sortConfig['direction']);
             }
-
             return;
         }
 
@@ -869,38 +794,4 @@ class ReadTableTool extends AbstractRecordTool
         return true;
     }
 
-    /**
-     * Check if a field is a FlexForm field
-     */
-    protected function isFlexFormField(string $table, string $field): bool
-    {
-        if (empty($table) || empty($field)) {
-            return false;
-        }
-
-        // First check TCA configuration if available
-        $tca = $GLOBALS['TCA'][$table]['columns'][$field]['config'] ?? [];
-        if (!empty($tca['type']) && $tca['type'] === 'flex') {
-            return true;
-        }
-
-        // If TCA is not available or doesn't have flex configuration,
-        // check if the field name is a known FlexForm field
-        $knownFlexFormFields = [
-            'tt_content' => ['pi_flexform'],
-            'pages' => ['tx_templavoila_flex'],
-            // Add other tables and their FlexForm fields here
-        ];
-
-        if (isset($knownFlexFormFields[$table]) && in_array($field, $knownFlexFormFields[$table])) {
-            return true;
-        }
-
-        // As a last resort, check if the value looks like XML and contains FlexForm structure
-        if (is_string($field) && strpos($field, 'flexform') !== false) {
-            return true;
-        }
-
-        return false;
-    }
 }

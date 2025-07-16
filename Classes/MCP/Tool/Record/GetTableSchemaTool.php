@@ -100,11 +100,8 @@ class GetTableSchemaTool extends AbstractRecordTool
     {
         $result = "";
         
-        // Basic table info
-        $tableLabel = '';
-        if (!empty($GLOBALS['TCA'][$table]['ctrl']['title'])) {
-            $tableLabel = $this->translateLabel($GLOBALS['TCA'][$table]['ctrl']['title']);
-        }
+        // Basic table info using TableAccessService
+        $tableLabel = $this->tableAccessService->translateLabel($this->tableAccessService->getTableTitle($table));
         
         $result .= "TABLE SCHEMA: " . $table . " (" . $tableLabel . ")\n";
         $result .= "=======================================\n\n";
@@ -143,42 +140,25 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         $result .= "\n\n";
         
-        // Get the type field
-        $typeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? '';
+        // Get the type field using TableAccessService
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
         $excludeTypes = $this->getRemovedTypesByTSconfig($table, $typeField);
         
-        // Get available types
-        $types = [];
+        // Get available types using TableAccessService
+        $types = $this->tableAccessService->getAvailableTypes($table);
         
-        if (!empty($typeField) && isset($GLOBALS['TCA'][$table]['columns'][$typeField])) {
-            $typeConfig = $GLOBALS['TCA'][$table]['columns'][$typeField]['config'] ?? [];
-            $items = $typeConfig['items'] ?? [];
-            
-            foreach ($items as $item) {
-                if (is_array($item)) {
-                    $value = '';
-                    $label = '';
-                    
-                    if (isset($item['value']) && isset($item['label'])) {
-                        $value = $item['value'];
-                        $label = $this->translateLabel($item['label']);
-                    } elseif (isset($item[0]) && isset($item[1])) {
-                        $value = $item[1];
-                        $label = $this->translateLabel($item[0]);
-                    }
-                    
-                    // Skip excluded types
-                    if (in_array($value, $excludeTypes)) {
-                        continue;
-                    }
-                    
-                    $types[$value] = $label;
-                }
+        // Apply label translations and exclusions
+        $processedTypes = [];
+        foreach ($types as $value => $label) {
+            // Skip excluded types
+            if (in_array($value, $excludeTypes)) {
+                continue;
             }
-        } else {
-            // If no type field, use the default type
-            $types['1'] = 'Default';
+            
+            $processedTypes[$value] = $this->tableAccessService->translateLabel($label);
         }
+        
+        $types = $processedTypes;
         
         // If no types are available after filtering, show an error
         if (empty($types)) {
@@ -424,7 +404,7 @@ class GetTableSchemaTool extends AbstractRecordTool
      */
     protected function translateLabel(string $label): string
     {
-        return TcaFormattingUtility::translateLabel($label);
+        return $this->tableAccessService->translateLabel($label);
     }
     
     /**

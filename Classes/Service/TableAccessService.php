@@ -552,4 +552,315 @@ class TableAccessService implements SingletonInterface
         
         return $controlInfo;
     }
+    
+    
+    // =============================================================================
+    // UTILITY METHODS FOR COMMON TCA OPERATIONS
+    // =============================================================================
+    
+    /**
+     * Get the table title (label) for a table
+     */
+    public function getTableTitle(string $table): string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['title'] ?? $table;
+    }
+    
+    /**
+     * Get the type field name for a table
+     */
+    public function getTypeFieldName(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['type'] ?? null;
+    }
+    
+    /**
+     * Get the label field name for a table
+     */
+    public function getLabelFieldName(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['label'] ?? null;
+    }
+    
+    /**
+     * Get the sorting field name for a table
+     */
+    public function getSortingFieldName(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['sortby'] ?? null;
+    }
+    
+    /**
+     * Get the default sorting configuration for a table
+     */
+    public function getDefaultSorting(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['default_sortby'] ?? null;
+    }
+    
+    /**
+     * Get the timestamp field name for a table
+     */
+    public function getTimestampFieldName(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['tstamp'] ?? null;
+    }
+    
+    /**
+     * Get the creation date field name for a table
+     */
+    public function getCreationDateFieldName(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['crdate'] ?? null;
+    }
+    
+    /**
+     * Get the language field name for a table
+     */
+    public function getLanguageFieldName(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['languageField'] ?? null;
+    }
+    
+    /**
+     * Get the hidden field name for a table
+     */
+    public function getHiddenFieldName(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['enablecolumns']['disabled'] ?? null;
+    }
+    
+    /**
+     * Get the search fields for a table
+     */
+    public function getSearchFields(string $table): array
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        $searchFields = $ctrl['searchFields'] ?? '';
+        
+        if (empty($searchFields)) {
+            return [];
+        }
+        
+        return GeneralUtility::trimExplode(',', $searchFields, true);
+    }
+    
+    /**
+     * Get essential fields for a table (fields that should always be included)
+     */
+    public function getEssentialFields(string $table): array
+    {
+        $essentialFields = ['uid', 'pid'];
+        
+        // Add type field if it exists
+        if ($typeField = $this->getTypeFieldName($table)) {
+            $essentialFields[] = $typeField;
+        }
+        
+        // Add label field if it exists
+        if ($labelField = $this->getLabelFieldName($table)) {
+            $essentialFields[] = $labelField;
+        }
+
+        // Add language field if it exists
+        if ($languageField = $this->getLanguageFieldName($table)) {
+            $essentialFields[] = $languageField;
+        }
+
+        // Add timestamp fields if they exist
+        if ($tstampField = $this->getTimestampFieldName($table)) {
+            $essentialFields[] = $tstampField;
+        }
+
+        if ($crdateField = $this->getCreationDateFieldName($table)) {
+            $essentialFields[] = $crdateField;
+        }
+
+        // Add hidden field if it exists
+        if ($hiddenField = $this->getHiddenFieldName($table)) {
+            $essentialFields[] = $hiddenField;
+        }
+
+        // Add sorting field if it exists
+        if ($sortingField = $this->getSortingFieldName($table)) {
+            $essentialFields[] = $sortingField;
+        }
+        
+        return array_unique($essentialFields);
+    }
+    
+    /**
+     * Get available types for a table
+     */
+    public function getAvailableTypes(string $table): array
+    {
+        $typeField = $this->getTypeFieldName($table);
+        if (!$typeField) {
+            return ['1' => 'Default'];
+        }
+        
+        $typeConfig = $GLOBALS['TCA'][$table]['columns'][$typeField]['config'] ?? [];
+        $items = $typeConfig['items'] ?? [];
+        
+        $types = [];
+        foreach ($items as $item) {
+            if (is_array($item)) {
+                $value = '';
+                $label = '';
+                
+                if (isset($item['value']) && isset($item['label'])) {
+                    $value = $item['value'];
+                    $label = $item['label'];
+                } elseif (isset($item[0]) && isset($item[1])) {
+                    $value = $item[1];
+                    $label = $item[0];
+                }
+                
+                // Skip dividers
+                if ($value === '--div--') {
+                    continue;
+                }
+                
+                $types[$value] = $label;
+            }
+        }
+        
+        return $types;
+    }
+    
+    /**
+     * Get the field configuration for a specific field
+     */
+    public function getFieldConfig(string $table, string $fieldName): ?array
+    {
+        return $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? null;
+    }
+    
+    /**
+     * Check if a field is a date field
+     */
+    public function isDateField(string $table, string $fieldName): bool
+    {
+        // Common date fields in TYPO3
+        $commonDateFields = ['tstamp', 'crdate', 'starttime', 'endtime', 'lastlogin', 'date'];
+        
+        if (in_array($fieldName, $commonDateFields)) {
+            return true;
+        }
+        
+        // Check TCA eval for date/datetime/time
+        $fieldConfig = $this->getFieldConfig($table, $fieldName);
+        if (!$fieldConfig) {
+            return false;
+        }
+        
+        $config = $fieldConfig['config'] ?? [];
+        
+        // Check eval rules
+        if (!empty($config['eval'])) {
+            $evalRules = GeneralUtility::trimExplode(',', $config['eval'], true);
+            if (in_array('date', $evalRules) || in_array('datetime', $evalRules) || in_array('time', $evalRules)) {
+                return true;
+            }
+        }
+        
+        // Check renderType for inputDateTime
+        if (($config['renderType'] ?? '') === 'inputDateTime') {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Check if a field is a FlexForm field
+     */
+    public function isFlexFormField(string $table, string $fieldName): bool
+    {
+        $fieldConfig = $this->getFieldConfig($table, $fieldName);
+        if (!$fieldConfig) {
+            return false;
+        }
+        
+        $config = $fieldConfig['config'] ?? [];
+        if (!empty($config['type']) && $config['type'] === 'flex') {
+            return true;
+        }
+        
+        // Check common FlexForm field names
+        $knownFlexFormFields = [
+            'tt_content' => ['pi_flexform'],
+            'pages' => ['tx_templavoila_flex'],
+        ];
+        
+        if (isset($knownFlexFormFields[$table]) && in_array($fieldName, $knownFlexFormFields[$table])) {
+            return true;
+        }
+        
+        // Check field name pattern
+        if (strpos($fieldName, 'flexform') !== false) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Parse default sorting configuration into field/direction pairs
+     */
+    public function parseDefaultSorting(string $table): array
+    {
+        $defaultSorting = $this->getDefaultSorting($table);
+        if (!$defaultSorting) {
+            return [];
+        }
+        
+        $sortParts = GeneralUtility::trimExplode(',', $defaultSorting, true);
+        $sorting = [];
+        
+        foreach ($sortParts as $sortPart) {
+            $sortPart = trim($sortPart);
+            
+            // Extract field and direction
+            if (preg_match('/^(.*?)\s+(ASC|DESC)$/i', $sortPart, $matches)) {
+                $field = trim($matches[1]);
+                $direction = strtoupper($matches[2]);
+                $sorting[] = ['field' => $field, 'direction' => $direction];
+            } else {
+                // Default to ASC if no direction specified
+                $sorting[] = ['field' => $sortPart, 'direction' => 'ASC'];
+            }
+        }
+        
+        return $sorting;
+    }
+    
+    /**
+     * Get record title/label using TYPO3's BackendUtility
+     */
+    public function getRecordTitle(string $table, array $record): string
+    {
+        return BackendUtility::getRecordTitle($table, $record);
+    }
+    
+    /**
+     * Translate a TCA label using TYPO3's language system
+     */
+    public function translateLabel(string $label): string
+    {
+        if (strpos($label, 'LLL:') === 0) {
+            return $GLOBALS['LANG']->sL($label);
+        }
+        
+        return $label;
+    }
 }
