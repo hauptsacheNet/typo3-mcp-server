@@ -6,6 +6,7 @@ namespace Hn\McpServer\Service;
 
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
+use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -18,10 +19,12 @@ class TableAccessService implements SingletonInterface
 {
     protected ?BackendUserAuthentication $backendUser = null;
     protected WorkspaceContextService $workspaceContextService;
+    protected TcaSchemaFactory $tcaSchemaFactory;
     
     public function __construct()
     {
         $this->workspaceContextService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+        $this->tcaSchemaFactory = GeneralUtility::makeInstance(TcaSchemaFactory::class);
     }
     
     /**
@@ -239,43 +242,56 @@ class TableAccessService implements SingletonInterface
     {
         $this->validateTableAccess($table);
         
-        $fields = [];
-        $tca = $GLOBALS['TCA'][$table] ?? [];
-        
-        // Get type-specific configuration
-        $typeConfig = [];
-        if (!empty($type) && isset($tca['types'][$type])) {
-            $typeConfig = $tca['types'][$type];
-        } elseif (isset($tca['types']['1'])) {
-            // Default to type '1' if no specific type provided
-            $typeConfig = $tca['types']['1'];
-        } elseif (isset($tca['types']['0'])) {
-            // Some tables use '0' as default
-            $typeConfig = $tca['types']['0'];
+        // Check if schema exists for this table
+        if (!$this->tcaSchemaFactory->has($table)) {
+            return [];
         }
         
-        // Parse showitem to get visible fields
-        if (!empty($typeConfig['showitem'])) {
-            $showItems = GeneralUtility::trimExplode(',', $typeConfig['showitem'], true);
+        $schema = $this->tcaSchemaFactory->get($table);
+        $fields = [];
+        
+        // If a specific type is provided and the schema supports sub-schemas
+        if (!empty($type) && $schema->hasSubSchema($type)) {
+            $subSchema = $schema->getSubSchema($type);
             
-            foreach ($showItems as $item) {
-                $itemParts = GeneralUtility::trimExplode(';', $item, true);
-                $fieldName = $itemParts[0];
+            // Handle subtypes (old plugin system) - this will be deprecated
+            if ($subSchema->getSubTypeDivisorField() !== null) {
+                // For subtypes, we need the record data to determine the correct sub-schema
+                // Since we don't have record data here, use the main sub-schema
+                // The caller should handle subtype resolution if needed
+            }
+            
+            // Get fields from the sub-schema
+            foreach ($subSchema->getFields() as $field) {
+                $fieldName = $field->getName();
+                $fields[$fieldName] = $field->getConfiguration();
+            }
+        } else {
+            // No specific type or type doesn't exist - use main schema
+            // Try to fall back to a reasonable default type
+            if (empty($type) && $schema->supportsSubSchema()) {
+                // Get the default type from TCA configuration
+                $tca = $GLOBALS['TCA'][$table] ?? [];
+                $defaultType = $tca['columns'][$schema->getSubSchemaTypeInformation()->getFieldName()]['config']['default'] ?? '';
                 
-                // Handle palettes
-                if (strpos($fieldName, '--palette--') === 0) {
-                    $paletteName = $itemParts[2] ?? '';
-                    if (!empty($paletteName) && isset($tca['palettes'][$paletteName])) {
-                        $paletteFields = $this->getPaletteFields($table, $paletteName);
-                        $fields = array_merge($fields, $paletteFields);
+                if (!empty($defaultType) && $schema->hasSubSchema($defaultType)) {
+                    $subSchema = $schema->getSubSchema($defaultType);
+                    foreach ($subSchema->getFields() as $field) {
+                        $fieldName = $field->getName();
+                        $fields[$fieldName] = $field->getConfiguration();
                     }
-                } 
-                // Skip dividers
-                elseif (strpos($fieldName, '--div--') !== 0) {
-                    // Regular field
-                    if (isset($tca['columns'][$fieldName])) {
-                        $fields[$fieldName] = $tca['columns'][$fieldName];
+                } else {
+                    // No reasonable default found, use all main schema fields
+                    foreach ($schema->getFields() as $field) {
+                        $fieldName = $field->getName();
+                        $fields[$fieldName] = $field->getConfiguration();
                     }
+                }
+            } else {
+                // Use main schema fields
+                foreach ($schema->getFields() as $field) {
+                    $fieldName = $field->getName();
+                    $fields[$fieldName] = $field->getConfiguration();
                 }
             }
         }
@@ -510,40 +526,6 @@ class TableAccessService implements SingletonInterface
         return true;
     }
     
-    /**
-     * Get palette fields
-     */
-    protected function getPaletteFields(string $table, string $paletteName): array
-    {
-        $fields = [];
-        $tca = $GLOBALS['TCA'][$table] ?? [];
-        
-        if (!isset($tca['palettes'][$paletteName])) {
-            return $fields;
-        }
-        
-        $paletteConfig = $tca['palettes'][$paletteName];
-        
-        if (!empty($paletteConfig['showitem'])) {
-            $showItems = GeneralUtility::trimExplode(',', $paletteConfig['showitem'], true);
-            
-            foreach ($showItems as $item) {
-                $itemParts = GeneralUtility::trimExplode(';', $item, true);
-                $fieldName = $itemParts[0];
-                
-                // Skip special items
-                if (strpos($fieldName, '--') === 0) {
-                    continue;
-                }
-                
-                if (isset($tca['columns'][$fieldName])) {
-                    $fields[$fieldName] = $tca['columns'][$fieldName];
-                }
-            }
-        }
-        
-        return $fields;
-    }
     
     /**
      * Get control information for a table

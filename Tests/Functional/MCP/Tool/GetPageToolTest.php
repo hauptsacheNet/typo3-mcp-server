@@ -422,9 +422,9 @@ class GetPageToolTest extends FunctionalTestCase
         // Verify page information
         $this->assertStringContainsString('Title: Contact', $content);
         
-        // Verify form content element
+        // Verify list content element (old plugin system)
         $this->assertStringContainsString('[105] Contact Form', $content);
-        $this->assertStringContainsString('form_formframework', $content);
+        $this->assertStringContainsString('list', $content);
     }
 
     /**

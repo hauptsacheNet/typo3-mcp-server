@@ -614,6 +614,12 @@ class WriteTableTool extends AbstractRecordTool
                     continue;
                 }
                 
+                // Special handling for FlexForm fields which are dynamically added
+                if ($this->isFlexFormField($table, $fieldName)) {
+                    // FlexForm fields are valid if they exist in TCA, even if not in showitem
+                    continue;
+                }
+                
                 // If we have available fields configured and this field is not in the list
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
                     return "Field '{$fieldName}' is not available for this record type";

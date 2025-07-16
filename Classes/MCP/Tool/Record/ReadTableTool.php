@@ -362,6 +362,16 @@ class ReadTableTool extends AbstractRecordTool
         // Define essential fields that should always be included
         $essentialFields = ['uid', 'pid'];
         
+        // Add type field if it exists (critical for understanding record structure)
+        if (isset($GLOBALS['TCA'][$table]['ctrl']['type'])) {
+            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['type'];
+        }
+        
+        // Add label field if it exists (important for record identification)
+        if (isset($GLOBALS['TCA'][$table]['ctrl']['label'])) {
+            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['label'];
+        }
+        
         // Add language field if it exists
         if (isset($GLOBALS['TCA'][$table]['ctrl']['languageField'])) {
             $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
@@ -373,11 +383,6 @@ class ReadTableTool extends AbstractRecordTool
         }
         if (isset($GLOBALS['TCA'][$table]['ctrl']['crdate'])) {
             $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['crdate'];
-        }
-        
-        // Add delete field if it exists
-        if (isset($GLOBALS['TCA'][$table]['ctrl']['delete'])) {
-            $essentialFields[] = $GLOBALS['TCA'][$table]['ctrl']['delete'];
         }
         
         // Add hidden field if it exists
@@ -393,15 +398,16 @@ class ReadTableTool extends AbstractRecordTool
         // Get type-specific fields if a type field exists
         $typeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
         $typeSpecificFields = [];
+        $hasValidTypeConfig = false;
         
         if ($typeField && isset($record[$typeField])) {
             $recordType = (string)$record[$typeField];
             $typeSpecificFields = $this->tableAccessService->getFieldNamesForType($table, $recordType);
-        }
-        
-        // If no type-specific fields are found, include all columns defined in TCA
-        if (empty($typeSpecificFields) && isset($GLOBALS['TCA'][$table]['columns'])) {
-            $typeSpecificFields = array_keys($GLOBALS['TCA'][$table]['columns']);
+            
+            // The TcaSchemaFactory will handle type validation internally
+            // If the type is valid, we'll get the appropriate fields
+            // If not, we'll get a reasonable fallback
+            $hasValidTypeConfig = !empty($typeSpecificFields);
         }
         
         // Process each field
@@ -417,8 +423,8 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
             
-            // Skip fields not relevant to this record type (if type fields are available)
-            if (!empty($typeSpecificFields) && !in_array($field, $typeSpecificFields)) {
+            // Skip fields not relevant to this record type (only if we have a valid type configuration)
+            if ($hasValidTypeConfig && !empty($typeSpecificFields) && !in_array($field, $typeSpecificFields)) {
                 continue;
             }
             

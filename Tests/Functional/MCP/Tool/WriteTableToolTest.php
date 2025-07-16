@@ -77,7 +77,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($pageResult->isError);
+        $this->assertFalse($pageResult->isError, json_encode($pageResult->content));
         
         // Parse the JSON result to get the new page UID
         $pageData = json_decode($pageResult->content[0]->text, true);
@@ -99,7 +99,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($contentResult->isError);
+        $this->assertFalse($contentResult->isError, json_encode($contentResult->content));
         
         // Verify the content was created
         $contentData = json_decode($contentResult->content[0]->text, true);
@@ -128,7 +128,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         $data = json_decode($result->content[0]->text, true);
         $this->assertEquals('update', $data['action']);
@@ -156,7 +156,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($bottomResult->isError);
+        $this->assertFalse($bottomResult->isError, json_encode($bottomResult->content));
         
         // Create content after specific element
         $afterResult = $tool->execute([
@@ -171,7 +171,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($afterResult->isError);
+        $this->assertFalse($afterResult->isError, json_encode($afterResult->content));
         $afterData = json_decode($afterResult->content[0]->text, true);
         
         // Verify the record was created and positioned
@@ -217,7 +217,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
         $this->assertCount(1, $result->content);
         $this->assertInstanceOf(TextContent::class, $result->content[0]);
         
@@ -248,7 +248,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         $data = json_decode($result->content[0]->text, true);
         $this->assertEquals('update', $data['action']);
@@ -269,7 +269,7 @@ class WriteTableToolTest extends FunctionalTestCase
             'uid' => 101
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         $data = json_decode($result->content[0]->text, true);
         $this->assertEquals('delete', $data['action']);
@@ -296,7 +296,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         $data = json_decode($result->content[0]->text, true);
         $newUid = $data['uid'];
@@ -338,7 +338,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         $data = json_decode($result->content[0]->text, true);
         $this->assertIsArray($data);
@@ -383,7 +383,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         $data = json_decode($result->content[0]->text, true);
         $this->assertIsArray($data);
@@ -428,7 +428,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         $data = json_decode($result->content[0]->text, true);
         $this->assertIsInt($data['uid']);
@@ -455,7 +455,7 @@ class WriteTableToolTest extends FunctionalTestCase
                 'doktype' => 1
             ]
         ]);
-        $this->assertFalse($pageResult->isError);
+        $this->assertFalse($pageResult->isError, json_encode($pageResult->content));
         $pageData = json_decode($pageResult->content[0]->text, true);
         $createResults[] = ['table' => 'pages', 'uid' => $pageData['uid']];
         
@@ -469,7 +469,7 @@ class WriteTableToolTest extends FunctionalTestCase
                 'header' => 'Workspace Test Content'
             ]
         ]);
-        $this->assertFalse($contentResult->isError);
+        $this->assertFalse($contentResult->isError, json_encode($contentResult->content));
         $contentData = json_decode($contentResult->content[0]->text, true);
         $createResults[] = ['table' => 'tt_content', 'uid' => $contentData['uid']];
         
@@ -666,22 +666,25 @@ class WriteTableToolTest extends FunctionalTestCase
         $tool = new WriteTableTool();
         
         // Test creating content with FlexForm data
-        // Use table content element which has a pi_flexform field
+        // Use list content element which has a pi_flexform field
         $result = $tool->execute([
             'action' => 'create',
             'table' => 'tt_content',
             'pid' => 1,
             'data' => [
-                'CType' => 'table',
-                'header' => 'Table with FlexForm',
+                'CType' => 'list',
+                'header' => 'Plugin with FlexForm',
                 'pi_flexform' => [
                     'settings' => [
-                        'caption' => 'Table Caption',
+                        'caption' => 'Plugin Caption',
                         'headerPosition' => 'top'
                     ]
                 ]
             ]
         ]);
+        
+        // Check for errors first
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         // Check the result
         $data = json_decode($result->content[0]->text, true);
@@ -729,7 +732,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         // The tool should convert ISO date to timestamp
         $data = json_decode($result->content[0]->text, true);
@@ -743,17 +746,20 @@ class WriteTableToolTest extends FunctionalTestCase
     {
         $tool = new WriteTableTool();
         
-        // Test with a simple multi-select field instead of categories which uses MM relation
+        // Test with the actual categories field which is available for textmedia
         $result = $tool->execute([
             'action' => 'create',
             'table' => 'tt_content',
             'pid' => 1,
             'data' => [
                 'CType' => 'textmedia',
-                'header' => 'Content with Multiple Selection',
-                'selected_categories' => '1,2' // Use comma-separated string
+                'header' => 'Content with Categories',
+                'categories' => '1,2' // Use comma-separated string for category UIDs
             ]
         ]);
+        
+        // Check for errors first
+        $this->assertFalse($result->isError, json_encode($result->content));
         
         // This test is now just checking that the tool handles data correctly
         $data = json_decode($result->content[0]->text, true);
@@ -874,7 +880,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($result->isError);
+        $this->assertFalse($result->isError, json_encode($result->content));
     }
 
     /**

@@ -123,7 +123,7 @@ class SiteInformationService
             }
         } catch (\Throwable $e) {
             // Log error but continue to fallback strategies
-            error_log('SiteInformationService: Error generating URL for page ' . $pageId . ': ' . $e->getMessage());
+            // error_log('SiteInformationService: Error generating URL for page ' . $pageId . ': ' . $e->getMessage());
         }
         
         // Fallback: Try to get page record and build URL from slug
