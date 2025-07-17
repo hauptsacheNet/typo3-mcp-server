@@ -858,7 +858,26 @@ class TableAccessService implements SingletonInterface
     public function translateLabel(string $label): string
     {
         if (strpos($label, 'LLL:') === 0) {
-            return $GLOBALS['LANG']->sL($label);
+            $translated = $GLOBALS['LANG']->sL($label);
+            
+            // If translation failed, try to extract a meaningful fallback
+            if (empty($translated)) {
+                // Extract the last part of the LLL path as fallback
+                // e.g., "LLL:EXT:news/Resources/Private/Language/locallang_be.xlf:plugin.news_list.title" -> "news_list"
+                if (preg_match('/\.([^.]+)\.title$/', $label, $matches)) {
+                    return str_replace('_', ' ', ucfirst($matches[1]));
+                }
+                
+                // For other patterns, extract the last meaningful part
+                if (preg_match('/[:\.]([^:.]+)$/', $label, $matches)) {
+                    return str_replace(['_', '-'], ' ', ucfirst($matches[1]));
+                }
+                
+                // Last resort: return the raw LLL reference (better than empty)
+                return $label;
+            }
+            
+            return $translated;
         }
         
         return $label;

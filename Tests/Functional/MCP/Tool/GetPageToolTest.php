@@ -9,7 +9,6 @@ use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\SiteInformationService;
 use Mcp\Types\TextContent;
 use Symfony\Component\Yaml\Yaml;
-use TYPO3\CMS\Core\Configuration\SiteConfiguration;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
@@ -207,8 +206,8 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertStringContainsString('[100] Welcome Header', $content);
         $this->assertStringContainsString('[101] About Section', $content);
         
-        // Hidden content should not be included
-        $this->assertStringNotContainsString('[104] Hidden Content', $content);
+        // Hidden content should now be included (always show hidden records)
+        $this->assertStringContainsString('[104] Hidden Content', $content);
     }
 
     /**
@@ -236,30 +235,6 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertStringContainsString('URL:', $content);
         // Should show full site URL with site config
         $this->assertStringContainsString('https://example.com/about', $content);
-    }
-
-    /**
-     * Test getting page with hidden content included
-     */
-    public function testGetPageWithHiddenContent(): void
-    {
-        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
-        
-        $result = $tool->execute([
-            'uid' => 1,
-            'includeHidden' => true
-        ]);
-        
-        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
-        $content = $result->content[0]->text;
-        
-        // Now hidden content should be included
-        $this->assertStringContainsString('[104] Hidden Content', $content);
-        
-        // Regular content should still be there
-        $this->assertStringContainsString('[100] Welcome Header', $content);
-        $this->assertStringContainsString('[101] About Section', $content);
     }
 
     /**
@@ -391,7 +366,6 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('parameters', $schema);
         $this->assertArrayHasKey('properties', $schema['parameters']);
         $this->assertArrayHasKey('uid', $schema['parameters']['properties']);
-        $this->assertArrayHasKey('includeHidden', $schema['parameters']['properties']);
         $this->assertArrayHasKey('languageId', $schema['parameters']['properties']);
         
         // Verify oneOf constraint (either uid or url is required)

@@ -7,7 +7,6 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\SearchTool;
 use Hn\McpServer\MCP\ToolRegistry;
 use Mcp\Types\TextContent;
-use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 class SearchToolTest extends FunctionalTestCase
@@ -186,40 +185,27 @@ class SearchToolTest extends FunctionalTestCase
     }
 
     /**
-     * Test search with hidden records
+     * Test that search finds hidden records
      */
-    public function testSearchWithHiddenRecords(): void
+    public function testSearchFindsHiddenRecords(): void
     {
         $tool = new SearchTool();
         
-        // Default: without hidden records
+        // Hidden records are always included now
         $result = $tool->execute([
-            'terms' => ['hidden'],
-            'includeHidden' => false
+            'terms' => ['hidden']
         ]);
         
         $this->assertFalse($result->isError);
         $content = $result->content[0]->text;
         
-        // Should NOT find hidden content element
-        $this->assertStringNotContainsString('[UID: 104]', $content);
+        // Should find hidden content element
+        $this->assertStringContainsString('[UID: 104]', $content);
+        $this->assertStringContainsString('Hidden Content', $content);
         
-        // The hidden page might still appear because the search looks for "hidden" in the title
-        // which matches even non-hidden pages with "hidden" in their visible fields
-        
-        // With hidden records included
-        $result = $tool->execute([
-            'terms' => ['hidden'],
-            'includeHidden' => true
-        ]);
-        
-        $content = $result->content[0]->text;
-        
-        // Should now find hidden content
-        $this->assertStringContainsString('[UID: 104] Hidden Content', $content);
-        
-        // Should also find hidden page
-        $this->assertStringContainsString('[UID: 3] Hidden Page', $content);
+        // Should also find the hidden page
+        $this->assertStringContainsString('[UID: 3]', $content);
+        $this->assertStringContainsString('Hidden Page', $content);
     }
 
     /**
@@ -495,7 +481,8 @@ class SearchToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('termLogic', $properties);
         $this->assertArrayHasKey('table', $properties);
         $this->assertArrayHasKey('pageId', $properties);
-        $this->assertArrayHasKey('includeHidden', $properties);
+        // includeHidden should not exist anymore
+        $this->assertArrayNotHasKey('includeHidden', $properties);
         $this->assertArrayHasKey('limit', $properties);
         
         // Check required fields
@@ -515,8 +502,7 @@ class SearchToolTest extends FunctionalTestCase
         
         // Search that should find results in multiple tables
         $result = $tool->execute([
-            'terms' => ['contact'],
-            'includeHidden' => false
+            'terms' => ['contact']
         ]);
         
         $this->assertFalse($result->isError);

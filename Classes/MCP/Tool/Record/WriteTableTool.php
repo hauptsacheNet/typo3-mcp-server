@@ -10,7 +10,6 @@ use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
-use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 
 /**
  * Tool for writing records to TYPO3 tables
@@ -378,7 +377,7 @@ class WriteTableTool extends AbstractRecordTool
      * @param int|null $uid Record UID (required for update actions)
      * @return true|string True if valid, error message if invalid
      */
-    protected function validateRecordData(string $table, array $data, string $action, ?int $uid = null)
+    protected function validateRecordData(string $table, array &$data, string $action, ?int $uid = null)
     {
         // Table access has already been validated by ensureTableAccess() before this method is called
         // No need to re-check table existence here
@@ -549,8 +548,38 @@ class WriteTableTool extends AbstractRecordTool
                             
                             // Convert array to comma-separated string for TYPO3
                             if (is_array($value)) {
-                                $data[$fieldName] = implode(',', $value);
+                                // Ensure all values are strings for consistency
+                                $stringValues = array_map('strval', $value);
+                                $data[$fieldName] = implode(',', $stringValues);
                             }
+                        }
+                    }
+                    break;
+                    
+                case 'category':
+                    // Category fields can have different relationship types
+                    $relationship = $fieldConfig['config']['relationship'] ?? 'manyToMany';
+                    
+                    if ($relationship === 'oneToOne' || $relationship === 'manyToOne') {
+                        // Single category relation - expects an integer or empty value
+                        if ($value === null || $value === '' || $value === 0) {
+                            $data[$fieldName] = 0;
+                        } elseif (is_numeric($value)) {
+                            $data[$fieldName] = (int)$value;
+                        } else {
+                            return 'Field "' . $fieldName . '" must be a single category ID';
+                        }
+                    } else {
+                        // Many-to-many category relations (default)
+                        if (is_array($value)) {
+                            // Convert array to comma-separated string for TYPO3
+                            $stringValues = array_map('strval', $value);
+                            $data[$fieldName] = implode(',', $stringValues);
+                        } elseif (is_string($value)) {
+                            // Already a string, use as-is
+                            $data[$fieldName] = $value;
+                        } else {
+                            return 'Field "' . $fieldName . '" must be an array or comma-separated string';
                         }
                     }
                     break;

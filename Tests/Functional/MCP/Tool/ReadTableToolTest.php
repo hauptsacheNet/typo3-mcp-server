@@ -6,7 +6,6 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Mcp\Types\TextContent;
-use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 class ReadTableToolTest extends FunctionalTestCase
@@ -58,8 +57,8 @@ class ReadTableToolTest extends FunctionalTestCase
         $this->assertEquals('tt_content', $data['table']);
         $this->assertArrayHasKey('records', $data);
         
-        // Should have 2 visible content elements (100, 101) but not hidden one (104)
-        $this->assertCount(2, $data['records']);
+        // Should have 3 content elements including hidden one (100, 101, 104)
+        $this->assertCount(3, $data['records']);
         
         // Verify record structure
         $firstRecord = $data['records'][0];
@@ -67,37 +66,11 @@ class ReadTableToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('header', $firstRecord);
         $this->assertArrayHasKey('CType', $firstRecord);
         
-        // Verify specific content
+        // Verify specific content - now includes hidden records
         $uids = array_column($data['records'], 'uid');
         $this->assertContains(100, $uids);
         $this->assertContains(101, $uids);
-        $this->assertNotContains(104, $uids); // Hidden content should not be included
-    }
-
-    /**
-     * Test reading records by PID with hidden records included
-     */
-    public function testReadRecordsByPidWithHidden(): void
-    {
-        $tool = new ReadTableTool();
-        
-        $result = $tool->execute([
-            'table' => 'tt_content',
-            'pid' => 1,
-            'includeHidden' => true,
-            'includeRelations' => false
-        ]);
-        
-        $this->assertFalse($result->isError);
-        $data = json_decode($result->content[0]->text, true);
-        
-        // Should now have 3 content elements including the hidden one
-        $this->assertCount(3, $data['records']);
-        
-        $uids = array_column($data['records'], 'uid');
-        $this->assertContains(100, $uids);
-        $this->assertContains(101, $uids);
-        $this->assertContains(104, $uids); // Hidden content should now be included
+        $this->assertContains(104, $uids); // Hidden content is now included
     }
 
     /**
@@ -319,7 +292,8 @@ class ReadTableToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('pid', $properties);
         $this->assertArrayHasKey('uid', $properties);
         $this->assertArrayHasKey('limit', $properties);
-        $this->assertArrayHasKey('includeRelations', $properties);
+        $this->assertArrayHasKey('offset', $properties);
+        $this->assertArrayHasKey('where', $properties);
     }
 
     /**
@@ -338,12 +312,13 @@ class ReadTableToolTest extends FunctionalTestCase
         $this->assertFalse($result->isError);
         $data = json_decode($result->content[0]->text, true);
         
-        // Records should be sorted by sorting field (ascending)
-        $this->assertCount(2, $data['records']);
+        // Records should be sorted by sorting field (ascending) - now includes hidden
+        $this->assertCount(3, $data['records']);
         
         $sortingValues = array_column($data['records'], 'sorting');
         $this->assertEquals(256, $sortingValues[0]);
         $this->assertEquals(512, $sortingValues[1]);
+        $this->assertEquals(768, $sortingValues[2]); // Hidden record
     }
 
     /**

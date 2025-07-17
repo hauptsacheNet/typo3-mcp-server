@@ -11,7 +11,6 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
-use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
@@ -63,10 +62,6 @@ class GetPageTool extends AbstractRecordTool
                         'type' => 'string',
                         'description' => 'The URL of the page to retrieve (alternative to uid). Can be full URL, path, or slug. ' . $domainsText,
                     ],
-                    'includeHidden' => [
-                        'type' => 'boolean',
-                        'description' => 'Whether to include hidden records (default: false)',
-                    ],
                     'languageId' => [
                         'type' => 'integer',
                         'description' => 'Language ID for URL generation (default: 0)',
@@ -85,7 +80,6 @@ class GetPageTool extends AbstractRecordTool
      */
     public function execute(array $params): CallToolResult
     {
-        $includeHidden = (bool)($params['includeHidden'] ?? false);
         $languageId = (int)($params['languageId'] ?? 0);
 
         // Determine page UID from either uid parameter or url parameter
@@ -118,7 +112,7 @@ class GetPageTool extends AbstractRecordTool
             $pageUrl = $this->siteInformationService->generatePageUrl((int)$pageData['uid'], $languageId);
             
             // Get records on this page
-            $recordsInfo = $this->getPageRecords($uid, $includeHidden);
+            $recordsInfo = $this->getPageRecords($uid);
             
             // Build a text representation of the page information
             $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl);
@@ -171,7 +165,7 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Get records on the page grouped by table
      */
-    protected function getPageRecords(int $pageId, bool $includeHidden): array
+    protected function getPageRecords(int $pageId): array
     {
         // Get all tables that can be on a page
         $tables = $this->getContentTables();
@@ -179,7 +173,7 @@ class GetPageTool extends AbstractRecordTool
         $recordsInfo = [];
         
         foreach ($tables as $table) {
-            $tableInfo = $this->getTableRecordsInfo($table, $pageId, $includeHidden);
+            $tableInfo = $this->getTableRecordsInfo($table, $pageId);
             
             if (!empty($tableInfo['records'])) {
                 $recordsInfo[$table] = $tableInfo;
@@ -214,7 +208,7 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Get information about records from a specific table on a page
      */
-    protected function getTableRecordsInfo(string $table, int $pageId, bool $includeHidden): array
+    protected function getTableRecordsInfo(string $table, int $pageId): array
     {
         // Skip if table is not accessible
         if (!$this->tableAccessService->canAccessTable($table)) {
@@ -231,9 +225,7 @@ class GetPageTool extends AbstractRecordTool
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
         
-        if (!$includeHidden && isset($GLOBALS['TCA'][$table]['ctrl']['enablecolumns']['disabled'])) {
-            $queryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
-        }
+        // Always include hidden records (like the TYPO3 backend does)
 
         // First, get the total count of records
         $countQueryBuilder = clone $queryBuilder;

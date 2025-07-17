@@ -36,8 +36,7 @@ class GetPageTreeToolTest extends FunctionalTestCase
         // Test getting page tree from root (pid=0)
         $result = $tool->execute([
             'startPage' => 0,
-            'depth' => 2,
-            'includeHidden' => false
+            'depth' => 2
         ]);
         
         // Verify result structure
@@ -51,28 +50,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
         $this->assertStringContainsString('[2] About Us', $content);
         $this->assertStringContainsString('[6] Contact', $content);
         
-        // Hidden page should not be included
-        $this->assertStringNotContainsString('[3] Hidden Page', $content);
-    }
-
-    /**
-     * Test getting page tree with hidden pages included
-     */
-    public function testGetPageTreeWithHiddenPages(): void
-    {
-        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTreeTool($siteInformationService);
-        
-        $result = $tool->execute([
-            'startPage' => 0,
-            'depth' => 2,
-            'includeHidden' => true
-        ]);
-        
-        $content = $result->content[0]->text;
-        
-        // Now hidden page should be included
-        $this->assertStringContainsString('[3] Hidden Page [HIDDEN]', $content);
+        // Hidden page should now be included (always show hidden records)
+        $this->assertStringContainsString('[3] Hidden Page', $content);
     }
 
     /**
@@ -86,8 +65,7 @@ class GetPageTreeToolTest extends FunctionalTestCase
         // Get tree starting from page 1 (Home)
         $result = $tool->execute([
             'startPage' => 1,
-            'depth' => 2,
-            'includeHidden' => false
+            'depth' => 2
         ]);
         
         $content = $result->content[0]->text;
@@ -113,8 +91,7 @@ class GetPageTreeToolTest extends FunctionalTestCase
         // Get tree with depth 1
         $result = $tool->execute([
             'startPage' => 0,
-            'depth' => 1,
-            'includeHidden' => false
+            'depth' => 1
         ]);
         
         $content = $result->content[0]->text;
@@ -123,8 +100,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
         $this->assertStringContainsString('[1] Home', $content);
         $this->assertStringNotContainsString('[6] Contact', $content); // Contact is now a subpage
         
-        // Should show subpage count but not the actual subpages (Home now has 3 subpages: About, Contact, News)
-        $this->assertStringContainsString('(3 subpages)', $content);
+        // Should show subpage count but not the actual subpages (Home now has 4 subpages including hidden)
+        $this->assertStringContainsString('(4 subpages)', $content);
         
         // Should not contain second-level pages
         $this->assertStringNotContainsString('[2] About Us', $content);
@@ -149,8 +126,7 @@ class GetPageTreeToolTest extends FunctionalTestCase
         // Execute through registry
         $result = $tool->execute([
             'startPage' => 0,
-            'depth' => 1,
-            'includeHidden' => false
+            'depth' => 1
         ]);
         
         $content = $result->content[0]->text;
@@ -183,6 +159,5 @@ class GetPageTreeToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('properties', $schema['parameters']);
         $this->assertArrayHasKey('startPage', $schema['parameters']['properties']);
         $this->assertArrayHasKey('depth', $schema['parameters']['properties']);
-        $this->assertArrayHasKey('includeHidden', $schema['parameters']['properties']);
     }
 }

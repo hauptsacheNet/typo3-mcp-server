@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Mcp\Types\CallToolResult;
-use Mcp\Types\TextContent;
-use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
@@ -142,7 +140,7 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         // Get the type field using TableAccessService
         $typeField = $this->tableAccessService->getTypeFieldName($table);
-        $excludeTypes = $this->getRemovedTypesByTSconfig($table, $typeField);
+        $excludeTypes = !empty($typeField) ? $this->getRemovedTypesByTSconfig($table, $typeField) : [];
         
         // Get available types using TableAccessService
         $types = $this->tableAccessService->getAvailableTypes($table);
@@ -291,7 +289,8 @@ class GetTableSchemaTool extends AbstractRecordTool
                                 // Add the field to the result with proper indentation
                                 $prefix = ($paletteItem === $lastPaletteField) ? "└─ " : "├─ ";
                                 $fieldLabel = isset($fieldConfig['label']) ? $this->translateLabel($fieldConfig['label']) : $paletteFieldName;
-                                $fieldType = $fieldConfig['config']['type'] ?? 'unknown';
+                                // TcaSchemaFactory returns flattened config where type is at top level
+                                $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
                                 $result .= "    " . $prefix . $paletteFieldName . " (" . $fieldLabel . "): " . $fieldType;
                                 
                                 // Add field details inline
@@ -310,7 +309,8 @@ class GetTableSchemaTool extends AbstractRecordTool
                         
                         // Add the field to the result
                         $fieldLabel = isset($fieldConfig['label']) ? $this->translateLabel($fieldConfig['label']) : $fieldName;
-                        $fieldType = $fieldConfig['config']['type'] ?? 'unknown';
+                        // TcaSchemaFactory returns flattened config where type is at top level
+                        $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
                         $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
                         
                         // Add field details inline
@@ -329,7 +329,8 @@ class GetTableSchemaTool extends AbstractRecordTool
      */
     protected function addFieldDetailsInline(string &$result, array $fieldConfig, string $fieldName, string $table, string $filterType = ''): void
     {
-        $config = $fieldConfig['config'] ?? [];
+        // Handle both flattened (from TcaSchemaFactory) and nested (traditional TCA) structures
+        $config = $fieldConfig['config'] ?? $fieldConfig;
         $type = $config['type'] ?? '';
         
         // Add field details based on type

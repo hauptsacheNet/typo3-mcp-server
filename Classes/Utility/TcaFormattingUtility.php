@@ -72,6 +72,14 @@ class TcaFormattingUtility
                     $result .= " [renderType: " . $config['renderType'] . "]";
                 }
                 
+                // Add foreign table and MM information
+                if (isset($config['foreign_table'])) {
+                    $result .= " [foreign table: " . $config['foreign_table'] . "]";
+                }
+                if (isset($config['MM'])) {
+                    $result .= " [MM table: " . $config['MM'] . "]";
+                }
+                
                 // Add select options if available
                 if (isset($config['items']) && is_array($config['items'])) {
                     $options = [];

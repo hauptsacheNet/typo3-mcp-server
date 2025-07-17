@@ -2,3 +2,5 @@
 - Run the tests using `composer test`. Test must cover the TYPO3 integration.
 - The Tools for LLMs don't need backwards compatibility. We can completely change parameters or even their names if it better describes them without it being a breaking change.
 - Every Tool must use TYPO3 Workspaces. Live data must never be directly edited. However: Ensure that the workspaces are invisible to the LLM, for example, by only exposing the live id.
+- In Tests: check all MCP tool call for failure like this: `$this->assertFalse($result->isError, json_encode($result->jsonSerialize()));`
+- Always check if there is some typo3 core api that can be used for TCA related data actions.

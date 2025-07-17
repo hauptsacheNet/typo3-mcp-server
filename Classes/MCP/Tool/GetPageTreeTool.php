@@ -44,10 +44,6 @@ class GetPageTreeTool extends AbstractTool
                         'type' => 'integer',
                         'description' => 'The depth of pages to retrieve (default: 3)',
                     ],
-                    'includeHidden' => [
-                        'type' => 'boolean',
-                        'description' => 'Whether to include hidden pages (default: false)',
-                    ],
                 ],
                 'required' => ['startPage'],
             ],
@@ -61,10 +57,9 @@ class GetPageTreeTool extends AbstractTool
     {
         $startPage = (int)($params['startPage'] ?? 0);
         $depth = (int)($params['depth'] ?? 3);
-        $includeHidden = (bool)($params['includeHidden'] ?? false);
 
         // Get page tree with the specified parameters
-        $pageTree = $this->getPageTree($startPage, $depth, $includeHidden);
+        $pageTree = $this->getPageTree($startPage, $depth);
         
         // Convert the page tree to a text-based tree with indentation
         $textTree = $this->renderTextTree($pageTree);
@@ -75,7 +70,7 @@ class GetPageTreeTool extends AbstractTool
     /**
      * Get the page tree
      */
-    protected function getPageTree(int $startPage, int $depth, bool $includeHidden): array
+    protected function getPageTree(int $startPage, int $depth): array
     {
         // Get database connection for pages table
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
@@ -103,13 +98,6 @@ class GetPageTreeTool extends AbstractTool
             );
         }
 
-        // Only include non-hidden pages if includeHidden is false
-        if (!$includeHidden) {
-            $query->andWhere(
-                $queryBuilder->expr()->eq('hidden', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
-            );
-        }
-
         // Order by sorting
         $query->orderBy('sorting');
 
@@ -132,12 +120,12 @@ class GetPageTreeTool extends AbstractTool
 
             // Check if there are subpages if depth > 1
             if ($depth > 1) {
-                $subpages = $this->getPageTree((int)$page['uid'], $depth - 1, $includeHidden);
+                $subpages = $this->getPageTree((int)$page['uid'], $depth - 1);
                 $pageData['subpages'] = $subpages;
                 $pageData['subpageCount'] = count($subpages);
             } else {
                 // We're at max depth, count the number of subpages
-                $pageData['subpageCount'] = $this->countSubpages((int)$page['uid'], $includeHidden);
+                $pageData['subpageCount'] = $this->countSubpages((int)$page['uid']);
             }
 
             $pageTree[] = $pageData;
@@ -149,7 +137,7 @@ class GetPageTreeTool extends AbstractTool
     /**
      * Count the number of subpages for a page
      */
-    protected function countSubpages(int $pageId, bool $includeHidden): int
+    protected function countSubpages(int $pageId): int
     {
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
@@ -163,12 +151,6 @@ class GetPageTreeTool extends AbstractTool
             ->where(
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
             );
-
-        if (!$includeHidden) {
-            $query->andWhere(
-                $queryBuilder->expr()->eq('hidden', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
-            );
-        }
 
         return (int)$query->executeQuery()->fetchOne();
     }

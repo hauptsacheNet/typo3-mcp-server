@@ -12,11 +12,17 @@
     },
     "require-dev": {
         "typo3/testing-framework": "^9.2.0",
-        "typo3/cms-install": "^13.4"
+        "typo3/cms-install": "^13.4",
+        "georgringer/news": "^12.0"
     },
     "autoload": {
         "psr-4": {
             "Hn\\McpServer\\": "Classes/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Hn\\McpServer\\Tests\\": "Tests/"
         }
     },
     "extra": {

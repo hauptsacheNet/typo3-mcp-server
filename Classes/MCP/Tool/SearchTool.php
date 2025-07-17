@@ -9,7 +9,6 @@ use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
-use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\Utility\RecordFormattingUtility;
@@ -61,10 +60,6 @@ class SearchTool extends AbstractRecordTool
                     'pageId' => [
                         'type' => 'integer',
                         'description' => 'Optional: Limit search to records on a specific page',
-                    ],
-                    'includeHidden' => [
-                        'type' => 'boolean',
-                        'description' => 'Whether to include hidden records (default: false)',
                     ],
                     'limit' => [
                         'type' => 'integer',
@@ -168,7 +163,6 @@ class SearchTool extends AbstractRecordTool
         $termLogic = strtoupper($params['termLogic'] ?? 'OR');
         $table = trim($params['table'] ?? '');
         $pageId = isset($params['pageId']) ? (int)$params['pageId'] : null;
-        $includeHidden = (bool)($params['includeHidden'] ?? false);
         $limit = 50;
 
         // Validate search parameters
@@ -191,7 +185,7 @@ class SearchTool extends AbstractRecordTool
 
         try {
             // Get search results
-            $searchResults = $this->performSearch($searchTerms, $termLogic, $table, $pageId, $includeHidden, $limit);
+            $searchResults = $this->performSearch($searchTerms, $termLogic, $table, $pageId, $limit);
             
             // Format results
             $formattedResults = $this->formatSearchResults($searchResults, $searchTerms, $termLogic);
@@ -252,7 +246,7 @@ class SearchTool extends AbstractRecordTool
     /**
      * Perform search across tables (including inline relations)
      */
-    protected function performSearch(array $searchTerms, string $termLogic, string $table, ?int $pageId, bool $includeHidden, int $limit): array
+    protected function performSearch(array $searchTerms, string $termLogic, string $table, ?int $pageId, int $limit): array
     {
         $searchResults = [];
         $inlineTableMetadata = [];
@@ -278,7 +272,7 @@ class SearchTool extends AbstractRecordTool
                 continue;
             }
             
-            $results = $this->searchInTable($tableName, $searchTerms, $termLogic, $searchableFields, $pageId, $includeHidden, $limit);
+            $results = $this->searchInTable($tableName, $searchTerms, $termLogic, $searchableFields, $pageId, $limit);
             
             if (!empty($results) && !empty($results['records'])) {
                 // Mark inline table results for attribution
@@ -558,7 +552,7 @@ class SearchTool extends AbstractRecordTool
     /**
      * Search in a specific table with multiple terms and AND/OR logic
      */
-    protected function searchInTable(string $table, array $searchTerms, string $termLogic, array $searchableFields, ?int $pageId, bool $includeHidden, int $limit): array
+    protected function searchInTable(string $table, array $searchTerms, string $termLogic, array $searchableFields, ?int $pageId, int $limit): array
     {
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
@@ -569,11 +563,6 @@ class SearchTool extends AbstractRecordTool
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
             ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
-
-        // Don't include hidden records unless explicitly requested
-        if (!$includeHidden) {
-            $queryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
-        }
 
         // Select all fields
         $queryBuilder->select('*')->from($table);

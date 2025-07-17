@@ -130,15 +130,16 @@ class GetTableSchemaToolTest extends FunctionalTestCase
             'table' => 'sys_category'
         ]);
         
-        // The tool currently has a bug with tables without type fields
-        // So we expect an error for now
-        $this->assertTrue($result->isError);
+        // sys_category doesn't have a type field, but should work now
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertCount(1, $result->content);
         
         $content = $result->content[0]->text;
         
-        // Verify error contains expected information
-        $this->assertStringContainsString('Error getting table schema', $content);
+        // Verify basic schema information is present
+        $this->assertStringContainsString('TABLE SCHEMA: sys_category', $content);
+        $this->assertStringContainsString('title', $content);
+        $this->assertStringContainsString('parent', $content);
     }
 
     /**

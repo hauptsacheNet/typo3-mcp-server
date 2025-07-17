@@ -4,19 +4,15 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool\Record;
 
-use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\ParameterType;
 use Mcp\Types\CallToolResult;
-use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
-use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
-use TYPO3\CMS\Core\Utility\MathUtility;
 
 /**
  * Tool for reading records from TYPO3 tables
@@ -65,10 +61,6 @@ class ReadTableTool extends AbstractRecordTool
                         'type' => 'integer',
                         'description' => 'Offset for pagination',
                     ],
-                    'includeRelations' => [
-                        'type' => 'boolean',
-                        'description' => 'Whether to include related records',
-                    ],
                 ],
             ],
             'examples' => [
@@ -76,8 +68,7 @@ class ReadTableTool extends AbstractRecordTool
                     'description' => 'Read all content elements on a page',
                     'parameters' => [
                         'table' => 'tt_content',
-                        'pid' => 123,
-                        'includeRelations' => true
+                        'pid' => 123
                     ]
                 ],
                 [
@@ -100,10 +91,8 @@ class ReadTableTool extends AbstractRecordTool
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
         $condition = $params['where'] ?? '';
-        $includeHidden = $params['includeHidden'] ?? false;
         $limit = isset($params['limit']) ? (int)$params['limit'] : 20;
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
-        $includeRelations = $params['includeRelations'] ?? true;
 
         if (empty($table)) {
             return $this->createErrorResult('Table name is required');
@@ -123,15 +112,12 @@ class ReadTableTool extends AbstractRecordTool
                 $pid,
                 $uid,
                 $condition,
-                $includeHidden,
                 $limit,
                 $offset
             );
 
-            // Include related records if requested
-            if ($includeRelations) {
-                $result = $this->includeRelations($result, $table);
-            }
+            // Include related records
+            $result = $this->includeRelations($result, $table);
 
             // Return the result as JSON
             return $this->createJsonResult($result);
@@ -148,7 +134,6 @@ class ReadTableTool extends AbstractRecordTool
         ?int $pid,
         ?int $uid,
         string $condition,
-        bool $includeHidden,
         int $limit,
         int $offset
     ): array {
@@ -162,10 +147,7 @@ class ReadTableTool extends AbstractRecordTool
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
             ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
-        // Don't include hidden records unless explicitly requested
-        if (!$includeHidden) {
-            $queryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
-        }
+        // Always include hidden records (like the TYPO3 backend does)
 
         // Select all fields
         $queryBuilder->select('*')
@@ -243,10 +225,6 @@ class ReadTableTool extends AbstractRecordTool
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
             ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
-        
-        if (!$includeHidden) {
-            $countQueryBuilder->getRestrictions()->add(GeneralUtility::makeInstance(HiddenRestriction::class));
-        }
         
         $countQueryBuilder->count('uid')->from($table);
         
@@ -375,6 +353,54 @@ class ReadTableTool extends AbstractRecordTool
             return null;
         }
         
+        // Check if this is an integer field based on TCA eval rules or select field with integer values
+        $fieldConfig = $this->tableAccessService->getFieldConfig($table, $field);
+        if ($fieldConfig) {
+            // Check eval rules for int
+            if (isset($fieldConfig['config']['eval']) && strpos($fieldConfig['config']['eval'], 'int') !== false) {
+                return (int)$value;
+            }
+            
+            // Check if it's a select field with numeric string that should be integer
+            if (isset($fieldConfig['config']['type']) && $fieldConfig['config']['type'] === 'select') {
+                // If the value is numeric, check if this field typically uses integers
+                if (is_numeric($value)) {
+                    // Special handling for common integer fields
+                    if (in_array($field, ['type', 'sys_language_uid', 'colPos', 'layout', 'frame_class', 'space_before_class', 'space_after_class', 'header_layout'])) {
+                        return (int)$value;
+                    }
+                    
+                    // Check if ALL items use integer values (not just one)
+                    if (!empty($fieldConfig['config']['items'])) {
+                        $allIntegers = true;
+                        $hasItems = false;
+                        
+                        foreach ($fieldConfig['config']['items'] as $item) {
+                            $itemValue = null;
+                            if (isset($item['value'])) {
+                                $itemValue = $item['value'];
+                            } elseif (isset($item[1])) {
+                                $itemValue = $item[1];
+                            }
+                            
+                            if ($itemValue !== null && $itemValue !== '--div--') {
+                                $hasItems = true;
+                                if (!is_int($itemValue) && !ctype_digit((string)$itemValue)) {
+                                    $allIntegers = false;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Only convert if all items are integers
+                        if ($hasItems && $allIntegers) {
+                            return (int)$value;
+                        }
+                    }
+                }
+            }
+        }
+        
         // Convert FlexForm XML to JSON
         if ($this->tableAccessService->isFlexFormField($table, $field) && is_string($value) && !empty($value) && strpos($value, '<?xml') === 0) {
             try {
@@ -423,7 +449,7 @@ class ReadTableTool extends AbstractRecordTool
         }
         
         // Convert timestamps to ISO 8601 dates
-        if (is_numeric($value) && $this->isDateField($table, $field)) {
+        if (is_numeric($value) && $this->tableAccessService->isDateField($table, $field)) {
             if ($value > 0) {
                 $dateTime = new \DateTime('@' . $value);
                 $dateTime->setTimezone(new \DateTimeZone(date_default_timezone_get()));
@@ -433,61 +459,6 @@ class ReadTableTool extends AbstractRecordTool
         }
         
         return $value;
-    }
-    
-    /**
-     * Check if a field is a date field
-     */
-    protected function isDateField(string $table, string $field): bool
-    {
-        return $this->tableAccessService->isDateField($table, $field);
-    }
-
-
-    /**
-     * Check if a value is the default value for a field
-     */
-    protected function isDefaultValue(string $table, string $field, $value): bool
-    {
-        // Skip if TCA doesn't exist for this table
-        if (!isset($GLOBALS['TCA'][$table]['columns'][$field])) {
-            return false;
-        }
-
-        $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$field]['config'] ?? [];
-        $defaultValue = $fieldConfig['default'] ?? null;
-
-        // Check for empty values
-        if (($value === '' || $value === null || $value === 0 || $value === '0') &&
-            ($defaultValue === '' || $defaultValue === null || $defaultValue === 0 || $defaultValue === '0')) {
-            return true;
-        }
-
-        // Check for explicit default values
-        if ($value === $defaultValue) {
-            return true;
-        }
-
-        // Special handling for different field types
-        switch ($fieldConfig['type'] ?? '') {
-            case 'check':
-                // For checkbox fields, 0 is usually the default
-                if ($value === 0 || $value === '0') {
-                    return true;
-                }
-                break;
-
-            case 'select':
-            case 'group':
-            case 'inline':
-                // For relation fields, empty string or 0 usually means "no relation"
-                if ($value === '' || $value === 0 || $value === '0') {
-                    return true;
-                }
-                break;
-        }
-
-        return false;
     }
 
     /**
@@ -536,198 +507,147 @@ class ReadTableTool extends AbstractRecordTool
         foreach ($tca['columns'] as $fieldName => $fieldConfig) {
             $fieldType = $fieldConfig['config']['type'] ?? '';
 
-            // Handle select fields with foreign_table
-            if ($fieldType === 'select') {
-                // Check if this is a foreign table relation
-                if (!empty($fieldConfig['config']['foreign_table'])) {
-                    $foreignTable = $fieldConfig['config']['foreign_table'];
-
-                    // Skip if the foreign table doesn't exist or isn't accessible
-                    if (!$this->tableAccessService->canAccessTable($foreignTable)) {
-                        continue;
-                    }
-
-                    // Get all values for this field across all records
-                    $fieldValues = [];
-                    foreach ($result['records'] as $record) {
-                        if (!empty($record[$fieldName])) {
-                            $values = GeneralUtility::intExplode(',', $record[$fieldName], true);
-                            $fieldValues = array_merge($fieldValues, $values);
-                        }
-                    }
-
-                    // Skip if no values
-                    if (empty($fieldValues)) {
-                        continue;
-                    }
-
-                    // Get related records
-                    $relatedRecords = $this->getRelatedRecords($foreignTable, $fieldValues);
-
-                    // Add related records to each record
-                    foreach ($result['records'] as &$record) {
-                        if (!empty($record[$fieldName])) {
-                            $values = GeneralUtility::intExplode(',', $record[$fieldName], true);
-                            $recordRelations = [];
-
-                            foreach ($values as $value) {
-                                if (isset($relatedRecords[$value])) {
-                                    $recordRelations[] = $relatedRecords[$value];
-                                }
-                            }
-
-                            // Replace the field value with the related records
-                            if (!empty($recordRelations)) {
-                                $record[$fieldName] = $recordRelations;
-                            }
-                        }
-                    }
-                }
-                // Handle static items (options from TCA, not from a foreign table)
-                else if (!empty($fieldConfig['config']['items'])) {
-                    // Process each record
-                    foreach ($result['records'] as &$record) {
-                        if (isset($record[$fieldName]) && $record[$fieldName] !== '' && $record[$fieldName] !== null) {
-                            $values = GeneralUtility::trimExplode(',', (string)$record[$fieldName], true);
-                            $selectedItems = [];
-
-                            // Find the selected items
-                            foreach ($fieldConfig['config']['items'] as $item) {
-                                // Handle new associative array format (TYPO3 v12+)
-                                if (is_array($item) && isset($item['value'])) {
-                                    $itemValue = $item['value'];
-
-                                    // Skip divider items
-                                    if ($itemValue === '--div--') {
-                                        continue;
-                                    }
-
-                                    if (in_array($itemValue, $values)) {
-                                        $itemLabel = $item['label'] ?? $itemValue;
-                                        if (is_string($itemLabel) && strpos($itemLabel, 'LLL:') === 0) {
-                                            $itemLabel = $this->translateLabel($itemLabel);
-                                        }
-
-                                        $selectedItems[] = [
-                                            'value' => $itemValue,
-                                            'label' => $itemLabel,
-                                            'icon' => $item['icon'] ?? null,
-                                            'group' => $item['group'] ?? null
-                                        ];
-                                    }
-                                }
-                                // Handle old indexed array format
-                                else if (is_array($item) && isset($item[1])) {
-                                    $itemValue = $item[1];
-
-                                    // Skip divider items
-                                    if ($itemValue === '--div--') {
-                                        continue;
-                                    }
-
-                                    if (in_array($itemValue, $values)) {
-                                        $itemLabel = $item[0] ?? $itemValue;
-                                        if (is_string($itemLabel) && strpos($itemLabel, 'LLL:') === 0) {
-                                            $itemLabel = $this->translateLabel($itemLabel);
-                                        }
-
-                                        $selectedItems[] = [
-                                            'value' => $itemValue,
-                                            'label' => $itemLabel,
-                                            'icon' => $item[2] ?? null
-                                        ];
-                                    }
-                                }
-                            }
-
-                            // Replace the field value with the selected items
-                            if (!empty($selectedItems)) {
-                                $record[$fieldName] = $selectedItems;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Handle inline fields
-            if ($fieldType === 'inline' && !empty($fieldConfig['config']['foreign_table'])) {
-                $foreignTable = $fieldConfig['config']['foreign_table'];
-                $foreignField = $fieldConfig['config']['foreign_field'] ?? '';
-
-                // Skip if the foreign table isn't accessible or no foreign field
-                if (!$this->tableAccessService->canAccessTable($foreignTable) || empty($foreignField)) {
-                    continue;
-                }
-
-                // Get all related records
-                $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids);
-
-                // Group related records by parent record
-                $groupedRecords = [];
-                foreach ($relatedRecords as $relatedRecord) {
-                    $parentUid = $relatedRecord[$foreignField] ?? null;
-                    if ($parentUid !== null) {
-                        if (!isset($groupedRecords[$parentUid])) {
-                            $groupedRecords[$parentUid] = [];
-                        }
-                        $groupedRecords[$parentUid][] = $relatedRecord;
-                    }
-                }
-
-                // Add related records to each record
-                foreach ($result['records'] as &$record) {
-                    $uid = $record['uid'] ?? null;
-                    if ($uid !== null && isset($groupedRecords[$uid])) {
-                        $record[$fieldName] = $groupedRecords[$uid];
-                    }
-                }
-            }
+            match ($fieldType) {
+                'select', 'category' => $this->includeSelectRelations($result['records'], $fieldName, $fieldConfig, $table),
+                'inline' => $this->includeInlineRelations($result['records'], $fieldName, $fieldConfig, $recordUids),
+                default => null,
+            };
         }
 
         return $result;
     }
 
     /**
-     * Get related records for a select field
+     * Include select and category field relations
      */
-    protected function getRelatedRecords(string $table, array $uids): array
+    protected function includeSelectRelations(array &$records, string $fieldName, array $fieldConfig, string $table): void
     {
-        if (empty($uids)) {
-            return [];
+        // Check if this is a foreign table relation
+        if (!empty($fieldConfig['config']['foreign_table'])) {
+            $foreignTable = $fieldConfig['config']['foreign_table'];
+
+            // Skip if the foreign table doesn't exist or isn't accessible
+            if (!$this->tableAccessService->canAccessTable($foreignTable)) {
+                return;
+            }
+
+            // Check if this uses MM relations
+            if (!empty($fieldConfig['config']['MM'])) {
+                $this->includeMmRelations($records, $fieldName, $fieldConfig, $table);
+                return;
+            }
+
+            // Regular foreign table relation without MM
+            $this->includeRegularRelations($records, $fieldName);
+            return;
         }
 
-        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
-        $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
+        // Handle static items (options from TCA, not from a foreign table)
+        if (!empty($fieldConfig['config']['items'])) {
+            $this->includeStaticItems($records, $fieldName, $fieldConfig);
+        }
+    }
 
-        // Apply restrictions
-        $queryBuilder->getRestrictions()
-            ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
-            ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
+    /**
+     * Include MM relations for a field
+     */
+    protected function includeMmRelations(array &$records, string $fieldName, array $fieldConfig, string $table): void
+    {
+        $mmTable = $fieldConfig['config']['MM'];
+        
+        // Get MM values for all records
+        foreach ($records as &$record) {
+            if (isset($record['uid'])) {
+                $mmValues = $this->getMmRelationValues(
+                    $mmTable,
+                    $table,
+                    $record['uid'],
+                    $fieldName,
+                    $fieldConfig['config']
+                );
+                $record[$fieldName] = $mmValues;
+            }
+        }
+    }
 
-        // Select all fields
-        $records = $queryBuilder->select('*')
-            ->from($table)
-            ->where(
-                $queryBuilder->expr()->in(
-                    'uid',
-                    $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
-                )
-            )
-            ->executeQuery()
-            ->fetchAllAssociative();
+    /**
+     * Include regular (non-MM) relations for a field
+     */
+    protected function includeRegularRelations(array &$records, string $fieldName): void
+    {
+        // Convert comma-separated values to array for each record
+        foreach ($records as &$record) {
+            if (isset($record[$fieldName])) {
+                // Always convert to array for consistency
+                if (empty($record[$fieldName]) || $record[$fieldName] === 0 || $record[$fieldName] === '0') {
+                    $record[$fieldName] = [];
+                } elseif (is_int($record[$fieldName])) {
+                    $record[$fieldName] = [$record[$fieldName]];
+                } else {
+                    $values = GeneralUtility::intExplode(',', (string)$record[$fieldName], true);
+                    $record[$fieldName] = $values;
+                }
+            }
+        }
+    }
 
-        // Index records by UID and process for workspace transparency
-        $indexedRecords = [];
-        foreach ($records as $record) {
-            // Process the record to use live UIDs
-            $processedRecord = $this->processRecord($record, $table);
-            // Index by the (potentially modified) UID
-            $indexedRecords[$processedRecord['uid']] = $processedRecord;
+    /**
+     * Include static items for a field
+     */
+    protected function includeStaticItems(array &$records, string $fieldName, array $fieldConfig): void
+    {
+        // Convert comma-separated values to array for each record
+        foreach ($records as &$record) {
+            if (isset($record[$fieldName]) && $record[$fieldName] !== '' && $record[$fieldName] !== null) {
+                // Convert to array if it's a multi-select field
+                if (!empty($fieldConfig['config']['multiple'])) {
+                    $values = GeneralUtility::trimExplode(',', (string)$record[$fieldName], true);
+                    $record[$fieldName] = $values;
+                }
+                // Single select fields remain as single values
+            }
+        }
+    }
+
+    /**
+     * Include inline field relations
+     */
+    protected function includeInlineRelations(array &$records, string $fieldName, array $fieldConfig, array $recordUids): void
+    {
+        if (empty($fieldConfig['config']['foreign_table'])) {
+            return;
         }
 
-        return $indexedRecords;
+        $foreignTable = $fieldConfig['config']['foreign_table'];
+        $foreignField = $fieldConfig['config']['foreign_field'] ?? '';
+
+        // Skip if the foreign table isn't accessible or no foreign field
+        if (!$this->tableAccessService->canAccessTable($foreignTable) || empty($foreignField)) {
+            return;
+        }
+
+        // Get all related records
+        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids);
+
+        // Group related records by parent record
+        $groupedRecords = [];
+        foreach ($relatedRecords as $relatedRecord) {
+            $parentUid = $relatedRecord[$foreignField] ?? null;
+            if ($parentUid !== null) {
+                if (!isset($groupedRecords[$parentUid])) {
+                    $groupedRecords[$parentUid] = [];
+                }
+                $groupedRecords[$parentUid][] = $relatedRecord;
+            }
+        }
+
+        // Add related records to each record
+        foreach ($records as &$record) {
+            $uid = $record['uid'] ?? null;
+            if ($uid !== null && isset($groupedRecords[$uid])) {
+                $record[$fieldName] = $groupedRecords[$uid];
+            }
+        }
     }
 
     /**
@@ -746,8 +666,7 @@ class ReadTableTool extends AbstractRecordTool
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
-            ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
         // Select all fields
         $records = $queryBuilder->select('*')
@@ -768,6 +687,75 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         return $processedRecords;
+    }
+
+    /**
+     * Get MM relation values for a field
+     * 
+     * NOTE: This method provides basic MM relation support. It does NOT:
+     * - Apply foreign_table_where conditions
+     * - Resolve placeholders in foreign_table_where
+     * - Handle complex TYPO3 relation scenarios
+     * 
+     * For complex scenarios, use TYPO3 Backend or DataHandler which handle 
+     * these complexities properly.
+     * 
+     * @param string $mmTable The MM table name
+     * @param string $localTable The local table name
+     * @param int $localUid The local record UID
+     * @param string $fieldName The field name (for documentation)
+     * @param array $fieldConfig The full field configuration from TCA
+     * @return array Array of related UIDs (not full records)
+     */
+    protected function getMmRelationValues(string $mmTable, string $localTable, int $localUid, string $fieldName, array $fieldConfig): array
+    {
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $queryBuilder = $connectionPool->getQueryBuilderForTable($mmTable);
+        
+        // Determine if this is an opposite/reverse relation
+        $isOppositeRelation = !empty($fieldConfig['MM_opposite_field']);
+        
+        // Set column names based on relation direction
+        if ($isOppositeRelation) {
+            // For opposite relations (like categories), local record is in uid_foreign
+            $localColumn = 'uid_foreign';
+            $foreignColumn = 'uid_local';
+            $sortingColumn = 'sorting_foreign';
+        } else {
+            // For standard relations (like tags), local record is in uid_local
+            $localColumn = 'uid_local';
+            $foreignColumn = 'uid_foreign';
+            $sortingColumn = 'sorting';
+        }
+        
+        // Basic constraints
+        $constraints = [
+            $queryBuilder->expr()->eq($localColumn, $queryBuilder->createNamedParameter($localUid, ParameterType::INTEGER))
+        ];
+        
+        // Add match fields if specified (e.g., for shared MM tables like sys_category_record_mm)
+        $matchFields = $fieldConfig['MM_match_fields'] ?? [];
+        foreach ($matchFields as $field => $value) {
+            $constraints[] = $queryBuilder->expr()->eq(
+                $field,
+                $queryBuilder->createNamedParameter($value)
+            );
+        }
+        
+        // Execute query
+        $result = $queryBuilder
+            ->select($foreignColumn)
+            ->from($mmTable)
+            ->where(...$constraints)
+            ->orderBy($sortingColumn, 'ASC')
+            ->executeQuery();
+        
+        $values = [];
+        while ($row = $result->fetchAssociative()) {
+            $values[] = (int)$row[$foreignColumn];
+        }
+        
+        return $values;
     }
 
     /**
