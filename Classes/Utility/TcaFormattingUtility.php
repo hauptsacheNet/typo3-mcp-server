@@ -7,6 +7,7 @@ namespace Hn\McpServer\Utility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use Hn\McpServer\Service\TableAccessService;
 
 /**
  * Utility for formatting TCA and FlexForm information
@@ -82,35 +83,15 @@ class TcaFormattingUtility
                 
                 // Add select options if available
                 if (isset($config['items']) && is_array($config['items'])) {
-                    $options = [];
+                    $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+                    $parsed = $tableAccessService->parseSelectItems($config['items'], false); // Include dividers
                     
-                    foreach ($config['items'] as $item) {
-                        if (!is_array($item)) {
-                            continue;
-                        }
-                        
-                        $itemValue = '';
-                        $itemLabel = '';
-                        
-                        // Handle both associative and numeric index syntax
-                        if (isset($item['value']) && isset($item['label'])) {
-                            // New associative syntax
-                            $itemValue = $item['value'];
-                            $itemLabel = self::translateLabel($item['label']);
-                        } elseif (isset($item[0]) && isset($item[1])) {
-                            // Old numeric index syntax
-                            $itemValue = $item[1];
-                            $itemLabel = self::translateLabel($item[0]);
-                        } elseif (isset($item['numIndex']) && is_array($item['numIndex'])) {
-                            // XML converted to array format
-                            if (isset($item['numIndex']['label']) && isset($item['numIndex']['value'])) {
-                                $itemLabel = self::translateLabel($item['numIndex']['label']);
-                                $itemValue = $item['numIndex']['value'];
-                            }
-                        }
-                        
-                        if ($itemLabel) {
-                            $options[] = $itemValue . " (" . $itemLabel . ")";
+                    $options = [];
+                    foreach ($parsed['values'] as $value) {
+                        $label = $parsed['labels'][$value] ?? '';
+                        if ($label) {
+                            $translatedLabel = self::translateLabel($label);
+                            $options[] = $value . " (" . $translatedLabel . ")";
                         }
                     }
                     

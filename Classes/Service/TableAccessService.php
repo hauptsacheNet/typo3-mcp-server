@@ -711,27 +711,13 @@ class TableAccessService implements SingletonInterface
         $typeConfig = $GLOBALS['TCA'][$table]['columns'][$typeField]['config'] ?? [];
         $items = $typeConfig['items'] ?? [];
         
+        // Use the shared parseSelectItems method
+        $parsed = $this->parseSelectItems($items);
+        
+        // Convert to the expected format (value => label)
         $types = [];
-        foreach ($items as $item) {
-            if (is_array($item)) {
-                $value = '';
-                $label = '';
-                
-                if (isset($item['value']) && isset($item['label'])) {
-                    $value = $item['value'];
-                    $label = $item['label'];
-                } elseif (isset($item[0]) && isset($item[1])) {
-                    $value = $item[1];
-                    $label = $item[0];
-                }
-                
-                // Skip dividers
-                if ($value === '--div--') {
-                    continue;
-                }
-                
-                $types[$value] = $label;
-            }
+        foreach ($parsed['values'] as $value) {
+            $types[$value] = $parsed['labels'][$value] ?? $value;
         }
         
         return $types;
@@ -845,6 +831,59 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
+     * Parse select field items from TCA configuration
+     * 
+     * @param array $items TCA items array
+     * @param bool $skipDividers Whether to skip divider items
+     * @return array Array with 'values' and 'labels' keys
+     */
+    public function parseSelectItems(array $items, bool $skipDividers = true): array
+    {
+        $result = [
+            'values' => [],
+            'labels' => []
+        ];
+        
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            
+            $itemValue = '';
+            $itemLabel = '';
+            
+            // Handle both associative and numeric index syntax
+            if (isset($item['value']) && isset($item['label'])) {
+                // New associative syntax
+                $itemValue = $item['value'];
+                $itemLabel = $item['label'];
+            } elseif (isset($item[0]) && isset($item[1])) {
+                // Old numeric index syntax
+                $itemValue = $item[1];
+                $itemLabel = $item[0];
+            } elseif (isset($item['numIndex']) && is_array($item['numIndex'])) {
+                // XML converted to array format
+                if (isset($item['numIndex']['label']) && isset($item['numIndex']['value'])) {
+                    $itemLabel = $item['numIndex']['label'];
+                    $itemValue = $item['numIndex']['value'];
+                }
+            }
+            
+            // Skip dividers if requested
+            if ($skipDividers && $itemValue === '--div--') {
+                continue;
+            }
+            
+            if ($itemValue !== '') {
+                $result['values'][] = (string)$itemValue;
+                $result['labels'][$itemValue] = $itemLabel;
+            }
+        }
+        
+        return $result;
+    }
+    
+    /**
      * Get allowed values for a select field
      * 
      * @param string $table Table name
@@ -870,21 +909,13 @@ class TableAccessService implements SingletonInterface
             return null;
         }
         
-        // Extract allowed values from items configuration
-        $allowedValues = [];
+        // Use the shared parseSelectItems method
         if (isset($config['items']) && is_array($config['items'])) {
-            foreach ($config['items'] as $item) {
-                if (is_array($item)) {
-                    // Handle both old numeric and new associative array formats
-                    $value = $item['value'] ?? $item[1] ?? null;
-                    if ($value !== null && $value !== '--div--') {
-                        $allowedValues[] = (string)$value;
-                    }
-                }
-            }
+            $parsed = $this->parseSelectItems($config['items']);
+            return empty($parsed['values']) ? null : $parsed['values'];
         }
         
-        return empty($allowedValues) ? null : $allowedValues;
+        return null;
     }
     
     /**
