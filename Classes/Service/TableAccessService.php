@@ -845,6 +845,104 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
+     * Get allowed values for a select field
+     * 
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @return array|null Array of allowed values or null if not a select field
+     */
+    public function getSelectFieldAllowedValues(string $table, string $fieldName): ?array
+    {
+        $fieldConfig = $this->getFieldConfig($table, $fieldName);
+        if (!$fieldConfig) {
+            return null;
+        }
+        
+        $config = $fieldConfig['config'] ?? [];
+        
+        // Only process select fields
+        if (($config['type'] ?? '') !== 'select') {
+            return null;
+        }
+        
+        // If it's a foreign table select, we can't validate values here
+        if (!empty($config['foreign_table'])) {
+            return null;
+        }
+        
+        // Extract allowed values from items configuration
+        $allowedValues = [];
+        if (isset($config['items']) && is_array($config['items'])) {
+            foreach ($config['items'] as $item) {
+                if (is_array($item)) {
+                    // Handle both old numeric and new associative array formats
+                    $value = $item['value'] ?? $item[1] ?? null;
+                    if ($value !== null && $value !== '--div--') {
+                        $allowedValues[] = (string)$value;
+                    }
+                }
+            }
+        }
+        
+        return empty($allowedValues) ? null : $allowedValues;
+    }
+    
+    /**
+     * Validate a field value based on its TCA configuration
+     * 
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @param mixed $value Field value
+     * @return string|null Error message if validation fails, null if valid
+     */
+    public function validateFieldValue(string $table, string $fieldName, $value): ?string
+    {
+        $fieldConfig = $this->getFieldConfig($table, $fieldName);
+        if (!$fieldConfig) {
+            return "Field '{$fieldName}' does not exist in table '{$table}'";
+        }
+        
+        $config = $fieldConfig['config'] ?? [];
+        $fieldType = $config['type'] ?? '';
+        
+        // Check max length for string fields
+        if (in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color']) && is_string($value)) {
+            $maxLength = $config['max'] ?? 0;
+            if ($maxLength > 0 && mb_strlen($value) > $maxLength) {
+                return "Field '{$fieldName}' value exceeds maximum length of {$maxLength} characters";
+            }
+        }
+        
+        // Validate select fields
+        if ($fieldType === 'select' && empty($config['foreign_table'])) {
+            $allowedValues = $this->getSelectFieldAllowedValues($table, $fieldName);
+            if ($allowedValues !== null) {
+                // Handle comma-separated values for multiple select
+                $values = is_string($value) ? GeneralUtility::trimExplode(',', $value, true) : [$value];
+                
+                foreach ($values as $val) {
+                    if (!in_array((string)$val, $allowedValues, true)) {
+                        $allowedList = implode(', ', array_map(function($v) { return "'{$v}'"; }, $allowedValues));
+                        return "Field '{$fieldName}' value '{$val}' must be one of: {$allowedList}";
+                    }
+                }
+            }
+        }
+        
+        // Validate required fields
+        if (!empty($config['required']) || !empty($config['eval'])) {
+            $evalRules = GeneralUtility::trimExplode(',', $config['eval'] ?? '', true);
+            if (!empty($config['required']) || in_array('required', $evalRules)) {
+                if ($value === null || $value === '' || (is_array($value) && empty($value))) {
+                    return "Field '{$fieldName}' is required";
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
      * Get record title/label using TYPO3's BackendUtility
      */
     public function getRecordTitle(string $table, array $record): string

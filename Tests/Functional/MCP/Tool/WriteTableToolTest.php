@@ -521,7 +521,7 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertTrue($result->isError);
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringContainsString('must be one of:', $result->content[0]->text);
     }
 

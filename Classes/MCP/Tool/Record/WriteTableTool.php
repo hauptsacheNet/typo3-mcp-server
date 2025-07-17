@@ -390,215 +390,40 @@ class WriteTableTool extends AbstractRecordTool
             return "Field 'pid' can only be set during record creation";
         }
         
-        
-        // Check required fields and validate field types
+        // Validate and convert field values
         foreach ($data as $fieldName => $value) {
-            // Skip fields that don't exist in TCA
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
             if (!$fieldConfig) {
                 continue;
             }
             
-            // Check field type
-            switch ($fieldConfig['config']['type'] ?? '') {
-                case 'input':
-                    // Check max length
-                    if (isset($fieldConfig['config']['max']) && is_string($value) && mb_strlen($value) > $fieldConfig['config']['max']) {
-                        return 'Field "' . $fieldName . '" exceeds maximum length of ' . $fieldConfig['config']['max'];
-                    }
-                    
-                    // Check eval rules
-                    if (!empty($fieldConfig['config']['eval'])) {
-                        $evalRules = GeneralUtility::trimExplode(',', $fieldConfig['config']['eval'], true);
-                        
-                        foreach ($evalRules as $rule) {
-                            switch ($rule) {
-                                case 'required':
-                                    if (empty($value) && $value !== 0 && $value !== '0') {
-                                        return 'Field "' . $fieldName . '" is required';
-                                    }
-                                    break;
-                                    
-                                case 'int':
-                                    if (!is_int($value) && (!is_string($value) || !ctype_digit($value))) {
-                                        return 'Field "' . $fieldName . '" must be an integer';
-                                    }
-                                    break;
-                                    
-                                case 'double2':
-                                case 'float':
-                                    if (!is_numeric($value)) {
-                                        return 'Field "' . $fieldName . '" must be a number';
-                                    }
-                                    break;
-                                    
-                                case 'email':
-                                    if (!empty($value) && !filter_var($value, FILTER_VALIDATE_EMAIL)) {
-                                        return 'Field "' . $fieldName . '" must be a valid email address';
-                                    }
-                                    break;
-                                    
-                                case 'date':
-                                case 'datetime':
-                                case 'time':
-                                    // Handle ISO 8601 date strings
-                                    if (is_string($value) && preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $value)) {
-                                        try {
-                                            $dateTime = new \DateTime($value);
-                                            // Convert to timestamp for TYPO3
-                                            $data[$fieldName] = $dateTime->getTimestamp();
-                                        } catch (\Exception $e) {
-                                            return 'Field "' . $fieldName . '" contains an invalid date format';
-                                        }
-                                    } elseif (!is_int($value) && (!is_string($value) || !ctype_digit($value))) {
-                                        return 'Field "' . $fieldName . '" must be a valid date (timestamp or ISO 8601 format)';
-                                    }
-                                    break;
-                            }
-                        }
-                    }
-                    break;
-                    
-                case 'text':
-                    // No specific validation for text fields
-                    break;
-                    
-                case 'check':
-                    // Check should be 0 or 1
-                    if ($value !== 0 && $value !== 1 && $value !== '0' && $value !== '1') {
-                        return 'Field "' . $fieldName . '" must be 0 or 1';
-                    }
-                    break;
-                    
-                case 'radio':
-                    // Radio should be one of the defined items
-                    $validValues = [];
-                    foreach (($fieldConfig['config']['items'] ?? []) as $item) {
-                        // Handle both old and new TCA item formats
-                        if (is_array($item) && isset($item['value'])) {
-                            $validValues[] = $item['value'];
-                        } elseif (is_array($item) && isset($item[1])) {
-                            $validValues[] = $item[1];
-                        }
-                    }
-                    
-                    if (!empty($validValues) && !in_array($value, $validValues)) {
-                        return 'Field "' . $fieldName . '" must be one of: ' . implode(', ', $validValues);
-                    }
-                    break;
-                    
-                case 'select':
-                    // For single select, value should be one of the defined items or a relation
-                    if (empty($fieldConfig['config']['foreign_table']) && empty($fieldConfig['config']['MM'])) {
-                        // Not a relation, so check against items
-                        if (empty($fieldConfig['config']['multiple'])) {
-                            // Single select
-                            $validValues = [];
-                            foreach (($fieldConfig['config']['items'] ?? []) as $item) {
-                                // Handle both old and new TCA item formats
-                                if (is_array($item) && isset($item['value'])) {
-                                    // Skip dividers
-                                    if ($item['value'] === '--div--') {
-                                        continue;
-                                    }
-                                    $validValues[] = $item['value'];
-                                } elseif (is_array($item) && isset($item[1])) {
-                                    // Skip dividers
-                                    if ($item[1] === '--div--') {
-                                        continue;
-                                    }
-                                    $validValues[] = $item[1];
-                                }
-                            }
-                            
-                            if (!empty($validValues) && !in_array($value, $validValues)) {
-                                return 'Field "' . $fieldName . '" must be one of: ' . implode(', ', $validValues);
-                            }
-                        } else {
-                            // Multiple select - value should be a comma-separated list
-                            if (!is_array($value) && !is_string($value)) {
-                                return 'Field "' . $fieldName . '" must be an array or a comma-separated string';
-                            }
-                            
-                            $values = is_array($value) ? $value : GeneralUtility::trimExplode(',', $value, true);
-                            $validValues = [];
-                            
-                            foreach (($fieldConfig['config']['items'] ?? []) as $item) {
-                                // Handle both old and new TCA item formats
-                                if (is_array($item) && isset($item['value'])) {
-                                    // Skip dividers
-                                    if ($item['value'] === '--div--') {
-                                        continue;
-                                    }
-                                    $validValues[] = $item['value'];
-                                } elseif (is_array($item) && isset($item[1])) {
-                                    // Skip dividers
-                                    if ($item[1] === '--div--') {
-                                        continue;
-                                    }
-                                    $validValues[] = $item[1];
-                                }
-                            }
-                            
-                            foreach ($values as $singleValue) {
-                                if (!empty($validValues) && !in_array($singleValue, $validValues)) {
-                                    return 'Field "' . $fieldName . '" contains an invalid value: ' . $singleValue;
-                                }
-                            }
-                            
-                            // Convert array to comma-separated string for TYPO3
-                            if (is_array($value)) {
-                                // Ensure all values are strings for consistency
-                                $stringValues = array_map('strval', $value);
-                                $data[$fieldName] = implode(',', $stringValues);
-                            }
-                        }
-                    }
-                    break;
-                    
-                case 'category':
-                    // Category fields can have different relationship types
-                    $relationship = $fieldConfig['config']['relationship'] ?? 'manyToMany';
-                    
-                    if ($relationship === 'oneToOne' || $relationship === 'manyToOne') {
-                        // Single category relation - expects an integer or empty value
-                        if ($value === null || $value === '' || $value === 0) {
-                            $data[$fieldName] = 0;
-                        } elseif (is_numeric($value)) {
-                            $data[$fieldName] = (int)$value;
-                        } else {
-                            return 'Field "' . $fieldName . '" must be a single category ID';
-                        }
-                    } else {
-                        // Many-to-many category relations (default)
-                        if (is_array($value)) {
-                            // Convert array to comma-separated string for TYPO3
-                            $stringValues = array_map('strval', $value);
-                            $data[$fieldName] = implode(',', $stringValues);
-                        } elseif (is_string($value)) {
-                            // Already a string, use as-is
-                            $data[$fieldName] = $value;
-                        } else {
-                            return 'Field "' . $fieldName . '" must be an array or comma-separated string';
-                        }
-                    }
-                    break;
-            }
-        }
-        
-        // Check for required fields that are missing
-        $tca = $GLOBALS['TCA'][$table];
-        foreach ($tca['columns'] as $fieldName => $fieldConfig) {
-            // Skip if field is in the data
-            if (isset($data[$fieldName])) {
-                continue;
+            // Validate field value
+            $validationError = $this->tableAccessService->validateFieldValue($table, $fieldName, $value);
+            if ($validationError !== null) {
+                return $validationError;
             }
             
-            // For create actions, check if the field is required
-            if ($action === 'create' && !empty($fieldConfig['config']['eval']) && strpos($fieldConfig['config']['eval'], 'required') !== false) {
-                // Check if there's a default value
-                if (!isset($fieldConfig['config']['default'])) {
-                    return 'Required field "' . $fieldName . '" is missing';
+            // Handle date/time fields - convert ISO 8601 to timestamp for TYPO3
+            if (!empty($fieldConfig['config']['eval'])) {
+                $evalRules = GeneralUtility::trimExplode(',', $fieldConfig['config']['eval'], true);
+                if (array_intersect(['date', 'datetime', 'time'], $evalRules)) {
+                    if (is_string($value) && preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $value)) {
+                        try {
+                            $dateTime = new \DateTime($value);
+                            $data[$fieldName] = $dateTime->getTimestamp();
+                        } catch (\Exception $e) {
+                            // Let DataHandler handle the invalid date
+                        }
+                    }
+                }
+            }
+            
+            // Convert arrays to comma-separated strings for multi-value fields
+            if (is_array($value)) {
+                $fieldType = $fieldConfig['config']['type'] ?? '';
+                if (in_array($fieldType, ['select', 'category']) || 
+                    ($fieldType === 'group' && !empty($fieldConfig['config']['multiple']))) {
+                    $data[$fieldName] = implode(',', array_map('strval', $value));
                 }
             }
         }
