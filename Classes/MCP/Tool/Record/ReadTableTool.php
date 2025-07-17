@@ -626,6 +626,10 @@ class ReadTableTool extends AbstractRecordTool
             return;
         }
 
+        // Check if foreign table is hidden (dependent records that should be embedded)
+        $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
+        $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+
         // Get all related records
         $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids);
 
@@ -645,7 +649,13 @@ class ReadTableTool extends AbstractRecordTool
         foreach ($records as &$record) {
             $uid = $record['uid'] ?? null;
             if ($uid !== null && isset($groupedRecords[$uid])) {
-                $record[$fieldName] = $groupedRecords[$uid];
+                if ($isHiddenTable) {
+                    // Embed full records for hidden tables (like sys_file_reference)
+                    $record[$fieldName] = $groupedRecords[$uid];
+                } else {
+                    // Return only UIDs for independent tables (like tt_content)
+                    $record[$fieldName] = array_column($groupedRecords[$uid], 'uid');
+                }
             }
         }
     }

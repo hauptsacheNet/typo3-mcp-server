@@ -475,6 +475,14 @@ class WriteTableTool extends AbstractRecordTool
                     continue;
                 }
                 
+                // Special handling for passthrough fields (often used for inline relations)
+                $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
+                if ($fieldConfig && isset($fieldConfig['config']['type']) && $fieldConfig['config']['type'] === 'passthrough') {
+                    // Passthrough fields are valid if they exist in TCA, even if not in showitem
+                    // Example: tx_news_related_news stores the foreign key for inline relations
+                    continue;
+                }
+                
                 // If we have available fields configured and this field is not in the list
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
                     return "Field '{$fieldName}' is not available for this record type";
