@@ -13,19 +13,29 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Site\Entity\Site;
 use Hn\McpServer\Service\SiteInformationService;
+use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 
 /**
  * Tool for retrieving the TYPO3 page tree
  */
-class GetPageTreeTool extends AbstractTool
+class GetPageTreeTool extends AbstractRecordTool
 {
     protected SiteInformationService $siteInformationService;
     
     public function __construct(
         SiteInformationService $siteInformationService
     ) {
+        parent::__construct();
         $this->siteInformationService = $siteInformationService;
     }
+    /**
+     * Get the tool type
+     */
+    public function getToolType(): string
+    {
+        return 'read';
+    }
+    
     /**
      * Get the tool schema
      */
@@ -55,6 +65,9 @@ class GetPageTreeTool extends AbstractTool
      */
     public function execute(array $params): CallToolResult
     {
+        // Initialize workspace context
+        $this->initializeWorkspaceContext();
+        
         $startPage = (int)($params['startPage'] ?? 0);
         $depth = (int)($params['depth'] ?? 3);
 

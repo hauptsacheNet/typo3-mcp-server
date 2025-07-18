@@ -32,14 +32,10 @@ class ValidationRefactoringTest extends FunctionalTestCase
         
         // Import test data first
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         
         // Set up backend user
-        $this->setUpBackendUser(1);
-        $GLOBALS['BE_USER']->workspace = 1;
-        
-        // Set up language service
+        $this->setUpBackendUser(1);        // Set up language service
         $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('en');
         
         $this->writeTool = GeneralUtility::makeInstance(WriteTableTool::class);

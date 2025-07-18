@@ -29,7 +29,6 @@ class SearchToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category_record_mm.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         
         // Set up backend user for DataHandler and TableAccessService

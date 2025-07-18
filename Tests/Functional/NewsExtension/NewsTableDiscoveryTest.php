@@ -30,8 +30,6 @@ class NewsTableDiscoveryTest extends FunctionalTestCase
         
         // Import backend user fixture
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/be_users.csv');
-        $this->importCSVDataSet(__DIR__ . '/../Fixtures/sys_workspace.csv');
-        
         // Set up backend user for DataHandler and TableAccessService
         $this->setUpBackendUserWithWorkspace(1);
         

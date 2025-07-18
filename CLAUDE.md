@@ -1,6 +1,7 @@
 - This project is about developing the mcp_server typo3 extension, that allows someone without technical knowledge to edit content using LLM's.
 - Run the tests using `composer test`. Test must cover the TYPO3 integration.
 - The Tools for LLMs don't need backwards compatibility. We can completely change parameters or even their names if it better describes them without it being a breaking change.
-- Every Tool must use TYPO3 Workspaces. Live data must never be directly edited. However: Ensure that the workspaces are invisible to the LLM, for example, by only exposing the live id.
+- Every Tool (that uses the database) must use TYPO3 Workspaces explicitly. Live data must never be directly edited. However: Ensure that the workspaces are invisible to the MCP client, for example, by only exposing the live id.
+- This MCP does create a Workspace if one doesn't exist. This is intentional and must work even in tests. A mixture of live and workspace data is a real scenario, and the tool results must work as if there are no workspaces.
 - In Tests: check all MCP tool call for failure like this: `$this->assertFalse($result->isError, json_encode($result->jsonSerialize()));`
 - Always check if there is some typo3 core api that can be used for TCA related data actions.

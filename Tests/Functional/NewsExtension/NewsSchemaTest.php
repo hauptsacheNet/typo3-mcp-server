@@ -30,8 +30,6 @@ class NewsSchemaTest extends FunctionalTestCase
         
         // Import backend user fixture
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/be_users.csv');
-        $this->importCSVDataSet(__DIR__ . '/../Fixtures/sys_workspace.csv');
-        
         // Set up backend user
         $this->setUpBackendUserWithWorkspace(1);
         

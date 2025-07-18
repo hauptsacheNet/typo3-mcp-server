@@ -28,9 +28,8 @@ class ReadTableIntegerConversionTest extends FunctionalTestCase
         
         // Import backend user fixture
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
-        
+
         // Set up backend user
         $this->setUpBackendUser(1);
         
@@ -46,7 +45,7 @@ class ReadTableIntegerConversionTest extends FunctionalTestCase
      */
     public function testSelectFieldWithAllIntegerValues(): void
     {
-        // Tools will automatically switch to workspace 1
+        // Tools will automatically switch to optimal workspace
         $writeTool = new WriteTableTool();
         $readTool = new ReadTableTool();
         
@@ -102,7 +101,7 @@ class ReadTableIntegerConversionTest extends FunctionalTestCase
         // This test would require a custom table with mixed select values
         // For now, we'll test that string values remain strings
         
-        // Tools will automatically switch to workspace 1
+        // Tools will automatically switch to optimal workspace
         $writeTool = new WriteTableTool();
         $readTool = new ReadTableTool();
         
@@ -143,7 +142,7 @@ class ReadTableIntegerConversionTest extends FunctionalTestCase
      */
     public function testFieldsWithEvalInt(): void
     {
-        // Tools will automatically switch to workspace 1
+        // Tools will automatically switch to optimal workspace
         $writeTool = new WriteTableTool();
         $readTool = new ReadTableTool();
         

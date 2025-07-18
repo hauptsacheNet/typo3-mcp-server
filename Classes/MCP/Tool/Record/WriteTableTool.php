@@ -10,6 +10,8 @@ use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
+use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 
 /**
  * Tool for writing records to TYPO3 tables
@@ -53,7 +55,7 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'data' => [
                         'type' => 'object',
-                        'description' => 'Record data (required for "create" and "update" actions).',
+                        'description' => 'Record data (required for "create" and "update" actions). Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables.',
                     ],
                     'position' => [
                         'type' => 'string',
@@ -111,6 +113,56 @@ class WriteTableTool extends AbstractRecordTool
                         'table' => 'tt_content',
                         'uid' => 456
                     ]
+                ],
+                [
+                    'description' => 'Create content element with inline relation to news',
+                    'parameters' => [
+                        'action' => 'create',
+                        'table' => 'tt_content',
+                        'pid' => 123,
+                        'data' => [
+                            'header' => 'Content for news',
+                            'CType' => 'text',
+                            'tx_news_related_news' => 789  // Foreign field sets the relation
+                        ]
+                    ]
+                ],
+                [
+                    'description' => 'Remove inline relation by updating foreign field',
+                    'parameters' => [
+                        'action' => 'update',
+                        'table' => 'tt_content',
+                        'uid' => 456,
+                        'data' => [
+                            'tx_news_related_news' => 0  // Set to 0 to remove relation
+                        ]
+                    ]
+                ],
+                [
+                    'description' => 'Update news with content elements using UIDs (independent inline)',
+                    'parameters' => [
+                        'action' => 'update',
+                        'table' => 'tx_news_domain_model_news',
+                        'uid' => 123,
+                        'data' => [
+                            'content_elements' => [456, 789, 1011]  // Array of content element UIDs
+                        ]
+                    ]
+                ],
+                [
+                    'description' => 'Create news with embedded links (dependent inline)',
+                    'parameters' => [
+                        'action' => 'create',
+                        'table' => 'tx_news_domain_model_news',
+                        'pid' => 123,
+                        'data' => [
+                            'title' => 'News with links',
+                            'related_links' => [
+                                ['title' => 'External link', 'uri' => 'https://example.com', 'description' => 'Company website'],
+                                ['title' => 'Internal page', 'uri' => 't3://page?uid=42']
+                            ]
+                        ]
+                    ]
                 ]
             ],
         ];
@@ -121,6 +173,9 @@ class WriteTableTool extends AbstractRecordTool
      */
     public function execute(array $params): CallToolResult
     {
+        // Initialize workspace context
+        $this->initializeWorkspaceContext();
+        
         // Get parameters
         $action = $params['action'] ?? '';
         $table = $params['table'] ?? '';
@@ -208,6 +263,9 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
         
+        // Extract inline relations before converting data
+        $inlineRelations = $this->extractInlineRelations($table, $data);
+        
         // Convert data for storage
         $data = $this->convertDataForStorage($table, $data);
         
@@ -216,7 +274,8 @@ class WriteTableTool extends AbstractRecordTool
         $newRecordData['pid'] = $pid;
         
         // Handle sorting for bottom position
-        if ($position === 'bottom') {
+        // Only set sorting if not explicitly provided in the data
+        if ($position === 'bottom' && !isset($data['sorting'])) {
             // Get the maximum sorting value and add some space
             $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
                 ->getQueryBuilderForTable($table);
@@ -244,25 +303,94 @@ class WriteTableTool extends AbstractRecordTool
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $dataHandler->BE_USER = $GLOBALS['BE_USER'];
         
-        // Set up the data map
+        // First, create the parent record without inline relations
         $dataMap = [];
         $dataMap[$table][$newId] = $newRecordData;
         
-        // Process the data map
+        // Process the parent record first
         $dataHandler->start($dataMap, []);
         $dataHandler->process_datamap();
         
-        // Check for errors
+        // Check for errors in parent creation
         if (!empty($dataHandler->errorLog)) {
             return $this->createErrorResult('Error creating record: ' . implode(', ', $dataHandler->errorLog));
         }
         
-        // Get the UID of the newly created record
-        $newUid = $dataHandler->substNEWwithIDs[$newId] ?? null;
+        // Get the UID of the newly created parent record
+        $parentUid = $dataHandler->substNEWwithIDs[$newId] ?? null;
         
-        if (!$newUid) {
+        if (!$parentUid) {
             return $this->createErrorResult('Error creating record: No UID returned');
         }
+        
+        // Get the live UID for inline relations if we're in a workspace
+        $liveParentUid = $this->getLiveUid($table, $parentUid);
+        
+        // Now process inline relations with the resolved parent UID
+        if (!empty($inlineRelations)) {
+            $childDataMap = [];
+            $this->processInlineRelations($childDataMap, $table, $parentUid, $pid, $inlineRelations);
+            
+            
+            if (!empty($childDataMap)) {
+                // Create a new DataHandler instance for child records
+                $childDataHandler = GeneralUtility::makeInstance(DataHandler::class);
+                $childDataHandler->BE_USER = $GLOBALS['BE_USER'];
+                $childDataHandler->start($childDataMap, []);
+                $childDataHandler->process_datamap();
+                
+                
+                // Check for errors in child creation
+                if (!empty($childDataHandler->errorLog)) {
+                    // Parent was created but children failed
+                    return $this->createErrorResult(
+                        'Parent record created but error creating child records: ' . 
+                        implode(', ', $childDataHandler->errorLog)
+                    );
+                }
+                
+                // Update foreign fields for embedded relations
+                foreach ($inlineRelations as $fieldName => $relationData) {
+                    $config = $relationData['config'];
+                    $foreignTable = $config['foreign_table'] ?? '';
+                    $foreignField = $config['foreign_field'] ?? '';
+                    
+                    if (empty($foreignTable) || empty($foreignField)) {
+                        continue;
+                    }
+                    
+                    // Check if this is an embedded table
+                    $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
+                    $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+                    
+                    if ($isHiddenTable) {
+                        // Collect the UIDs of created child records
+                        $childUids = [];
+                        foreach ($childDataHandler->substNEWwithIDs as $newId => $realId) {
+                            if (strpos($newId, 'NEW') === 0 && isset($childDataMap[$foreignTable][$newId])) {
+                                $childUids[] = $realId;
+                            }
+                        }
+                        
+                        if (!empty($childUids)) {
+                            // Update foreign field directly in database
+                            // RelationHandler's writeForeignField is for MM relations, not direct foreign fields
+                            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                                ->getConnectionForTable($foreignTable);
+                            
+                            foreach ($childUids as $childUid) {
+                                $connection->update(
+                                    $foreignTable,
+                                    [$foreignField => $liveParentUid],
+                                    ['uid' => $childUid]
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
         
         // Handle after/before positioning if needed
         if (strpos($position, 'after:') === 0 || strpos($position, 'before:') === 0) {
@@ -271,7 +399,7 @@ class WriteTableTool extends AbstractRecordTool
             
             // Set up the command map for moving the record
             $cmdMap = [];
-            $cmdMap[$table][$newUid]['move'] = [
+            $cmdMap[$table][$parentUid]['move'] = [
                 'action' => $positionType,
                 'target' => $referenceUid,
             ];
@@ -285,7 +413,7 @@ class WriteTableTool extends AbstractRecordTool
             // Check for errors in the move operation
             if (!empty($moveDataHandler->errorLog)) {
                 // The record was created but positioning failed
-                $liveUid = $this->getLiveUid($table, $newUid);
+                $liveUid = $this->getLiveUid($table, $parentUid);
                 return $this->createJsonResult([
                     'action' => 'create',
                     'table' => $table,
@@ -297,7 +425,7 @@ class WriteTableTool extends AbstractRecordTool
         }
         
         // Get the live UID for workspace transparency
-        $liveUid = $this->getLiveUid($table, $newUid);
+        $liveUid = $this->getLiveUid($table, $parentUid);
         
         // Return the result with live UID
         return $this->createJsonResult([
@@ -319,21 +447,91 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
         
+        // Extract inline relations before converting data
+        $inlineRelations = $this->extractInlineRelations($table, $data);
+        
         // Convert data for storage
         $data = $this->convertDataForStorage($table, $data);
         
         // Resolve the live UID to workspace UID
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
         
+        // First, update the parent record without inline relations
+        $dataMap = [$table => [$workspaceUid => $data]];
+        
         // Update the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $dataHandler->BE_USER = $GLOBALS['BE_USER'];
-        $dataHandler->start([$table => [$workspaceUid => $data]], []);
+        $dataHandler->start($dataMap, []);
         $dataHandler->process_datamap();
         
-        // Check for errors
-        if ($dataHandler->errorLog) {
+        // Check for errors in parent update
+        if (!empty($dataHandler->errorLog)) {
             return $this->createErrorResult('Error updating record: ' . implode(', ', $dataHandler->errorLog));
+        }
+        
+        // Now process inline relations with the resolved parent UID
+        if (!empty($inlineRelations)) {
+            // Get record's pid for creating new inline records
+            $record = BackendUtility::getRecord($table, $workspaceUid, 'pid');
+            $pid = $record['pid'] ?? 0;
+            
+            $childDataMap = [];
+            $this->processInlineRelations($childDataMap, $table, $workspaceUid, $pid, $inlineRelations, $uid);
+            
+            if (!empty($childDataMap)) {
+                // Create a new DataHandler instance for child records
+                $childDataHandler = GeneralUtility::makeInstance(DataHandler::class);
+                $childDataHandler->BE_USER = $GLOBALS['BE_USER'];
+                $childDataHandler->start($childDataMap, []);
+                $childDataHandler->process_datamap();
+                
+                // Check for errors in child processing
+                if (!empty($childDataHandler->errorLog)) {
+                    return $this->createErrorResult('Error processing inline relations: ' . implode(', ', $childDataHandler->errorLog));
+                }
+                
+                // Update foreign fields for embedded relations
+                foreach ($inlineRelations as $fieldName => $relationData) {
+                    $config = $relationData['config'];
+                    $foreignTable = $config['foreign_table'] ?? '';
+                    $foreignField = $config['foreign_field'] ?? '';
+                    
+                    if (empty($foreignTable) || empty($foreignField)) {
+                        continue;
+                    }
+                    
+                    // Check if this is an embedded table
+                    $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
+                    $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+                    
+                    if ($isHiddenTable) {
+                        // Collect the UIDs of created child records
+                        $childUids = [];
+                        foreach ($childDataHandler->substNEWwithIDs as $newId => $realId) {
+                            if (strpos($newId, 'NEW') === 0 && isset($childDataMap[$foreignTable][$newId])) {
+                                $childUids[] = $realId;
+                            }
+                        }
+                        
+                        if (!empty($childUids)) {
+                            // Update foreign field directly in database
+                            // RelationHandler's writeForeignField is for MM relations, not direct foreign fields
+                            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                                ->getConnectionForTable($foreignTable);
+                            
+                            // In update context, $uid is already the live UID
+                            foreach ($childUids as $childUid) {
+                                $connection->update(
+                                    $foreignTable,
+                                    [$foreignField => $uid],
+                                    ['uid' => $childUid]
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         // Return the result with the original live UID
@@ -418,8 +616,17 @@ class WriteTableTool extends AbstractRecordTool
                 }
             }
             
+            // Validate inline field type
+            if ($fieldConfig['config']['type'] === 'inline') {
+                // Validate inline relation data
+                $validationError = $this->validateInlineRelationData($fieldConfig, $value);
+                if ($validationError !== null) {
+                    return "Field '{$fieldName}': " . $validationError;
+                }
+                continue;
+            }
             // Convert arrays to comma-separated strings for multi-value fields
-            if (is_array($value)) {
+            elseif (is_array($value)) {
                 $fieldType = $fieldConfig['config']['type'] ?? '';
                 if (in_array($fieldType, ['select', 'category']) || 
                     ($fieldType === 'group' && !empty($fieldConfig['config']['multiple']))) {
@@ -483,6 +690,7 @@ class WriteTableTool extends AbstractRecordTool
                     continue;
                 }
                 
+                
                 // If we have available fields configured and this field is not in the list
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
                     return "Field '{$fieldName}' is not available for this record type";
@@ -493,6 +701,292 @@ class WriteTableTool extends AbstractRecordTool
         return true;
     }
     
+    
+    /**
+     * Extract inline relations from data array
+     */
+    protected function extractInlineRelations(string $table, array &$data): array
+    {
+        $inlineRelations = [];
+        
+        if (!isset($GLOBALS['TCA'][$table]['columns'])) {
+            return $inlineRelations;
+        }
+        
+        foreach ($data as $fieldName => $value) {
+            $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
+            if ($fieldConfig && ($fieldConfig['config']['type'] ?? '') === 'inline') {
+                $inlineRelations[$fieldName] = [
+                    'config' => $fieldConfig['config'],
+                    'value' => $value
+                ];
+                // Remove from data array as we'll process it separately
+                unset($data[$fieldName]);
+            }
+        }
+        
+        return $inlineRelations;
+    }
+    
+    /**
+     * Process inline relations for DataHandler
+     */
+    protected function processInlineRelations(
+        array &$dataMap,
+        string $parentTable,
+        $parentUid,
+        int $pid,
+        array $inlineRelations,
+        ?int $liveUid = null
+    ): void {
+        foreach ($inlineRelations as $fieldName => $relationData) {
+            $config = $relationData['config'];
+            $value = $relationData['value'];
+            $foreignTable = $config['foreign_table'] ?? '';
+            $foreignField = $config['foreign_field'] ?? '';
+            
+            if (empty($foreignTable) || empty($foreignField)) {
+                continue;
+            }
+            
+            // Check if foreign table is hidden (embedded records)
+            $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
+            $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+            
+            if ($isHiddenTable) {
+                // Process embedded inline relations (e.g., tx_news_domain_model_link)
+                $this->processEmbeddedInlineRelations($dataMap, $foreignTable, $foreignField, $parentUid, $pid, $value, $config, $liveUid);
+            } else {
+                // Process independent inline relations (e.g., tt_content)
+                $this->processIndependentInlineRelations($foreignTable, $foreignField, $parentUid, $value, $liveUid);
+            }
+        }
+    }
+    
+    /**
+     * Process embedded inline relations (hideTable=true)
+     */
+    protected function processEmbeddedInlineRelations(
+        array &$dataMap,
+        string $foreignTable,
+        string $foreignField,
+        $parentUid,
+        int $pid,
+        array $records,
+        array $config,
+        ?int $liveUid = null
+    ): void {
+        // If we're updating, handle existing relations
+        if ($liveUid !== null) {
+            $this->handleExistingEmbeddedRelations($foreignTable, $foreignField, $liveUid, $records);
+        }
+        
+        foreach ($records as $index => $recordData) {
+            if (!is_array($recordData)) {
+                continue;
+            }
+            
+            // Create new ID for the inline record
+            $newId = 'NEW' . uniqid() . '_' . $index;
+            
+            // Don't set the foreign field here - it will be handled by RelationHandler
+            // Remove it if it was accidentally included
+            unset($recordData[$foreignField]);
+            $recordData['pid'] = $pid;
+            
+            // If we have a sorting field, set it
+            if (isset($config['foreign_sortby'])) {
+                $recordData[$config['foreign_sortby']] = ($index + 1) * 256;
+            }
+            
+            // Add to data map
+            if (!isset($dataMap[$foreignTable])) {
+                $dataMap[$foreignTable] = [];
+            }
+            $dataMap[$foreignTable][$newId] = $recordData;
+        }
+    }
+    
+    /**
+     * Process independent inline relations (UIDs only)
+     */
+    protected function processIndependentInlineRelations(
+        string $foreignTable,
+        string $foreignField,
+        $parentUid,
+        array $uids,
+        ?int $liveUid = null
+    ): void {
+        // For updates, we need to handle existing relations
+        if ($liveUid !== null) {
+            // First, clear existing relations
+            $this->clearExistingInlineRelations($foreignTable, $foreignField, $liveUid);
+        }
+        
+        // Update foreign field on specified records
+        if (!empty($uids)) {
+            $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+            $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+            
+            $updateMap = [];
+            foreach ($uids as $uid) {
+                if (is_numeric($uid) && $uid > 0) {
+                    $updateMap[$foreignTable][$uid] = [
+                        $foreignField => $liveUid ?? $parentUid
+                    ];
+                }
+            }
+            
+            if (!empty($updateMap)) {
+                $dataHandler->start($updateMap, []);
+                $dataHandler->process_datamap();
+            }
+        }
+    }
+    
+    /**
+     * Clear existing inline relations
+     */
+    protected function clearExistingInlineRelations(string $foreignTable, string $foreignField, int $parentUid): void
+    {
+        // Get all records that currently have this parent
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable($foreignTable);
+        
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+        
+        $existingRecords = $queryBuilder
+            ->select('uid')
+            ->from($foreignTable)
+            ->where(
+                $queryBuilder->expr()->eq($foreignField, $queryBuilder->createNamedParameter($parentUid, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+        
+        if (!empty($existingRecords)) {
+            // Use DataHandler to clear relations to respect workspaces
+            $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+            $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+            
+            $updateMap = [];
+            foreach ($existingRecords as $record) {
+                $updateMap[$foreignTable][$record['uid']] = [
+                    $foreignField => 0
+                ];
+            }
+            
+            if (!empty($updateMap)) {
+                $dataHandler->start($updateMap, []);
+                $dataHandler->process_datamap();
+            }
+        }
+    }
+    
+    /**
+     * Handle existing embedded relations during updates
+     */
+    protected function handleExistingEmbeddedRelations(
+        string $foreignTable,
+        string $foreignField,
+        int $parentUid,
+        array $newRecords
+    ): void {
+        // Get all existing child records for this parent
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable($foreignTable);
+        
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+        
+        $existingRecords = $queryBuilder
+            ->select('uid')
+            ->from($foreignTable)
+            ->where(
+                $queryBuilder->expr()->eq($foreignField, $queryBuilder->createNamedParameter($parentUid, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+        
+        if (!empty($existingRecords)) {
+            // Extract UIDs of new records that have UIDs (updates)
+            $keepUids = [];
+            foreach ($newRecords as $record) {
+                if (is_array($record) && isset($record['uid']) && is_numeric($record['uid'])) {
+                    $keepUids[] = (int)$record['uid'];
+                }
+            }
+            
+            // Delete records that are not in the new set
+            $deleteUids = [];
+            foreach ($existingRecords as $existingRecord) {
+                if (!in_array((int)$existingRecord['uid'], $keepUids, true)) {
+                    $deleteUids[] = (int)$existingRecord['uid'];
+                }
+            }
+            
+            if (!empty($deleteUids)) {
+                // Use DataHandler to delete records (respects workspaces)
+                $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+                $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+                
+                $cmdMap = [];
+                foreach ($deleteUids as $deleteUid) {
+                    $cmdMap[$foreignTable][$deleteUid]['delete'] = 1;
+                }
+                
+                $dataHandler->start([], $cmdMap);
+                $dataHandler->process_cmdmap();
+            }
+        }
+    }
+    
+    /**
+     * Validate inline relation data
+     */
+    protected function validateInlineRelationData(array $fieldConfig, $value): ?string
+    {
+        // Check if value is an array
+        if (!is_array($value)) {
+            return 'Inline relation field must be an array of UIDs or record data';
+        }
+        
+        // Get foreign table
+        $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
+        if (empty($foreignTable)) {
+            return 'Invalid inline relation configuration: missing foreign_table';
+        }
+        
+        // Check if foreign table is hidden (embedded records)
+        $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
+        $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+        
+        // Validate each item
+        foreach ($value as $index => $item) {
+            if ($isHiddenTable) {
+                // For hidden tables, expect record data arrays
+                if (!is_array($item)) {
+                    return 'Embedded inline relations must contain record data arrays';
+                }
+                // Basic validation - must have at least one field
+                if (empty($item)) {
+                    return 'Embedded inline relation record at index ' . $index . ' is empty';
+                }
+            } else {
+                // For independent tables, expect UIDs
+                if (!is_numeric($item) || $item <= 0) {
+                    return 'Independent inline relations must contain only positive integer UIDs';
+                }
+            }
+        }
+        
+        return null;
+    }
     
     /**
      * Check if a field is a FlexForm field

@@ -33,7 +33,6 @@ class GetPageToolTest extends FunctionalTestCase
         // Import enhanced page and content fixtures
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         
         // Set up backend user for DataHandler and TableAccessService

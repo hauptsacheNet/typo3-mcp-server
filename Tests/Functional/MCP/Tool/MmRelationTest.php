@@ -30,7 +30,6 @@ class MmRelationTest extends FunctionalTestCase
         
         // Import fixtures
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
         

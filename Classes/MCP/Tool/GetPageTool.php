@@ -80,6 +80,9 @@ class GetPageTool extends AbstractRecordTool
      */
     public function execute(array $params): CallToolResult
     {
+        // Initialize workspace context
+        $this->initializeWorkspaceContext();
+        
         $languageId = (int)($params['languageId'] ?? 0);
 
         // Determine page UID from either uid parameter or url parameter

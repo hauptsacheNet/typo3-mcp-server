@@ -87,6 +87,9 @@ class ReadTableTool extends AbstractRecordTool
      */
     public function execute(array $params): CallToolResult
     {
+        // Initialize workspace context
+        $this->initializeWorkspaceContext();
+        
         $table = $params['table'] ?? '';
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
@@ -326,8 +329,9 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
             
-            // If specific fields were requested, only include those
-            if (!empty($fields) && !in_array($field, $fields)) {
+            // Always include fields that were explicitly requested to be preserved
+            if (!empty($fields) && in_array($field, $fields)) {
+                $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
                 continue;
             }
             
@@ -631,8 +635,9 @@ class ReadTableTool extends AbstractRecordTool
         $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
 
         // Get all related records
-        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids);
-
+        $foreignSortBy = $fieldConfig['config']['foreign_sortby'] ?? '';
+        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy);
+        
         // Group related records by parent record
         $groupedRecords = [];
         foreach ($relatedRecords as $relatedRecord) {
@@ -648,13 +653,20 @@ class ReadTableTool extends AbstractRecordTool
         // Add related records to each record
         foreach ($records as &$record) {
             $uid = $record['uid'] ?? null;
-            if ($uid !== null && isset($groupedRecords[$uid])) {
-                if ($isHiddenTable) {
-                    // Embed full records for hidden tables (like sys_file_reference)
-                    $record[$fieldName] = $groupedRecords[$uid];
+            if ($uid !== null) {
+                if (isset($groupedRecords[$uid]) && !empty($groupedRecords[$uid])) {
+                    if ($isHiddenTable) {
+                        // Embed full records for hidden tables (like sys_file_reference)
+                        $record[$fieldName] = $groupedRecords[$uid];
+                    } else {
+                        // Return only UIDs for independent tables (like tt_content)
+                        $record[$fieldName] = array_column($groupedRecords[$uid], 'uid');
+                    }
                 } else {
-                    // Return only UIDs for independent tables (like tt_content)
-                    $record[$fieldName] = array_column($groupedRecords[$uid], 'uid');
+                    // Initialize as empty array if field exists in record but no relations found
+                    if (array_key_exists($fieldName, $record)) {
+                        $record[$fieldName] = [];
+                    }
                 }
             }
         }
@@ -663,22 +675,28 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Get inline related records
      */
-    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids): array
+    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids, string $foreignSortBy = ''): array
     {
         if (empty($parentUids)) {
             return [];
         }
-
+        
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
 
         // Apply restrictions
+        // For inline relations, we need proper workspace handling
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
         // Select all fields
+        // Apply default sorting if foreign_sortby is defined
+        $sortField = !empty($foreignSortBy) ? $foreignSortBy : 'sorting';
+        
+        // Ensure we have the sort field in our select
         $records = $queryBuilder->select('*')
             ->from($table)
             ->where(
@@ -687,13 +705,26 @@ class ReadTableTool extends AbstractRecordTool
                     $queryBuilder->createNamedParameter($parentUids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
                 )
             )
+            ->orderBy($sortField, 'ASC')
+            ->addOrderBy('uid', 'ASC')  // Secondary sort by UID for consistency
             ->executeQuery()
             ->fetchAllAssociative();
 
+
         // Process records for workspace transparency
+        // For inline relations, we need to ensure the foreign field is preserved
+        $fieldsToPreserve = [$foreignField];
+        
         $processedRecords = [];
         foreach ($records as $record) {
-            $processedRecords[] = $this->processRecord($record, $table);
+            $processed = $this->processRecord($record, $table, $fieldsToPreserve);
+            
+            // Ensure the foreign field is always included if it exists in the raw record
+            if (isset($record[$foreignField]) && !isset($processed[$foreignField])) {
+                $processed[$foreignField] = $this->convertFieldValue($table, $foreignField, $record[$foreignField]);
+            }
+            
+            $processedRecords[] = $processed;
         }
 
         return $processedRecords;
