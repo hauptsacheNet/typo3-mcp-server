@@ -17,6 +17,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
     ];
     
     protected array $testExtensionsToLoad = [
+        'news',  // Add News extension for success test cases
         'mcp_server',
     ];
 
@@ -324,6 +325,108 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $this->assertNotEmpty($schema['examples']);
         $this->assertArrayHasKey('description', $schema['examples'][0]);
         $this->assertArrayHasKey('parameters', $schema['examples'][0]);
+    }
+
+    /**
+     * Test successful FlexForm schema retrieval with News plugin
+     */
+    public function testGetFlexFormSchemaSuccess(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        // Test with News plugin identifier
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'field' => 'pi_flexform',
+            'identifier' => '*,news_pi1'
+        ]);
+        
+        // Should succeed with News extension loaded
+        $this->assertFalse($result->isError, 'Should successfully retrieve News FlexForm schema');
+        $this->assertCount(1, $result->content);
+        $this->assertInstanceOf(TextContent::class, $result->content[0]);
+        
+        $content = $result->content[0]->text;
+        
+        // Verify schema structure
+        $this->assertStringContainsString('FLEXFORM SCHEMA: *,news_pi1', $content);
+        $this->assertStringContainsString('Table: tt_content', $content);
+        $this->assertStringContainsString('Field: pi_flexform', $content);
+        $this->assertStringContainsString('Schema defined in file:', $content);
+        $this->assertStringContainsString('flexform_news_list.xml', $content);
+        
+        // Verify sheets are present
+        $this->assertStringContainsString('SHEETS:', $content);
+        $this->assertStringContainsString('Sheet: sDEF', $content);
+        $this->assertStringContainsString('Sheet: additional', $content);
+        $this->assertStringContainsString('Sheet: template', $content);
+        
+        // Verify key fields are present
+        $this->assertStringContainsString('settings.orderBy', $content);
+        $this->assertStringContainsString('settings.orderDirection', $content);
+        $this->assertStringContainsString('settings.categories', $content);
+        $this->assertStringContainsString('settings.detailPid', $content);
+        $this->assertStringContainsString('settings.listPid', $content);
+        $this->assertStringContainsString('settings.limit', $content);
+        
+        // Verify JSON structure example is present
+        $this->assertStringContainsString('JSON STRUCTURE:', $content);
+        $this->assertStringContainsString('"pi_flexform": {', $content);
+        
+        // Verify the dot notation conversion note is present
+        $this->assertStringContainsString('Field names with dots', $content);
+        $this->assertStringContainsString('converted to nested structures', $content);
+    }
+    
+    /**
+     * Test FlexForm schema with different News plugin types
+     */
+    public function testGetFlexFormSchemaWithDifferentNewsTypes(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        // Test category list FlexForm
+        $result = $tool->execute([
+            'identifier' => '*,news_categorylist'
+        ]);
+        
+        $this->assertFalse($result->isError, 'Should successfully retrieve News category list FlexForm schema');
+        $content = $result->content[0]->text;
+        
+        $this->assertStringContainsString('FLEXFORM SCHEMA: *,news_categorylist', $content);
+        $this->assertStringContainsString('flexform_category_list.xml', $content);
+        
+        // Test detail view FlexForm
+        $result = $tool->execute([
+            'identifier' => '*,news_newsdetail'
+        ]);
+        
+        $this->assertFalse($result->isError, 'Should successfully retrieve News detail FlexForm schema');
+        $content = $result->content[0]->text;
+        
+        $this->assertStringContainsString('FLEXFORM SCHEMA: *,news_newsdetail', $content);
+        $this->assertStringContainsString('flexform_news_detail.xml', $content);
+    }
+    
+    /**
+     * Test FlexForm schema parameter handling with recordUid
+     */
+    public function testGetFlexFormSchemaWithRecordUid(): void
+    {
+        $tool = new GetFlexFormSchemaTool();
+        
+        // recordUid parameter is accepted but not used for schema retrieval
+        $result = $tool->execute([
+            'identifier' => '*,news_pi1',
+            'recordUid' => 123  // This parameter is ignored for schema
+        ]);
+        
+        $this->assertFalse($result->isError);
+        $content = $result->content[0]->text;
+        
+        // Should still retrieve the schema successfully
+        $this->assertStringContainsString('FLEXFORM SCHEMA: *,news_pi1', $content);
+        $this->assertStringContainsString('flexform_news_list.xml', $content);
     }
 
     /**

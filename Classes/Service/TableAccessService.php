@@ -249,17 +249,14 @@ class TableAccessService implements SingletonInterface
         
         $schema = $this->tcaSchemaFactory->get($table);
         $fields = [];
+        $subtypeField = null;
         
         // If a specific type is provided and the schema supports sub-schemas
         if (!empty($type) && $schema->hasSubSchema($type)) {
             $subSchema = $schema->getSubSchema($type);
             
-            // Handle subtypes (old plugin system) - this will be deprecated
-            if ($subSchema->getSubTypeDivisorField() !== null) {
-                // For subtypes, we need the record data to determine the correct sub-schema
-                // Since we don't have record data here, use the main sub-schema
-                // The caller should handle subtype resolution if needed
-            }
+            // Check if this type uses subtypes (e.g., plugins using list_type)
+            $subtypeField = $subSchema->getSubTypeDivisorField();
             
             // Get fields from the sub-schema
             foreach ($subSchema->getFields() as $field) {
@@ -296,6 +293,13 @@ class TableAccessService implements SingletonInterface
             }
         }
         
+        // Handle subtypes pattern: If a type uses subtypes and has FlexForm configurations,
+        // ensure FlexForm fields are included even if not explicitly in showitem
+        if ($subtypeField !== null) {
+            $subtypeFieldName = $subtypeField->getName();
+            $this->addSubtypeFields($table, $type, $subtypeFieldName, $fields);
+        }
+        
         // Apply field-level access restrictions
         foreach ($fields as $fieldName => $fieldConfig) {
             if (!$this->canAccessField($table, $fieldName)) {
@@ -304,6 +308,68 @@ class TableAccessService implements SingletonInterface
         }
         
         return $fields;
+    }
+    
+    /**
+     * Add fields that should be available based on subtype configuration
+     * This handles the deprecated subtypes system and FlexForm fields
+     * 
+     * @param string $table Table name
+     * @param string $type Record type
+     * @param string $subtypeField The subtype field name (e.g., 'list_type')
+     * @param array &$fields Reference to fields array to modify
+     */
+    protected function addSubtypeFields(string $table, string $type, string $subtypeField, array &$fields): void
+    {
+        $tca = $GLOBALS['TCA'][$table] ?? [];
+        
+        // Check if there are FlexForm fields configured
+        $flexFormFields = [];
+        foreach ($tca['columns'] ?? [] as $fieldName => $fieldConfig) {
+            if (($fieldConfig['config']['type'] ?? '') === 'flex') {
+                $flexFormFields[] = $fieldName;
+            }
+        }
+        
+        // For each FlexForm field, check if there are DataStructures configured that use the subtype pattern
+        foreach ($flexFormFields as $flexFormField) {
+            $dsConfig = $tca['columns'][$flexFormField]['config']['ds'] ?? [];
+            
+            if (!empty($dsConfig)) {
+                // Check if any DS key uses the subtype pattern (e.g., "*,list_type_value")
+                $hasSubtypeDS = false;
+                foreach (array_keys($dsConfig) as $dsKey) {
+                    // Common patterns: "*,plugin_key" or "type,plugin_key" or just "plugin_key"
+                    if (strpos($dsKey, ',') !== false || isset($tca['columns'][$subtypeField]['config']['items'])) {
+                        $hasSubtypeDS = true;
+                        break;
+                    }
+                }
+                
+                // If there are subtype-based DataStructures, include the FlexForm field
+                if ($hasSubtypeDS && !isset($fields[$flexFormField])) {
+                    // Add the FlexForm field configuration if it's not already present
+                    $fields[$flexFormField] = $tca['columns'][$flexFormField] ?? [];
+                }
+            }
+        }
+        
+        // Handle traditional subtypes_addlist (deprecated but still supported)
+        $subtypesAddlist = $tca['types'][$type]['subtypes_addlist'] ?? [];
+        if (!empty($subtypesAddlist) && is_array($subtypesAddlist)) {
+            // This would require knowing the actual subtype value, which we don't have here
+            // For general schema purposes, we could include all possible fields from all subtypes
+            foreach ($subtypesAddlist as $subtypeValue => $addFields) {
+                if (!empty($addFields)) {
+                    $addFieldsList = GeneralUtility::trimExplode(',', $addFields, true);
+                    foreach ($addFieldsList as $fieldName) {
+                        if (isset($tca['columns'][$fieldName]) && !isset($fields[$fieldName])) {
+                            $fields[$fieldName] = $tca['columns'][$fieldName];
+                        }
+                    }
+                }
+            }
+        }
     }
     
     /**

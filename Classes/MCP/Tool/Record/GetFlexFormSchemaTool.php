@@ -28,7 +28,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
     public function getSchema(): array
     {
         return [
-            'description' => 'Get schema information for a specific FlexForm field',
+            'description' => 'Get schema information for a specific FlexForm field. Returns field definitions, types, and configuration options for the FlexForm DataStructure.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -44,19 +44,35 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                     ],
                     'identifier' => [
                         'type' => 'string',
-                        'description' => 'The FlexForm identifier to get schema information for (required)',
+                        'description' => 'The FlexForm identifier (e.g., "form_formframework", "*,news_pi1"). For plugins, often uses pattern "*,list_type_value"',
                         'required' => true,
+                    ],
+                    'recordUid' => [
+                        'type' => 'integer',
+                        'description' => 'Optional record UID (currently not used but accepted for compatibility)',
                     ],
                 ],
                 'required' => ['identifier'],
             ],
             'examples' => [
                 [
-                    'description' => 'Get schema information for a specific FlexForm',
+                    'description' => 'Get schema for Form Framework FlexForm',
                     'parameters' => [
                         'table' => 'tt_content',
                         'field' => 'pi_flexform',
                         'identifier' => 'form_formframework',
+                    ],
+                ],
+                [
+                    'description' => 'Get schema for News plugin FlexForm',
+                    'parameters' => [
+                        'identifier' => '*,news_pi1',
+                    ],
+                ],
+                [
+                    'description' => 'Get schema for News category list FlexForm',
+                    'parameters' => [
+                        'identifier' => '*,news_categorylist',
                     ],
                 ],
             ],
@@ -126,6 +142,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                         $xmlArray = GeneralUtility::xml2array($content);
                         
                         if ($xmlArray) {
+                            // Collect all field names for JSON example
+                            $allFieldNames = [];
+                            
                             // Process sheets
                             if (isset($xmlArray['sheets'])) {
                                 $result .= "SHEETS:\n";
@@ -139,6 +158,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                         $result .= "  Fields:\n";
                                         
                                         foreach ($sheet['ROOT']['el'] as $fieldName => $field) {
+                                            $allFieldNames[] = $fieldName;
                                             $result .= "  - $fieldName";
                                             
                                             // Get field type and label
@@ -193,6 +213,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                                 }
                                             }
                                             
+                                            // Add JSON path info
+                                            $result .= "\n    JSON Path: " . $this->getJsonPath($fieldName);
+                                            
                                             $result .= "\n";
                                         }
                                     }
@@ -204,6 +227,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                 $result .= "------\n";
                                 
                                 foreach ($xmlArray['ROOT']['el'] as $fieldName => $field) {
+                                    $allFieldNames[] = $fieldName;
                                     $result .= "- $fieldName";
                                     
                                     // Get field type and label
@@ -258,6 +282,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                         }
                                     }
                                     
+                                    // Add JSON path info
+                                    $result .= "\n  JSON Path: " . $this->getJsonPath($fieldName);
+                                    
                                     $result .= "\n";
                                 }
                                 
@@ -267,77 +294,20 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                             $result .= "Failed to parse XML schema\n";
                         }
 
-                        // Generate a JSON example
-                        $result .= "JSON EXAMPLE:\n";
-                        $result .= "============\n";
-
-                        // Create a simplified structure that matches what ReadTableTool will return
-                        $example = [];
-
-                        // Process sheets
-                        if (isset($xmlArray['sheets'])) {
-                            foreach ($xmlArray['sheets'] as $sheetName => $sheet) {
-                                if (isset($sheet['ROOT']['el'])) {
-                                    foreach ($sheet['ROOT']['el'] as $fieldName => $field) {
-                                        // Get field type
-                                        $fieldType = isset($field['TCEforms']['config']['type']) ? $field['TCEforms']['config']['type'] : 'input';
-
-                                        // Generate example value based on field type
-                                        switch ($fieldType) {
-                                            case 'input':
-                                                $example[$fieldName] = "Example text";
-                                                break;
-                                            case 'text':
-                                                $example[$fieldName] = "Example multi-line text";
-                                                break;
-                                            case 'check':
-                                                $example[$fieldName] = true;
-                                                break;
-                                            case 'select':
-                                                $example[$fieldName] = "option1";
-                                                break;
-                                            default:
-                                                $example[$fieldName] = "Example value";
-                                        }
-                                    }
-                                }
-                            }
-                        } elseif (isset($xmlArray['ROOT']['el'])) {
-                            foreach ($xmlArray['ROOT']['el'] as $fieldName => $field) {
-                                // Get field type
-                                $fieldType = isset($field['TCEforms']['config']['type']) ? $field['TCEforms']['config']['type'] : 'input';
-
-                                // Generate example value based on field type
-                                switch ($fieldType) {
-                                    case 'input':
-                                        $example[$fieldName] = "Example text";
-                                        break;
-                                    case 'text':
-                                        $example[$fieldName] = "Example multi-line text";
-                                        break;
-                                    case 'check':
-                                        $example[$fieldName] = true;
-                                        break;
-                                    case 'select':
-                                        $example[$fieldName] = "option1";
-                                        break;
-                                    default:
-                                        $example[$fieldName] = "Example value";
-                                }
-                            }
+                        // Generate a JSON structure example
+                        $result .= "JSON STRUCTURE:\n";
+                        $result .= "==============\n";
+                        $result .= "When reading or writing FlexForm data, use nested objects/arrays:\n\n";
+                        
+                        if (!empty($allFieldNames)) {
+                            $jsonExample = $this->buildJsonExample($allFieldNames);
+                            $result .= json_encode($jsonExample, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                        } else {
+                            $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
                         }
-
-                        // For form_formframework, provide a more specific example
-                        if ($identifier === '*,form_formframework') {
-                            $example = [
-                                'settings' => [
-                                    'persistenceIdentifier' => '1:/form_definitions/example.form.yaml',
-                                    'overrideFinishers' => '0'
-                                ]
-                            ];
-                        }
-
-                        $result .= json_encode(['pi_flexform' => $example], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                        
+                        $result .= "\n\nNote: Field names with dots (e.g., \"settings.orderBy\") are automatically\n";
+                        $result .= "converted to nested structures by TYPO3.";
                     } else {
                         return $this->createErrorResult("FlexForm file is empty: $file");
                     }
@@ -351,6 +321,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                 $xmlArray = GeneralUtility::xml2array($dsValue);
                 
                 if ($xmlArray) {
+                    // Collect all field names for JSON example
+                    $allFieldNames = [];
+                    
                     // Process sheets
                     if (isset($xmlArray['sheets'])) {
                         $result .= "SHEETS:\n";
@@ -364,6 +337,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                 $result .= "  Fields:\n";
                                 
                                 foreach ($sheet['ROOT']['el'] as $fieldName => $field) {
+                                    $allFieldNames[] = $fieldName;
                                     $result .= "  - $fieldName";
                                     
                                     // Get field type and label
@@ -418,6 +392,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                         }
                                     }
                                     
+                                    // Add JSON path info
+                                    $result .= "\n    JSON Path: " . $this->getJsonPath($fieldName);
+                                    
                                     $result .= "\n";
                                 }
                             }
@@ -429,6 +406,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                         $result .= "------\n";
                         
                         foreach ($xmlArray['ROOT']['el'] as $fieldName => $field) {
+                            $allFieldNames[] = $fieldName;
                             $result .= "- $fieldName";
                             
                             // Get field type and label
@@ -483,6 +461,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                 }
                             }
                             
+                            // Add JSON path info
+                            $result .= "\n  JSON Path: " . $this->getJsonPath($fieldName);
+                            
                             $result .= "\n";
                         }
                         
@@ -492,17 +473,30 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                     $result .= "Failed to parse XML schema\n";
                 }
 
-                // Generate a JSON example
-                $result .= "JSON EXAMPLE:\n";
-                $result .= "============\n";
-                $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                // Generate a JSON structure example
+                $result .= "JSON STRUCTURE:\n";
+                $result .= "==============\n";
+                $result .= "When reading or writing FlexForm data, use nested objects/arrays:\n\n";
+                
+                if (!empty($allFieldNames)) {
+                    $jsonExample = $this->buildJsonExample($allFieldNames);
+                    $result .= json_encode($jsonExample, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                } else {
+                    $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                }
+                
+                $result .= "\n\nNote: Field names with dots (e.g., \"settings.orderBy\") are automatically\n";
+                $result .= "converted to nested structures by TYPO3.";
             } elseif (is_array($dsValue)) {
                 $result .= "Schema defined as PHP array\n\n";
 
-                // Generate a JSON example
-                $result .= "JSON EXAMPLE:\n";
-                $result .= "============\n";
+                // Generate a JSON structure example
+                $result .= "JSON STRUCTURE:\n";
+                $result .= "==============\n";
+                $result .= "When reading or writing FlexForm data, use nested objects/arrays:\n\n";
                 $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                $result .= "\n\nNote: Field names with dots (e.g., \"settings.orderBy\") are automatically\n";
+                $result .= "converted to nested structures by TYPO3.";
             }
 
             return $this->createSuccessResult($result);
@@ -530,6 +524,52 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
         }
 
         return $values;
+    }
+    
+    /**
+     * Convert dot notation field name to JSON path
+     * e.g., "settings.orderBy" -> "pi_flexform.settings.orderBy"
+     */
+    protected function getJsonPath(string $fieldName): string
+    {
+        if (strpos($fieldName, '.') === false) {
+            return 'pi_flexform.' . $fieldName;
+        }
+        
+        $parts = explode('.', $fieldName);
+        return 'pi_flexform.' . implode('.', $parts);
+    }
+    
+    /**
+     * Build example JSON structure from field names
+     */
+    protected function buildJsonExample(array $fieldNames): array
+    {
+        $example = ['pi_flexform' => []];
+        
+        foreach ($fieldNames as $fieldName) {
+            // Skip non-field entries
+            if (strpos($fieldName, '.') === false) {
+                $example['pi_flexform'][$fieldName] = '<' . $fieldName . ' value>';
+            } else {
+                // Handle nested structure
+                $parts = explode('.', $fieldName);
+                $current = &$example['pi_flexform'];
+                
+                // Navigate/create the nested structure
+                for ($i = 0; $i < count($parts) - 1; $i++) {
+                    if (!isset($current[$parts[$i]])) {
+                        $current[$parts[$i]] = [];
+                    }
+                    $current = &$current[$parts[$i]];
+                }
+                
+                // Set the final value
+                $current[$parts[count($parts) - 1]] = '<' . $parts[count($parts) - 1] . ' value>';
+            }
+        }
+        
+        return $example;
     }
 
     /**

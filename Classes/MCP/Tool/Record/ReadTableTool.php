@@ -335,6 +335,26 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
             
+            // Special handling for pi_flexform in list content elements
+            if ($field === 'pi_flexform' && $table === 'tt_content' && 
+                isset($record['CType']) && $record['CType'] === 'list' &&
+                !empty($record['list_type'])) {
+                // Check if there's a FlexForm DS configured for this plugin
+                $flexFormDs = $GLOBALS['TCA']['tt_content']['columns']['pi_flexform']['config']['ds'] ?? [];
+                $listType = $record['list_type'];
+                
+                // Check various DS key patterns
+                $hasFlexFormConfig = isset($flexFormDs[$listType . ',list']) || 
+                                    isset($flexFormDs['*,' . $listType]) ||
+                                    isset($flexFormDs[$listType]);
+                
+                if ($hasFlexFormConfig) {
+                    // Include pi_flexform for this plugin
+                    $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
+                    continue;
+                }
+            }
+            
             // Skip fields not relevant to this record type (only if we have a valid type configuration)
             if ($hasValidTypeConfig && !empty($typeSpecificFields) && !in_array($field, $typeSpecificFields)) {
                 continue;

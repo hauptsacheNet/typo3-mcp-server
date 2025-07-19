@@ -321,6 +321,28 @@ class GetTableSchemaTool extends AbstractRecordTool
             }
         }
         
+        // Check for fields that are available but not in showitem (e.g., dynamically added fields like pi_flexform for plugins)
+        $unassignedFields = [];
+        foreach ($availableFields as $fieldName => $fieldConfig) {
+            if (!isset($processedFields[$fieldName])) {
+                $unassignedFields[$fieldName] = $fieldConfig;
+            }
+        }
+        
+        // If there are unassigned fields, add them to a special section
+        if (!empty($unassignedFields)) {
+            $result .= "  (Additional Fields):\n";
+            foreach ($unassignedFields as $fieldName => $fieldConfig) {
+                $fieldLabel = isset($fieldConfig['label']) ? $this->translateLabel($fieldConfig['label']) : $fieldName;
+                $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
+                $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
+                
+                // Add field details inline
+                $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType);
+                $result .= "\n";
+            }
+        }
+        
         return $result;
     }
     
