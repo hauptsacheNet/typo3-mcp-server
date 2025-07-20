@@ -67,10 +67,7 @@ class GetPageTool extends AbstractRecordTool
                         'description' => 'Language ID for URL generation (default: 0)',
                     ],
                 ],
-                'oneOf' => [
-                    ['required' => ['uid']],
-                    ['required' => ['url']]
-                ],
+                'required' => [],
             ],
         ];
     }

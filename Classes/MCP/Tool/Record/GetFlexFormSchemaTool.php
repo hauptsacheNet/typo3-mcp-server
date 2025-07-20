@@ -45,7 +45,6 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                     'identifier' => [
                         'type' => 'string',
                         'description' => 'The FlexForm identifier to get schema information for (required)',
-                        'required' => true,
                     ],
                 ],
                 'required' => ['identifier'],

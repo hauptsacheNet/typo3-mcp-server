@@ -36,6 +36,9 @@
         ],
         "test:functional": [
             "phpunit -c phpunit.xml.dist"
+        ],
+        "test:llm": [
+            "phpunit -c Tests/Llm/phpunit-llm.xml"
         ]
     },
     "config": {

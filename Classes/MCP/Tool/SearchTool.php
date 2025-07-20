@@ -38,7 +38,8 @@ class SearchTool extends AbstractRecordTool
         
         return [
             'description' => "Search for records across workspace-capable TYPO3 tables using TCA-based searchable fields. " .
-                "Uses SQL LIKE queries for pattern matching.\n\n",
+                "Uses SQL LIKE queries for pattern matching. Useful when you need to find pages or content that might not be visible in the page tree, " .
+                "or for thorough duplicate checking after initial exploration.",
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
