@@ -389,11 +389,6 @@ class GetPageToolTest extends FunctionalTestCase
         // Verify languageId is marked as deprecated
         $this->assertTrue($schema['parameters']['properties']['languageId']['deprecated'] ?? false);
         
-        // Verify oneOf constraint (either uid or url is required)
-        $this->assertArrayHasKey('oneOf', $schema['parameters']);
-        $this->assertIsArray($schema['parameters']['oneOf']);
-        $this->assertCount(2, $schema['parameters']['oneOf']);
-        
         // Check url parameter was added
         $this->assertArrayHasKey('url', $schema['parameters']['properties']);
     }

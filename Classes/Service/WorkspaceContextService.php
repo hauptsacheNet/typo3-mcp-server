@@ -23,6 +23,12 @@ class WorkspaceContextService
      */
     public function switchToOptimalWorkspace(BackendUserAuthentication $beUser): int
     {
+        // If already in a workspace, don't switch
+        $currentWorkspace = $beUser->workspace ?? 0;
+        if ($currentWorkspace > 0) {
+            return $currentWorkspace;
+        }
+        
         // First check if user already has access to workspaces
         $workspaceId = $this->getFirstWritableWorkspace($beUser);
         

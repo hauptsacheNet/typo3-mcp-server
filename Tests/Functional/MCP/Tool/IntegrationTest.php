@@ -12,6 +12,7 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 use Doctrine\DBAL\ParameterType;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
+use Hn\McpServer\Service\WorkspaceContextService;
 
 class IntegrationTest extends FunctionalTestCase
 {
@@ -35,6 +36,10 @@ class IntegrationTest extends FunctionalTestCase
         
         // Set up backend user
         $this->setUpBackendUser(1);
+        
+        // Initialize workspace context once for all tests
+        $workspaceContextService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+        $workspaceContextService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
     }
 
     /**
@@ -46,6 +51,7 @@ class IntegrationTest extends FunctionalTestCase
         $writeTool = new WriteTableTool();
         $readTool = new ReadTableTool();
         $searchTool = new SearchTool();
+        
         
         // Step 1: Create a content element
         $createResult = $writeTool->execute([
@@ -62,6 +68,7 @@ class IntegrationTest extends FunctionalTestCase
         $this->assertFalse($createResult->isError);
         $createData = json_decode($createResult->content[0]->text, true);
         $liveUid = $createData['uid'];
+        
         
         // The returned UID should be a positive integer
         $this->assertIsInt($liveUid);
@@ -98,6 +105,7 @@ class IntegrationTest extends FunctionalTestCase
         $this->assertFalse($updateResult->isError);
         $updateData = json_decode($updateResult->content[0]->text, true);
         
+        
         // The returned UID should still be the same
         $this->assertEquals($liveUid, $updateData['uid']);
         
@@ -110,6 +118,7 @@ class IntegrationTest extends FunctionalTestCase
         $this->assertFalse($readAgainResult->isError);
         $readAgainData = json_decode($readAgainResult->content[0]->text, true);
         $updatedRecord = $readAgainData['records'][0];
+        
         
         // Should see the updated content
         $this->assertEquals('Updated Workspace Test', $updatedRecord['header']);
@@ -393,6 +402,10 @@ class IntegrationTest extends FunctionalTestCase
         
         $queryBuilder->getRestrictions()->removeAll();
         
+        // Get the current workspace ID dynamically
+        $workspaceContextService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+        $currentWorkspaceId = $workspaceContextService->getCurrentWorkspace();
+        
         // Look for delete placeholder (t3ver_state = 2)
         $deletePlaceholder = $queryBuilder
             ->select('uid', 't3ver_oid', 't3ver_state', 't3ver_wsid', 'header', 'deleted')
@@ -400,7 +413,7 @@ class IntegrationTest extends FunctionalTestCase
             ->where(
                 $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($liveUid, ParameterType::INTEGER)),
                 $queryBuilder->expr()->eq('t3ver_state', $queryBuilder->createNamedParameter(2, ParameterType::INTEGER)),
-                $queryBuilder->expr()->eq('t3ver_wsid', $queryBuilder->createNamedParameter(1, ParameterType::INTEGER))
+                $queryBuilder->expr()->eq('t3ver_wsid', $queryBuilder->createNamedParameter($currentWorkspaceId, ParameterType::INTEGER))
             )
             ->executeQuery()
             ->fetchAssociative();

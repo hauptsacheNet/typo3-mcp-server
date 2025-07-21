@@ -13,7 +13,8 @@
     "require-dev": {
         "typo3/testing-framework": "^9.2.0",
         "typo3/cms-install": "^13.4",
-        "georgringer/news": "^12.0"
+        "georgringer/news": "^12.0",
+        "brianium/paratest": "^7.11"
     },
     "autoload": {
         "psr-4": {
@@ -35,10 +36,10 @@
             "@test:functional"
         ],
         "test:functional": [
-            "phpunit -c phpunit.xml.dist"
+            "paratest -c phpunit.xml.dist"
         ],
         "test:llm": [
-            "phpunit -c Tests/Llm/phpunit-llm.xml"
+            "paratest -c Tests/Llm/phpunit-llm.xml"
         ]
     },
     "config": {
