@@ -45,11 +45,17 @@ class ReadTableTool extends AbstractRecordTool
         $availableLanguages = $this->languageService->getAvailableIsoCodes();
         $hasMultipleLanguages = count($availableLanguages) > 1;
         
+        // Get all accessible tables for enum
+        $accessibleTables = $this->tableAccessService->getAccessibleTables(true);
+        $tableNames = array_keys($accessibleTables);
+        sort($tableNames); // Sort alphabetically for better readability
+        
         // Build the base properties
         $properties = [
             'table' => [
                 'type' => 'string',
                 'description' => 'The table name to read records from',
+                'enum' => $tableNames,
             ],
             'pid' => [
                 'type' => 'integer',

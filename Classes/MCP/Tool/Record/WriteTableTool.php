@@ -40,6 +40,11 @@ class WriteTableTool extends AbstractRecordTool
      */
     public function getSchema(): array
     {
+        // Get all accessible tables for enum (exclude read-only tables for write operations)
+        $accessibleTables = $this->tableAccessService->getAccessibleTables(false);
+        $tableNames = array_keys($accessibleTables);
+        sort($tableNames); // Sort alphabetically for better readability
+        
         return [
             'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live. Language fields (sys_language_uid) can be provided as ISO codes (e.g., "de", "fr") instead of numeric IDs.' .
                 'Before creating or updating content, always use GetPage to understand the page structure, existing content, and writing style. ' .
@@ -58,6 +63,7 @@ class WriteTableTool extends AbstractRecordTool
                     'table' => [
                         'type' => 'string',
                         'description' => 'The table name to write records to',
+                        'enum' => $tableNames,
                     ],
                     'pid' => [
                         'type' => 'integer',

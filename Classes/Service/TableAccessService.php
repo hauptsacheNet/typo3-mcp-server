@@ -453,6 +453,18 @@ class TableAccessService implements SingletonInterface
             return true;
         }
         
+        // Check for system group tables with workspace support
+        // This is likely a misconfiguration as system configuration tables shouldn't support workspaces
+        $groupName = $GLOBALS['TCA'][$table]['ctrl']['groupName'] ?? '';
+        $isWorkspaceCapable = !empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS']);
+        
+        if ($groupName === 'system' && $isWorkspaceCapable) {
+            // System tables with workspace support are suspicious
+            // Examples: backend_layout, sys_template, sys_file_storage, sys_workspace
+            // These are configuration tables that shouldn't be edited in workspaces
+            return true;
+        }
+        
         return false;
     }
     
