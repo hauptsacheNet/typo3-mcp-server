@@ -32,6 +32,7 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected ?LlmClientInterface $llmClient = null;
     protected string $lastPrompt = '';
     protected ?LlmResponse $lastResponse = null;
+    protected array $toolCallHistory = [];
 
     protected function setUp(): void
     {
@@ -354,5 +355,102 @@ abstract class LlmTestCase extends FunctionalTestCase
         }
         
         return $this->continueWithToolResult($response, $toolResults, $options);
+    }
+    
+    /**
+     * Execute all tool calls and continue, handling multiple tool calls properly
+     * 
+     * @param LlmResponse $response
+     * @return LlmResponse
+     */
+    protected function executeAllToolsAndContinue(LlmResponse $response): LlmResponse
+    {
+        if (!$response->hasToolCalls()) {
+            return $response;
+        }
+        
+        return $this->executeAndContinue($response);
+    }
+    
+    /**
+     * Execute tool calls until a specific tool is found or max iterations reached
+     * 
+     * @param LlmResponse $response Initial response
+     * @param string $targetToolName Tool name to search for
+     * @param int $maxIterations Maximum iterations before giving up
+     * @return LlmResponse Response containing the target tool or final response
+     */
+    protected function executeUntilToolFound(
+        LlmResponse $response, 
+        string $targetToolName, 
+        int $maxIterations = 5
+    ): LlmResponse {
+        $currentResponse = $response;
+        $this->toolCallHistory = [];
+        
+        for ($i = 0; $i < $maxIterations && $currentResponse->hasToolCalls(); $i++) {
+            // Track all tool calls for history
+            foreach ($currentResponse->getToolCalls() as $toolCall) {
+                $this->toolCallHistory[] = $toolCall['name'];
+            }
+            
+            // Check if target tool is found
+            if ($currentResponse->getToolCallsByName($targetToolName)) {
+                return $currentResponse;
+            }
+            
+            // Execute all tools and continue
+            $currentResponse = $this->executeAndContinue($currentResponse);
+        }
+        
+        return $currentResponse;
+    }
+    
+    /**
+     * Get all tool names that were called during exploration
+     * 
+     * @return array
+     */
+    protected function getToolCallHistory(): array
+    {
+        return $this->toolCallHistory ?? [];
+    }
+    
+    /**
+     * Assert that a specific tool was called before another tool
+     * 
+     * @param string $firstTool Tool that should be called first
+     * @param string $secondTool Tool that should be called after
+     * @param string $message Optional failure message
+     */
+    protected function assertToolWasCalledBefore(string $firstTool, string $secondTool, string $message = ''): void
+    {
+        $history = $this->getToolCallHistory();
+        $firstIndex = array_search($firstTool, $history);
+        $secondIndex = array_search($secondTool, $history);
+        
+        if ($firstIndex === false) {
+            $this->fail($message ?: "Expected tool '$firstTool' was not called");
+        }
+        
+        if ($secondIndex === false) {
+            $this->fail($message ?: "Expected tool '$secondTool' was not called");
+        }
+        
+        $this->assertLessThan($secondIndex, $firstIndex, 
+            $message ?: "Expected '$firstTool' to be called before '$secondTool'");
+    }
+    
+    /**
+     * Assert that a specific tool was called during exploration
+     * 
+     * @param string $toolName Tool name to check
+     * @param string $message Optional failure message
+     */
+    protected function assertToolWasCalled(string $toolName, string $message = ''): void
+    {
+        $history = $this->getToolCallHistory();
+        $this->assertContains($toolName, $history, 
+            $message ?: "Expected tool '$toolName' to be called during exploration");
     }
 }

@@ -32,7 +32,10 @@ class WriteTableTool extends AbstractRecordTool
     public function getSchema(): array
     {
         return [
-            'description' => 'Create, update, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live.',
+            'description' => 'Create, update, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live. ' .
+                'Before creating or updating content, always use GetPage to understand the page structure, existing content, and writing style. ' .
+                'Check existing content elements with ReadTable to ensure new content fits the page\'s tone and doesn\'t duplicate existing elements. ' .
+                'For content creation, verify the appropriate colPos by examining existing content layout.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
