@@ -15,24 +15,6 @@ use Hn\McpServer\Service\LanguageService as McpLanguageService;
  */
 class TcaFormattingUtility
 {
-    /**
-     * Translate a label
-     */
-    public static function translateLabel(string $label): string
-    {
-        // If the label is a LLL reference, translate it
-        if (strpos($label, 'LLL:') === 0) {
-            // Initialize language service if needed
-            if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof LanguageService) {
-                $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-                $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-            }
-            
-            return $GLOBALS['LANG']->sL($label) ?: $label;
-        }
-        
-        return $label;
-    }
 
     /**
      * Add field details inline for TCA or FlexForm configuration
@@ -95,7 +77,7 @@ class TcaFormattingUtility
                     foreach ($parsed['values'] as $value) {
                         $label = $parsed['labels'][$value] ?? '';
                         if ($label) {
-                            $translatedLabel = self::translateLabel($label);
+                            $translatedLabel = TableAccessService::translateLabel($label);
                             $options[] = $value . " (" . $translatedLabel . ")";
                         }
                     }

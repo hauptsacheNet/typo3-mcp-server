@@ -29,11 +29,6 @@ class NewsContentElementsTest extends FunctionalTestCase
         parent::setUp();
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/be_users.csv');
         $this->setUpBackendUser(1);
-        // Initialize language service
-        if (!isset($GLOBALS['LANG'])) {
-            $languageServiceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
     }
 
     /**

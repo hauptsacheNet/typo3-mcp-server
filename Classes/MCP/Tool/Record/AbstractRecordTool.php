@@ -143,28 +143,9 @@ abstract class AbstractRecordTool extends AbstractTool implements RecordToolInte
             return $table;
         }
         
-        return $this->tableAccessService->translateLabel($this->tableAccessService->getTableTitle($table));
+        return TableAccessService::translateLabel($this->tableAccessService->getTableTitle($table));
     }
     
-    /**
-     * Translate a label if it's in LLL format
-     */
-    protected function translateLabel(string $label): string
-    {
-        // Check if the label is a language reference (LLL:)
-        if (strpos($label, 'LLL:') === 0) {
-            // Initialize language service if needed
-            if (!isset($GLOBALS['LANG'])) {
-                $languageServiceFactory = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
-                $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-            }
-            
-            // Translate the label
-            return $GLOBALS['LANG']->sL($label);
-        }
-        
-        return $label;
-    }
     
     /**
      * Check if a table is hidden (not accessible through TableAccessService)

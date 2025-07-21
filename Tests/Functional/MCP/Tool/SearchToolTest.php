@@ -32,7 +32,7 @@ class SearchToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         
         // Set up backend user for DataHandler and TableAccessService
-        $this->setUpBackendUserWithWorkspace(1);
+        $this->setUpBackendUser(1);
     }
 
     /**
@@ -551,15 +551,5 @@ class SearchToolTest extends FunctionalTestCase
         // Should find the Web Development category directly
         $this->assertStringContainsString('Web Development', $content);
         $this->assertStringContainsString('[UID: 4] Web Development', $content);
-    }
-    
-    /**
-     * Helper method to set up backend user with workspace
-     */
-    protected function setUpBackendUserWithWorkspace(int $uid): void
-    {
-        $backendUser = $this->setUpBackendUser($uid);
-        $backendUser->workspace = 1; // Set to test workspace
-        $GLOBALS['BE_USER'] = $backendUser;
     }
 }

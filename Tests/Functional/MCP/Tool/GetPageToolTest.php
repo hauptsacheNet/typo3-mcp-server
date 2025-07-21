@@ -10,8 +10,6 @@ use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\TextContent;
 use Symfony\Component\Yaml\Yaml;
-use TYPO3\CMS\Core\Localization\LanguageService as Typo3LanguageService;
-use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
@@ -37,16 +35,10 @@ class GetPageToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         
         // Set up backend user for DataHandler and TableAccessService
-        $this->setUpBackendUserWithWorkspace(1);
+        $this->setUpBackendUser(1);
         
         // Create proper site configuration for real URL testing
         $this->createTestSiteConfiguration();
-        
-        // Initialize language service to prevent LANG errors
-        if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof Typo3LanguageService) {
-            $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
     }
 
     /**
@@ -663,13 +655,4 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertStringContainsString('https://example.com/about/team', $content);
     }
     
-    /**
-     * Helper method to set up backend user with workspace
-     */
-    protected function setUpBackendUserWithWorkspace(int $uid): void
-    {
-        $backendUser = $this->setUpBackendUser($uid);
-        $backendUser->workspace = 1; // Set to test workspace
-        $GLOBALS['BE_USER'] = $backendUser;
-    }
 }

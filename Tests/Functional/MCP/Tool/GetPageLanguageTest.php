@@ -8,7 +8,6 @@ use Hn\McpServer\MCP\Tool\GetPageTool;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
 use Symfony\Component\Yaml\Yaml;
-use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -37,10 +36,6 @@ class GetPageLanguageTest extends FunctionalTestCase
         
         // Set up backend user
         $this->setUpBackendUser(1);
-        
-        // Initialize language service
-        $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-        $GLOBALS['LANG'] = $languageServiceFactory->create('default');
     }
 
     /**

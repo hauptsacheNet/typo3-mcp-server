@@ -179,6 +179,9 @@ class SearchTool extends AbstractRecordTool
      */
     public function execute(array $params): CallToolResult
     {
+        // Initialize workspace context
+        $this->initializeWorkspaceContext();
+        
         $terms = $params['terms'] ?? [];
         $termLogic = strtoupper($params['termLogic'] ?? 'OR');
         $table = trim($params['table'] ?? '');

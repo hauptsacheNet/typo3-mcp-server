@@ -29,7 +29,7 @@ class ReadTableToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         
         // Set up backend user for DataHandler and TableAccessService
-        $this->setUpBackendUserWithWorkspace(1);
+        $this->setUpBackendUser(1);
     }
 
     /**
@@ -463,15 +463,5 @@ class ReadTableToolTest extends FunctionalTestCase
         
         // Should have reasonable field count (not all possible fields)
         $this->assertLessThan(100, count($record), "Too many fields for unknown CType");
-    }
-    
-    /**
-     * Helper method to set up backend user with workspace
-     */
-    protected function setUpBackendUserWithWorkspace(int $uid): void
-    {
-        $backendUser = $this->setUpBackendUser($uid);
-        $backendUser->workspace = 1; // Set to test workspace
-        $GLOBALS['BE_USER'] = $backendUser;
     }
 }

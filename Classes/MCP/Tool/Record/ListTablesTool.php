@@ -46,6 +46,9 @@ class ListTablesTool extends AbstractRecordTool
      */
     public function execute(array $params): CallToolResult
     {
+        // Initialize workspace context
+        $this->initializeWorkspaceContext();
+        
         try {
             // Get all accessible tables from TableAccessService (include all, regardless of read-only status)
             $tables = $this->tableAccessService->getAccessibleTables(true);

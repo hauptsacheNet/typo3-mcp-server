@@ -10,15 +10,9 @@ use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use Doctrine\DBAL\ParameterType;
-use TYPO3\CMS\Core\Localization\LanguageService;
-use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
-/**
- * Integration test for workspace transparency across MCP tools
- * Tests that LLMs can work with records using stable UIDs without workspace knowledge
- */
 class IntegrationTest extends FunctionalTestCase
 {
     protected array $coreExtensionsToLoad = [
@@ -34,30 +28,13 @@ class IntegrationTest extends FunctionalTestCase
     {
         parent::setUp();
         
-        // Import all necessary fixtures
+        // Import fixtures
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
         
-        // Set up backend user for DataHandler
-        $this->setUpBackendUserWithWorkspace(1);
-        
-        // Initialize language service to prevent LANG errors during DataHandler operations
-        if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof LanguageService) {
-            $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
-    }
-
-    /**
-     * Helper method to set up backend user with workspace
-     */
-    protected function setUpBackendUserWithWorkspace(int $uid): void
-    {
-        $backendUser = $this->setUpBackendUser($uid);
-        $backendUser->workspace = 1; // Set to test workspace
-        $GLOBALS['BE_USER'] = $backendUser;
+        // Set up backend user
+        $this->setUpBackendUser(1);
     }
 
     /**

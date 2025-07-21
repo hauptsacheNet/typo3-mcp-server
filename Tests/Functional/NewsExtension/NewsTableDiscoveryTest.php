@@ -31,13 +31,7 @@ class NewsTableDiscoveryTest extends FunctionalTestCase
         // Import backend user fixture
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/be_users.csv');
         // Set up backend user for DataHandler and TableAccessService
-        $this->setUpBackendUserWithWorkspace(1);
-        
-        // Initialize language service
-        if (!isset($GLOBALS['LANG'])) {
-            $languageServiceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
+        $this->setUpBackendUser(1);
     }
 
     /**

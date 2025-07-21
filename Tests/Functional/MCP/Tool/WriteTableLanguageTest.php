@@ -34,10 +34,6 @@ class WriteTableLanguageTest extends FunctionalTestCase
         
         // Set up backend user
         $this->setUpBackendUser(1);
-        
-        // Initialize language service
-        $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-        $GLOBALS['LANG'] = $languageServiceFactory->create('default');
     }
 
     /**

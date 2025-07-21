@@ -31,13 +31,7 @@ class ListTablesToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
         
         // Set up backend user for DataHandler and TableAccessService
-        $this->setUpBackendUserWithWorkspace(1);
-        
-        // Initialize language service
-        if (!isset($GLOBALS['LANG'])) {
-            $languageServiceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
+        $this->setUpBackendUser(1);
     }
 
     /**

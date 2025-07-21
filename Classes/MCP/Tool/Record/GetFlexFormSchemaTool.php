@@ -8,6 +8,7 @@ use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
+use Hn\McpServer\Service\TableAccessService;
 
 /**
  * Tool for getting FlexForm schema information
@@ -84,6 +85,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
      */
     public function execute(array $params): CallToolResult
     {
+        // Initialize workspace context
+        $this->initializeWorkspaceContext();
+        
         // Get parameters
         $table = $params['table'] ?? 'tt_content';
         $field = $params['field'] ?? 'pi_flexform';
@@ -171,7 +175,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                                 // TCEforms structure (older format)
                                                 // Get field label
                                                 if (isset($field['TCEforms']['label'])) {
-                                                    $fieldLabel = TcaFormattingUtility::translateLabel($field['TCEforms']['label']);
+                                                    $fieldLabel = TableAccessService::translateLabel($field['TCEforms']['label']);
                                                     $result .= " (" . $fieldLabel . ")";
                                                 }
                                                 
@@ -186,14 +190,14 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                                 
                                                 // Get field description
                                                 if (isset($field['TCEforms']['description'])) {
-                                                    $fieldDescription = TcaFormattingUtility::translateLabel($field['TCEforms']['description']);
+                                                    $fieldDescription = TableAccessService::translateLabel($field['TCEforms']['description']);
                                                     $result .= " - " . $fieldDescription;
                                                 }
                                             } else {
                                                 // Direct field configuration (newer format)
                                                 // Get field label
                                                 if (isset($field['label'])) {
-                                                    $fieldLabel = TcaFormattingUtility::translateLabel($field['label']);
+                                                    $fieldLabel = TableAccessService::translateLabel($field['label']);
                                                     $result .= " (" . $fieldLabel . ")";
                                                 }
                                                 
@@ -208,7 +212,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                                 
                                                 // Get field description
                                                 if (isset($field['description'])) {
-                                                    $fieldDescription = TcaFormattingUtility::translateLabel($field['description']);
+                                                    $fieldDescription = TableAccessService::translateLabel($field['description']);
                                                     $result .= " - " . $fieldDescription;
                                                 }
                                             }
@@ -240,7 +244,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                         // TCEforms structure (older format)
                                         // Get field label
                                         if (isset($field['TCEforms']['label'])) {
-                                            $fieldLabel = TcaFormattingUtility::translateLabel($field['TCEforms']['label']);
+                                            $fieldLabel = TableAccessService::translateLabel($field['TCEforms']['label']);
                                             $result .= " (" . $fieldLabel . ")";
                                         }
                                         
@@ -255,14 +259,14 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                         
                                         // Get field description
                                         if (isset($field['TCEforms']['description'])) {
-                                            $fieldDescription = TcaFormattingUtility::translateLabel($field['TCEforms']['description']);
+                                            $fieldDescription = TableAccessService::translateLabel($field['TCEforms']['description']);
                                             $result .= " - " . $fieldDescription;
                                         }
                                     } else {
                                         // Direct field configuration (newer format)
                                         // Get field label
                                         if (isset($field['label'])) {
-                                            $fieldLabel = TcaFormattingUtility::translateLabel($field['label']);
+                                            $fieldLabel = TableAccessService::translateLabel($field['label']);
                                             $result .= " (" . $fieldLabel . ")";
                                         }
                                         
@@ -277,7 +281,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                         
                                         // Get field description
                                         if (isset($field['description'])) {
-                                            $fieldDescription = TcaFormattingUtility::translateLabel($field['description']);
+                                            $fieldDescription = TableAccessService::translateLabel($field['description']);
                                             $result .= " - " . $fieldDescription;
                                         }
                                     }
@@ -350,7 +354,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                         // TCEforms structure (older format)
                                         // Get field label
                                         if (isset($field['TCEforms']['label'])) {
-                                            $fieldLabel = TcaFormattingUtility::translateLabel($field['TCEforms']['label']);
+                                            $fieldLabel = TableAccessService::translateLabel($field['TCEforms']['label']);
                                             $result .= " (" . $fieldLabel . ")";
                                         }
                                         
@@ -365,14 +369,14 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                         
                                         // Get field description
                                         if (isset($field['TCEforms']['description'])) {
-                                            $fieldDescription = TcaFormattingUtility::translateLabel($field['TCEforms']['description']);
+                                            $fieldDescription = TableAccessService::translateLabel($field['TCEforms']['description']);
                                             $result .= " - " . $fieldDescription;
                                         }
                                     } else {
                                         // Direct field configuration (newer format)
                                         // Get field label
                                         if (isset($field['label'])) {
-                                            $fieldLabel = TcaFormattingUtility::translateLabel($field['label']);
+                                            $fieldLabel = TableAccessService::translateLabel($field['label']);
                                             $result .= " (" . $fieldLabel . ")";
                                         }
                                         
@@ -387,7 +391,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                         
                                         // Get field description
                                         if (isset($field['description'])) {
-                                            $fieldDescription = TcaFormattingUtility::translateLabel($field['description']);
+                                            $fieldDescription = TableAccessService::translateLabel($field['description']);
                                             $result .= " - " . $fieldDescription;
                                         }
                                     }
@@ -419,7 +423,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                 // TCEforms structure (older format)
                                 // Get field label
                                 if (isset($field['TCEforms']['label'])) {
-                                    $fieldLabel = TcaFormattingUtility::translateLabel($field['TCEforms']['label']);
+                                    $fieldLabel = TableAccessService::translateLabel($field['TCEforms']['label']);
                                     $result .= " (" . $fieldLabel . ")";
                                 }
                                 
@@ -434,14 +438,14 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                 
                                 // Get field description
                                 if (isset($field['TCEforms']['description'])) {
-                                    $fieldDescription = TcaFormattingUtility::translateLabel($field['TCEforms']['description']);
+                                    $fieldDescription = TableAccessService::translateLabel($field['TCEforms']['description']);
                                     $result .= " - " . $fieldDescription;
                                 }
                             } else {
                                 // Direct field configuration (newer format)
                                 // Get field label
                                 if (isset($field['label'])) {
-                                    $fieldLabel = TcaFormattingUtility::translateLabel($field['label']);
+                                    $fieldLabel = TableAccessService::translateLabel($field['label']);
                                     $result .= " (" . $fieldLabel . ")";
                                 }
                                 
@@ -456,7 +460,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                 
                                 // Get field description
                                 if (isset($field['description'])) {
-                                    $fieldDescription = TcaFormattingUtility::translateLabel($field['description']);
+                                    $fieldDescription = TableAccessService::translateLabel($field['description']);
                                     $result .= " - " . $fieldDescription;
                                 }
                             }
@@ -670,7 +674,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
         $tceForms = $fieldConfig['TCEforms'] ?? [];
         $config = $tceForms['config'] ?? [];
         $type = $config['type'] ?? 'unknown';
-        $label = TcaFormattingUtility::translateLabel($tceForms['label'] ?? $fieldName);
+        $label = TableAccessService::translateLabel($tceForms['label'] ?? $fieldName);
 
         // Handle section containers
         if (isset($fieldConfig['type']) && $fieldConfig['type'] === 'array') {
@@ -720,10 +724,10 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                     $itemValue = '';
 
                     if (isset($item['label'])) {
-                        $itemLabel = TcaFormattingUtility::translateLabel($item['label']);
+                        $itemLabel = TableAccessService::translateLabel($item['label']);
                         $itemValue = $item['value'] ?? '';
                     } elseif (isset($item[0])) {
-                        $itemLabel = TcaFormattingUtility::translateLabel($item[0]);
+                        $itemLabel = TableAccessService::translateLabel($item[0]);
                         $itemValue = $item[1] ?? '';
                     }
 
@@ -873,7 +877,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
         // Process sheets
         if (isset($flexFormDS['sheets']) && is_array($flexFormDS['sheets'])) {
             foreach ($flexFormDS['sheets'] as $sheetName => $sheetConfig) {
-                $sheetLabel = TcaFormattingUtility::translateLabel($sheetName);
+                $sheetLabel = TableAccessService::translateLabel($sheetName);
                 $result .= "SHEET: $sheetLabel\n";
                 $result .= str_repeat("-", strlen("SHEET: $sheetLabel")) . "\n";
 

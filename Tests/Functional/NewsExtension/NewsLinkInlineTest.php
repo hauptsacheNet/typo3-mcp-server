@@ -29,12 +29,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
         parent::setUp();
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/be_users.csv');
         // Don't import workspace fixture - let WorkspaceContextService handle it
-        $this->setUpBackendUser(1);        
-        // Initialize language service
-        if (!isset($GLOBALS['LANG'])) {
-            $languageServiceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
+        $this->setUpBackendUser(1);
         // Don't set workspace - let the MCP tools handle it automatically
     }
 

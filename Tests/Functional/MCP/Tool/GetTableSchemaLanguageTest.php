@@ -6,7 +6,6 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Symfony\Component\Yaml\Yaml;
-use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -34,10 +33,6 @@ class GetTableSchemaLanguageTest extends FunctionalTestCase
         
         // Set up backend user
         $this->setUpBackendUser(1);
-        
-        // Initialize language service
-        $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-        $GLOBALS['LANG'] = $languageServiceFactory->create('default');
     }
 
     /**

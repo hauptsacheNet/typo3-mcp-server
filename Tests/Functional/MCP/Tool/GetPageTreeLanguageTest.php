@@ -8,7 +8,6 @@ use Hn\McpServer\MCP\Tool\GetPageTreeTool;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
 use Symfony\Component\Yaml\Yaml;
-use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -34,12 +33,8 @@ class GetPageTreeLanguageTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         
-        // Set up backend user with workspace
-        $this->setUpBackendUserWithWorkspace(1);
-        
-        // Initialize language service
-        $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-        $GLOBALS['LANG'] = $languageServiceFactory->create('default');
+        // Set up backend user
+        $this->setUpBackendUser(1);
     }
 
     /**

@@ -28,16 +28,8 @@ class InlineRelationWriteTest extends FunctionalTestCase
     {
         parent::setUp();
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
-        // Don't import workspace fixture - let WorkspaceContextService handle it
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_file.csv');
         $this->setUpBackendUser(1);
-        // Don't set workspace - let the MCP tools handle it automatically
-        
-        // Initialize language service to avoid warnings
-        if (!isset($GLOBALS['LANG'])) {
-            $languageServiceFactory = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
     }
 
     /**

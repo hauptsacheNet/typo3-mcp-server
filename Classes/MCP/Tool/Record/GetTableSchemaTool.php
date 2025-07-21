@@ -8,6 +8,7 @@ use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
+use Hn\McpServer\Service\TableAccessService;
 
 /**
  * Tool for getting detailed schema information for a specific table
@@ -99,7 +100,7 @@ class GetTableSchemaTool extends AbstractRecordTool
         $result = "";
         
         // Basic table info using TableAccessService
-        $tableLabel = $this->tableAccessService->translateLabel($this->tableAccessService->getTableTitle($table));
+        $tableLabel = TableAccessService::translateLabel($this->tableAccessService->getTableTitle($table));
         
         $result .= "TABLE SCHEMA: " . $table . " (" . $tableLabel . ")\n";
         $result .= "=======================================\n\n";
@@ -153,7 +154,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                 continue;
             }
             
-            $processedTypes[$value] = $this->tableAccessService->translateLabel($label);
+            $processedTypes[$value] = TableAccessService::translateLabel($label);
         }
         
         $types = $processedTypes;
@@ -234,7 +235,7 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         foreach ($tabFields as $tabName => $tabFieldsList) {
             // Translate the tab name
-            $translatedTabName = $this->translateLabel($tabName);
+            $translatedTabName = TableAccessService::translateLabel($tabName);
             $result .= "  (" . $translatedTabName . "):\n";
             
             foreach ($tabFieldsList as $item) {
@@ -250,7 +251,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                     
                     // Translate the palette label if it's a language reference
                     if (!empty($paletteLabel)) {
-                        $paletteLabel = $this->translateLabel($paletteLabel);
+                        $paletteLabel = TableAccessService::translateLabel($paletteLabel);
                     }
                     
                     // Use palette name as fallback if label is empty
@@ -288,7 +289,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                                 
                                 // Add the field to the result with proper indentation
                                 $prefix = ($paletteItem === $lastPaletteField) ? "└─ " : "├─ ";
-                                $fieldLabel = isset($fieldConfig['label']) ? $this->translateLabel($fieldConfig['label']) : $paletteFieldName;
+                                $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $paletteFieldName;
                                 // TcaSchemaFactory returns flattened config where type is at top level
                                 $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
                                 $result .= "    " . $prefix . $paletteFieldName . " (" . $fieldLabel . "): " . $fieldType;
@@ -308,7 +309,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                         $processedFields[$fieldName] = true;
                         
                         // Add the field to the result
-                        $fieldLabel = isset($fieldConfig['label']) ? $this->translateLabel($fieldConfig['label']) : $fieldName;
+                        $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                         // TcaSchemaFactory returns flattened config where type is at top level
                         $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
                         $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
@@ -333,7 +334,7 @@ class GetTableSchemaTool extends AbstractRecordTool
         if (!empty($unassignedFields)) {
             $result .= "  (Additional Fields):\n";
             foreach ($unassignedFields as $fieldName => $fieldConfig) {
-                $fieldLabel = isset($fieldConfig['label']) ? $this->translateLabel($fieldConfig['label']) : $fieldName;
+                $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                 $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
                 $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
                 
@@ -422,13 +423,6 @@ class GetTableSchemaTool extends AbstractRecordTool
         }
     }
     
-    /**
-     * Translate a label
-     */
-    protected function translateLabel(string $label): string
-    {
-        return $this->tableAccessService->translateLabel($label);
-    }
     
     /**
      * Get types that are removed by TSconfig

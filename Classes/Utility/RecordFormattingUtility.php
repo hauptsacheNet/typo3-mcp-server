@@ -8,6 +8,7 @@ use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use Hn\McpServer\Service\TableAccessService;
 
 /**
  * Utility class for formatting TYPO3 records consistently across MCP tools
@@ -20,7 +21,7 @@ class RecordFormattingUtility
     public static function getTableLabel(string $table): string
     {
         if (!empty($GLOBALS['TCA'][$table]['ctrl']['title'])) {
-            return self::translateLabel($GLOBALS['TCA'][$table]['ctrl']['title']);
+            return TableAccessService::translateLabel($GLOBALS['TCA'][$table]['ctrl']['title']);
         }
         
         // Fallback to humanized table name
@@ -70,9 +71,9 @@ class RecordFormattingUtility
             foreach ($items as $item) {
                 // Handle both old and new TCA item formats
                 if (is_array($item) && isset($item['value']) && $item['value'] === $cType) {
-                    return self::translateLabel($item['label']);
+                    return TableAccessService::translateLabel($item['label']);
                 } elseif (is_array($item) && isset($item[1]) && $item[1] === $cType) {
-                    return self::translateLabel($item[0]);
+                    return TableAccessService::translateLabel($item[0]);
                 }
             }
         }
@@ -119,7 +120,7 @@ class RecordFormattingUtility
                 if (is_array($item) && isset($item[1]) && preg_match('/colPos=(\d+)/', $item[1], $matches)) {
                     $colPos = (int)$matches[1];
                     if (!isset($colPosDefs[$colPos])) {
-                        $colPosDefs[$colPos] = self::translateLabel($item[0]);
+                        $colPosDefs[$colPos] = TableAccessService::translateLabel($item[0]);
                     }
                 }
             }
@@ -142,25 +143,6 @@ class RecordFormattingUtility
         return !in_array($table, $tablesWithoutPid);
     }
 
-    /**
-     * Translate a label if it's in LLL format
-     */
-    public static function translateLabel(string $label): string
-    {
-        // Check if the label is a language reference (LLL:)
-        if (strpos($label, 'LLL:') === 0) {
-            // Initialize language service if needed
-            if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof LanguageService) {
-                $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-                $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-            }
-            
-            // Translate the label
-            return $GLOBALS['LANG']->sL($label);
-        }
-        
-        return $label;
-    }
 
     /**
      * Apply default sorting from TCA to a query builder

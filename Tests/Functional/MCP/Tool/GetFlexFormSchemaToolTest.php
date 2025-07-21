@@ -32,13 +32,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
         
         // Set up backend user for DataHandler and TableAccessService
-        $this->setUpBackendUserWithWorkspace(1);
-        
-        // Initialize language service
-        if (!isset($GLOBALS['LANG'])) {
-            $languageServiceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
+        $this->setUpBackendUser(1);
     }
 
     /**
@@ -429,13 +423,4 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $this->assertStringContainsString('flexform_news_list.xml', $content);
     }
 
-    /**
-     * Set up backend user with workspace
-     */
-    protected function setUpBackendUserWithWorkspace(int $uid): void
-    {
-        $backendUser = $this->setUpBackendUser($uid);
-        $backendUser->workspace = 1; // Set to test workspace
-        $GLOBALS['BE_USER'] = $backendUser;
-    }
 }

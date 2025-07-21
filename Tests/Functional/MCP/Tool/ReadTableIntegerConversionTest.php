@@ -32,12 +32,6 @@ class ReadTableIntegerConversionTest extends FunctionalTestCase
 
         // Set up backend user
         $this->setUpBackendUser(1);
-        
-        // Initialize language service
-        if (!isset($GLOBALS['LANG'])) {
-            $languageServiceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
     }
 
     /**

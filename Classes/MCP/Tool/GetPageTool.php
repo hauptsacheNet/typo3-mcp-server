@@ -23,6 +23,8 @@ use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
+use Hn\McpServer\Utility\RecordFormattingUtility;
+use Hn\McpServer\Service\TableAccessService;
 
 /**
  * Tool for retrieving detailed information about a TYPO3 page
@@ -488,7 +490,7 @@ class GetPageTool extends AbstractRecordTool
         foreach ($recordsInfo as $table => $tableInfo) {
             $tableLabel = $table;
             if (!empty($GLOBALS['TCA'][$table]['ctrl']['title'])) {
-                $tableLabel = $this->translateLabel($GLOBALS['TCA'][$table]['ctrl']['title']);
+                $tableLabel = TableAccessService::translateLabel($GLOBALS['TCA'][$table]['ctrl']['title']);
             }
             $totalCount = $tableInfo['total'];
             $records = $tableInfo['records'];
@@ -497,7 +499,7 @@ class GetPageTool extends AbstractRecordTool
             
             if ($displayCount > 0) {
                 foreach ($records as $record) {
-                    $title = $this->getRecordTitle($table, $record);
+                    $title = RecordFormattingUtility::getRecordTitle($table, $record);
                     $result .= "- [" . $record['uid'] . "] " . $title . "\n";
                 }
                 
@@ -524,7 +526,7 @@ class GetPageTool extends AbstractRecordTool
         $result .= "Total: " . $contentInfo['total'] . " elements\n\n";
         
         // Get column position definitions
-        $colPosDefs = $this->getColumnPositionDefinitions();
+        $colPosDefs = RecordFormattingUtility::getColumnPositionDefinitions();
         
         // Group content elements by column position
         $groupedElements = [];
@@ -545,9 +547,9 @@ class GetPageTool extends AbstractRecordTool
             $result .= "Column: " . $colPosName . " [colPos: " . $colPos . "] - " . count($elements) . " elements\n";
             
             foreach ($elements as $element) {
-                $title = $this->getRecordTitle('tt_content', $element);
+                $title = RecordFormattingUtility::getRecordTitle('tt_content', $element);
                 $cType = $element['CType'] ?? 'unknown';
-                $cTypeLabel = $this->getContentTypeLabel($cType);
+                $cTypeLabel = RecordFormattingUtility::getContentTypeLabel($cType);
                 $result .= "- [" . $element['uid'] . "] " . $title . " (Type: " . $cTypeLabel . " [" . $cType . "])\n";
                 
                 // Show important fields based on content type
@@ -584,127 +586,6 @@ class GetPageTool extends AbstractRecordTool
         return $result;
     }
     
-    /**
-     * Get column position definitions
-     */
-    protected function getColumnPositionDefinitions(): array
-    {
-        // Default column positions
-        $colPosDefs = [
-            0 => 'Main Content',
-            1 => 'Left',
-            2 => 'Right',
-            3 => 'Border',
-            4 => 'Footer',
-        ];
-        
-        // Try to get column positions from page TSconfig
-        if (isset($GLOBALS['TYPO3_CONF_VARS']['BE']['defaultPageTSconfig'])) {
-            $tsconfigString = $GLOBALS['TYPO3_CONF_VARS']['BE']['defaultPageTSconfig'];
-            if (preg_match_all('/mod\.wizards\.newContentElement\.wizardItems\..*?\.elements\..*?\.tt_content_defValues\.colPos\s*=\s*(\d+)/', $tsconfigString, $matches)) {
-                foreach ($matches[1] as $colPos) {
-                    if (!isset($colPosDefs[$colPos])) {
-                        // Try to find the label for this column position
-                        if (preg_match('/mod\.wizards\.newContentElement\.wizardItems\..*?\.elements\..*?\.title\s*=\s*(.+)/', $tsconfigString, $labelMatches)) {
-                            $colPosDefs[$colPos] = $labelMatches[1];
-                        } else {
-                            $colPosDefs[$colPos] = 'Column ' . $colPos;
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Check for backend layouts
-        if (isset($GLOBALS['TCA']['backend_layout']['columns']['config']['config']['items'])) {
-            $items = $GLOBALS['TCA']['backend_layout']['columns']['config']['config']['items'];
-            foreach ($items as $item) {
-                if (is_array($item) && isset($item[1]) && preg_match('/colPos=(\d+)/', $item[1], $matches)) {
-                    $colPos = (int)$matches[1];
-                    if (!isset($colPosDefs[$colPos])) {
-                        $colPosDefs[$colPos] = $this->translateLabel($item[0]);
-                    }
-                }
-            }
-        }
-        
-        return $colPosDefs;
-    }
-    
-    /**
-     * Get a label for a content type
-     */
-    protected function getContentTypeLabel(string $cType): string
-    {
-        if (isset($GLOBALS['TCA']['tt_content']['columns']['CType']['config']['items'])) {
-            $items = $GLOBALS['TCA']['tt_content']['columns']['CType']['config']['items'];
-            foreach ($items as $item) {
-                // Handle both old and new TCA item formats
-                if (is_array($item) && isset($item['value']) && $item['value'] === $cType) {
-                    return $this->translateLabel($item['label']);
-                } elseif (is_array($item) && isset($item[1]) && $item[1] === $cType) {
-                    return $this->translateLabel($item[0]);
-                }
-            }
-        }
-        
-        // Fallback to a humanized version of the CType
-        return ucfirst(str_replace('_', ' ', $cType));
-    }
-    
-    /**
-     * Get a meaningful title for a record
-     */
-    protected function getRecordTitle(string $table, array $record): string
-    {
-        // Try to use BackendUtility to get a proper record title
-        try {
-            $title = BackendUtility::getRecordTitle($table, $record);
-            if (!empty($title)) {
-                return $title;
-            }
-        } catch (\Throwable $e) {
-            // Fall back to manual title detection
-        }
-        
-        // Use the TCA label field if defined
-        if (isset($GLOBALS['TCA'][$table]['ctrl']['label']) && !empty($record[$GLOBALS['TCA'][$table]['ctrl']['label']])) {
-            return $record[$GLOBALS['TCA'][$table]['ctrl']['label']];
-        }
-        
-        // Common title fields in TYPO3
-        $titleFields = ['title', 'header', 'name', 'username', 'first_name', 'lastname', 'subject'];
-        
-        foreach ($titleFields as $field) {
-            if (!empty($record[$field])) {
-                return $record[$field];
-            }
-        }
-        
-        // Last resort, just return the UID
-        return 'Record #' . $record['uid'];
-    }
-    
-    /**
-     * Translate a label if it's in LLL format
-     */
-    protected function translateLabel(string $label): string
-    {
-        // Check if the label is a language reference (LLL:)
-        if (strpos($label, 'LLL:') === 0) {
-            // Initialize language service if needed
-            if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof LanguageService) {
-                $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-                $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-            }
-            
-            // Translate the label
-            return $GLOBALS['LANG']->sL($label);
-        }
-        
-        return $label;
-    }
-
     /**
      * Resolve a URL to a page UID
      * 

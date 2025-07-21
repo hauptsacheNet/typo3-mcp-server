@@ -38,26 +38,8 @@ class WriteTableToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
         
         // Set up backend user for DataHandler
-        $this->setUpBackendUserWithWorkspace(1);
-        
-        // Initialize language service to prevent LANG errors during DataHandler operations
-        if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof LanguageService) {
-            $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-            $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-        }
-    }
-
-    /**
-     * Helper method to set up backend user with workspace
-     */
-    protected function setUpBackendUserWithWorkspace(int $uid): void
-    {
-        $backendUser = $this->setUpBackendUser($uid);
-        $backendUser->workspace = 1; // Set to test workspace
-        $GLOBALS['BE_USER'] = $backendUser;
-    }
-
-    /**
+        $this->setUpBackendUser(1);
+    }/**
      * User story: Create a page with content element
      */
     public function testCreatePageWithContentElement(): void

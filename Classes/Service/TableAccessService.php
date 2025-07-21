@@ -1099,17 +1099,22 @@ class TableAccessService implements SingletonInterface
     /**
      * Translate a TCA label using TYPO3's language system
      */
-    public function translateLabel(string $label): string
+    public static function translateLabel(string $label): string
     {
         if (strpos($label, 'LLL:') === 0) {
-            // Check if language service is available
+            // Check if language service is available, initialize if not
             if (!isset($GLOBALS['LANG'])) {
-                // In test context or when LANG is not available, return a fallback
-                // Extract the last part of the LLL path as fallback
-                if (preg_match('/\.([^:]+):?$/', $label, $matches)) {
-                    return ucfirst(str_replace('_', ' ', $matches[1]));
+                try {
+                    $languageServiceFactory = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class);
+                    $GLOBALS['LANG'] = $languageServiceFactory->create('default');
+                } catch (\Throwable $e) {
+                    // If initialization fails, return a fallback
+                    // Extract the last part of the LLL path as fallback
+                    if (preg_match('/\.([^:]+):?$/', $label, $matches)) {
+                        return ucfirst(str_replace('_', ' ', $matches[1]));
+                    }
+                    return $label;
                 }
-                return $label;
             }
             
             $translated = $GLOBALS['LANG']->sL($label);
