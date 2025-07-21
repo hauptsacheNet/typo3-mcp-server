@@ -7,9 +7,10 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\GetPageTool;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\SiteInformationService;
+use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\TextContent;
 use Symfony\Component\Yaml\Yaml;
-use TYPO3\CMS\Core\Localization\LanguageService;
+use TYPO3\CMS\Core\Localization\LanguageService as Typo3LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -42,7 +43,7 @@ class GetPageToolTest extends FunctionalTestCase
         $this->createTestSiteConfiguration();
         
         // Initialize language service to prevent LANG errors
-        if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof LanguageService) {
+        if (!isset($GLOBALS['LANG']) || !$GLOBALS['LANG'] instanceof Typo3LanguageService) {
             $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
             $GLOBALS['LANG'] = $languageServiceFactory->create('default');
         }
@@ -90,6 +91,18 @@ class GetPageToolTest extends FunctionalTestCase
                     'direction' => 'ltr',
                     'flag' => 'us',
                     'navigationTitle' => 'English',
+                ],
+                1 => [
+                    'title' => 'German',
+                    'enabled' => true,
+                    'languageId' => 1,
+                    'base' => '/de/',
+                    'locale' => 'de_DE.UTF-8',
+                    'iso-639-1' => 'de',
+                    'hreflang' => 'de-de',
+                    'direction' => 'ltr',
+                    'flag' => 'de',
+                    'navigationTitle' => 'Deutsch',
                 ],
             ],
             'routes' => [],
@@ -176,7 +189,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testGetPageDirectly(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test getting page information for Home page
         $result = $tool->execute([
@@ -215,7 +229,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testGetPageWithUrl(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         $result = $tool->execute([
             'uid' => 2,
@@ -242,7 +257,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testGetPageWithContentElements(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test page 2 (About) which has content elements
         $result = $tool->execute([
@@ -273,7 +289,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testGetNonExistentPage(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         $result = $tool->execute([
             'uid' => 999
@@ -294,7 +311,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testInvalidPageUid(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         $result = $tool->execute([
             'uid' => 0
@@ -321,7 +339,8 @@ class GetPageToolTest extends FunctionalTestCase
     {
         // Create tool registry with the GetPageTool
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tools = [new GetPageTool($siteInformationService)];
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tools = [new GetPageTool($siteInformationService, $languageService)];
         $registry = new ToolRegistry($tools);
         
         // Get tool from registry
@@ -347,7 +366,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testToolName(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         $this->assertEquals('GetPage', $tool->getName());
     }
 
@@ -357,7 +377,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testToolSchema(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         $schema = $tool->getSchema();
         
         $this->assertIsArray($schema);
@@ -365,7 +386,16 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('parameters', $schema);
         $this->assertArrayHasKey('properties', $schema['parameters']);
         $this->assertArrayHasKey('uid', $schema['parameters']['properties']);
+        $this->assertArrayHasKey('language', $schema['parameters']['properties']);
         $this->assertArrayHasKey('languageId', $schema['parameters']['properties']);
+        
+        // Verify language parameter has enum with ISO codes
+        $this->assertArrayHasKey('enum', $schema['parameters']['properties']['language']);
+        $this->assertContains('en', $schema['parameters']['properties']['language']['enum']);
+        $this->assertContains('de', $schema['parameters']['properties']['language']['enum']);
+        
+        // Verify languageId is marked as deprecated
+        $this->assertTrue($schema['parameters']['properties']['languageId']['deprecated'] ?? false);
         
         // Verify oneOf constraint (either uid or url is required)
         $this->assertArrayHasKey('oneOf', $schema['parameters']);
@@ -382,7 +412,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testPageWithDifferentContentTypes(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test Contact page which has a form
         $result = $tool->execute([
@@ -406,7 +437,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testPageTreeStructure(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test child page (Team - child of About)
         $result = $tool->execute([
@@ -428,7 +460,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testUrlResolutionWithFullUrl(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test with full URL for About page
         $result = $tool->execute([
@@ -449,7 +482,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testUrlResolutionWithPath(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test with just path for Contact page
         $result = $tool->execute([
@@ -470,7 +504,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testUrlResolutionWithNestedPath(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test with nested path for Team page (under About)
         $result = $tool->execute([
@@ -491,7 +526,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testUrlResolutionWithoutLeadingSlash(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test without leading slash
         $result = $tool->execute([
@@ -512,7 +548,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testUrlResolutionForHomePage(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test with just domain (home page)
         $result = $tool->execute([
@@ -542,7 +579,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testUrlResolutionWithWrongDomain(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test with wrong domain - should fail because domain doesn't match site config
         $result = $tool->execute([
@@ -561,7 +599,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testUrlResolutionWithInvalidPath(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test with non-existent path
         $result = $tool->execute([
@@ -579,7 +618,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testUrlResolutionWithLanguage(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test URL resolution with language ID
         $result = $tool->execute([
@@ -598,7 +638,8 @@ class GetPageToolTest extends FunctionalTestCase
     public function testRealUrlGenerationForDifferentPages(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
         
         // Test Home page (root) - should have base URL
         $result = $tool->execute(['uid' => 1]);

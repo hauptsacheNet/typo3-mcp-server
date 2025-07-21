@@ -8,6 +8,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use Hn\McpServer\Service\TableAccessService;
+use Hn\McpServer\Service\LanguageService as McpLanguageService;
 
 /**
  * Utility for formatting TCA and FlexForm information
@@ -35,8 +36,12 @@ class TcaFormattingUtility
 
     /**
      * Add field details inline for TCA or FlexForm configuration
+     * 
+     * @param string &$result The result string to append to
+     * @param array $config The field configuration
+     * @param string $fieldName Optional field name for special handling
      */
-    public static function addFieldDetailsInline(string &$result, $config): void
+    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = ''): void
     {
         // Get the field type
         $type = $config['type'] ?? '';
@@ -99,6 +104,18 @@ class TcaFormattingUtility
                         $result .= " [Options: " . implode(', ', $options) . "]";
                     }
                 }
+                
+                // Special handling for sys_language_uid field
+                if ($fieldName === 'sys_language_uid') {
+                    // Add note about ISO code support
+                    $languageService = GeneralUtility::makeInstance(McpLanguageService::class);
+                    $isoCodes = $languageService->getAvailableIsoCodes();
+                    
+                    if (!empty($isoCodes)) {
+                        $result .= " [ISO codes accepted: " . implode(', ', $isoCodes) . "]";
+                        $result .= " (Use ISO codes like 'de' instead of numeric IDs in WriteTable tool)";
+                    }
+                }
                 break;
                 
             case 'group':
@@ -119,6 +136,18 @@ class TcaFormattingUtility
                 // Only applicable for TCA
                 if (isset($config['ds_pointerField'])) {
                     $result .= " [ds_pointerField: " . $config['ds_pointerField'] . "]";
+                }
+                break;
+                
+            case 'language':
+                // Special handling for language type fields (TYPO3 11.2+)
+                // Add note about ISO code support
+                $languageService = GeneralUtility::makeInstance(McpLanguageService::class);
+                $isoCodes = $languageService->getAvailableIsoCodes();
+                
+                if (!empty($isoCodes)) {
+                    $result .= " [ISO codes accepted: " . implode(', ', $isoCodes) . "]";
+                    $result .= " (Use ISO codes like 'de' instead of numeric IDs in WriteTable tool)";
                 }
                 break;
         }

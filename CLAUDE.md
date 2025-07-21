@@ -6,3 +6,5 @@
 - This MCP does create a Workspace if one doesn't exist. This is intentional and must work even in tests. A mixture of live and workspace data is a real scenario, and the tool results must work as if there are no workspaces.
 - In Tests: check all MCP tool call for failure like this: `$this->assertFalse($result->isError, json_encode($result->jsonSerialize()));`
 - Always check if there is some typo3 core api that can be used for TCA related data actions.
+- If the TYPO3 instance has no language support, then hide all aspects of translation like parameters or even database fields. Check the LanguageService.php to check support.
+- Language overlays use TYPO3's PageRepository API while workspace overlays use custom implementation for transparency (see Documentation/Architecture/LanguageOverlays.md)

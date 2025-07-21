@@ -254,6 +254,21 @@ Relations are transparently resolved and can be set using simple syntax:
 - **File references**: Currently read-only
 - **Bidirectional**: Updates both sides as needed
 
+### Language Support
+
+The MCP Server provides sophisticated multi-language support:
+
+1. **ISO Code Support**: Instead of numeric language UIDs, use ISO codes like 'de', 'fr', 'en'
+2. **Automatic Discovery**: Available languages are discovered from site configuration
+3. **Smart Schema Display**: Language fields show available ISO codes in GetTableSchema
+4. **Translation Actions**: Built-in support for creating and managing translations
+
+Example:
+```json
+// Instead of: "sys_language_uid": 1
+// Use: "sys_language_uid": "de"
+```
+
 ### Workspace Magic
 
 Behind the scenes, the workspace system:

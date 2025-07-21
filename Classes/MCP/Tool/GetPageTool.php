@@ -17,8 +17,12 @@ use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Routing\PageArguments;
 use TYPO3\CMS\Core\Exception\Page\PageNotFoundException;
+use TYPO3\CMS\Core\Domain\Repository\PageRepository;
+use TYPO3\CMS\Core\Context\Context;
+use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 use Hn\McpServer\Service\SiteInformationService;
+use Hn\McpServer\Service\LanguageService as McpLanguageService;
 
 /**
  * Tool for retrieving detailed information about a TYPO3 page
@@ -26,12 +30,15 @@ use Hn\McpServer\Service\SiteInformationService;
 class GetPageTool extends AbstractRecordTool
 {
     protected SiteInformationService $siteInformationService;
+    protected McpLanguageService $languageService;
     
     public function __construct(
-        SiteInformationService $siteInformationService
+        SiteInformationService $siteInformationService,
+        McpLanguageService $languageService
     ) {
         parent::__construct();
         $this->siteInformationService = $siteInformationService;
+        $this->languageService = $languageService;
     }
     /**
      * Get the tool type
@@ -49,8 +56,8 @@ class GetPageTool extends AbstractRecordTool
         // Get available domains text dynamically
         $domainsText = $this->siteInformationService->getAvailableDomainsText();
         
-        return [
-            'description' => 'Get detailed information about a TYPO3 page including its records. Can fetch by page ID or URL.',
+        $schema = [
+            'description' => 'Get detailed information about a TYPO3 page including its records. Can fetch by page ID or URL. Shows content in the specified language when available.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -62,10 +69,6 @@ class GetPageTool extends AbstractRecordTool
                         'type' => 'string',
                         'description' => 'The URL of the page to retrieve (alternative to uid). Can be full URL, path, or slug. ' . $domainsText,
                     ],
-                    'languageId' => [
-                        'type' => 'integer',
-                        'description' => 'Language ID for URL generation (default: 0)',
-                    ],
                 ],
                 'oneOf' => [
                     ['required' => ['uid']],
@@ -73,6 +76,25 @@ class GetPageTool extends AbstractRecordTool
                 ],
             ],
         ];
+        
+        // Only add language parameter if multiple languages are configured
+        $availableLanguages = $this->languageService->getAvailableIsoCodes();
+        if (count($availableLanguages) > 1) {
+            $schema['parameters']['properties']['language'] = [
+                'type' => 'string',
+                'description' => 'Language ISO code to show page and content in specific language (e.g., "de", "fr"). Shows translated content and metadata when available.',
+                'enum' => $availableLanguages,
+            ];
+            
+            // Add deprecated languageId for backward compatibility
+            $schema['parameters']['properties']['languageId'] = [
+                'type' => 'integer',
+                'description' => 'DEPRECATED: Use "language" parameter with ISO code instead. Language ID for URL generation.',
+                'deprecated' => true,
+            ];
+        }
+        
+        return $schema;
     }
 
     /**
@@ -83,7 +105,21 @@ class GetPageTool extends AbstractRecordTool
         // Initialize workspace context
         $this->initializeWorkspaceContext();
         
-        $languageId = (int)($params['languageId'] ?? 0);
+        // Handle language parameter
+        $languageId = 0;
+        if (isset($params['language'])) {
+            // Convert ISO code to language UID
+            $languageId = $this->languageService->getUidFromIsoCode($params['language']);
+            if ($languageId === null) {
+                return new CallToolResult(
+                    [new TextContent('Unknown language code: ' . $params['language'])],
+                    true // isError
+                );
+            }
+        } elseif (isset($params['languageId'])) {
+            // Backward compatibility with numeric languageId
+            $languageId = (int)$params['languageId'];
+        }
 
         // Determine page UID from either uid parameter or url parameter
         $uid = 0;
@@ -108,17 +144,20 @@ class GetPageTool extends AbstractRecordTool
         }
 
         try {
-            // Get page data
-            $pageData = $this->getPageData($uid);
+            // Get page data (with language overlay if applicable)
+            $pageData = $this->getPageData($uid, $languageId);
             
             // Get page URL using SiteInformationService
             $pageUrl = $this->siteInformationService->generatePageUrl((int)$pageData['uid'], $languageId);
             
-            // Get records on this page
-            $recordsInfo = $this->getPageRecords($uid);
+            // Get records on this page (filtered by language if specified)
+            $recordsInfo = $this->getPageRecords($uid, $languageId);
+            
+            // Get available translations for this page
+            $translations = $this->getPageTranslations($uid);
             
             // Build a text representation of the page information
-            $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl);
+            $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl, $languageId, $translations);
             
             return new CallToolResult([new TextContent($result)]);
         } catch (\Throwable $e) {
@@ -130,45 +169,106 @@ class GetPageTool extends AbstractRecordTool
     }
 
     /**
-     * Get basic page data
+     * Get basic page data with language overlay if applicable
      */
-    protected function getPageData(int $uid): array
+    protected function getPageData(int $uid, int $languageId = 0): array
     {
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('pages');
-
-        $queryBuilder->getRestrictions()
-            ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-
-        $page = $queryBuilder->select('*')
-            ->from('pages')
-            ->where(
-                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-            )
-            ->executeQuery()
-            ->fetchAssociative();
-
+        // Create a context with the specified language
+        $context = GeneralUtility::makeInstance(Context::class);
+        
+        // Set up language aspect if language is specified
+        if ($languageId > 0) {
+            $languageAspect = new LanguageAspect(
+                $languageId,
+                $languageId,
+                LanguageAspect::OVERLAYS_MIXED,
+                [$languageId]
+            );
+            $context->setAspect('language', $languageAspect);
+        }
+        
+        // Create PageRepository with context
+        $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
+        
+        // Get the page - PageRepository handles workspace and deleted restrictions
+        $page = $pageRepository->getPage($uid);
+        
         if (!$page) {
             throw new \RuntimeException('Page not found: ' . $uid);
         }
-
-        // Convert some values to their proper types
-        if (is_array($page)) {
-            $page['uid'] = (int)$page['uid'];
-            $page['pid'] = (int)$page['pid'];
-            $page['hidden'] = (bool)$page['hidden'];
-            $page['deleted'] = (bool)$page['deleted'];
+        
+        // Apply language overlay if language is specified
+        if ($languageId > 0) {
+            $overlaidPage = $pageRepository->getPageOverlay($page, $languageId);
+            
+            // Add our custom metadata
+            if ($overlaidPage !== $page) {
+                // Page was overlaid
+                $overlaidPage['_translated'] = true;
+                $overlaidPage['_language_uid'] = $languageId;
+                if (isset($page['title']) && isset($overlaidPage['title']) && $page['title'] !== $overlaidPage['title']) {
+                    $overlaidPage['_original_title'] = $page['title'];
+                }
+                $page = $overlaidPage;
+            } else {
+                // No overlay found
+                $page['_translated'] = false;
+                $page['_language_uid'] = $languageId;
+            }
         }
+        
+        // Convert some values to their proper types
+        $page['uid'] = (int)$page['uid'];
+        $page['pid'] = (int)$page['pid'];
+        $page['hidden'] = (bool)$page['hidden'];
+        $page['deleted'] = (bool)($page['deleted'] ?? false);
 
         return $page;
     }
 
 
+    
+    /**
+     * Get available translations for a page
+     */
+    protected function getPageTranslations(int $pageUid): array
+    {
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+        
+        $translations = $queryBuilder->select('sys_language_uid', 'title')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('l10n_parent', $queryBuilder->createNamedParameter($pageUid, ParameterType::INTEGER))
+            )
+            ->orderBy('sys_language_uid')
+            ->executeQuery()
+            ->fetchAllAssociative();
+        
+        $result = [];
+        foreach ($translations as $translation) {
+            $languageId = (int)$translation['sys_language_uid'];
+            $isoCode = $this->languageService->getIsoCodeFromUid($languageId);
+            if ($isoCode) {
+                $result[] = [
+                    'languageId' => $languageId,
+                    'isoCode' => $isoCode,
+                    'title' => $translation['title'],
+                ];
+            }
+        }
+        
+        return $result;
+    }
+    
     /**
      * Get records on the page grouped by table
      */
-    protected function getPageRecords(int $pageId): array
+    protected function getPageRecords(int $pageId, int $languageId = 0): array
     {
         // Get all tables that can be on a page
         $tables = $this->getContentTables();
@@ -179,7 +279,13 @@ class GetPageTool extends AbstractRecordTool
             $tableInfo = $this->getTableRecordsInfo($table, $pageId);
             
             if (!empty($tableInfo['records'])) {
-                $recordsInfo[$table] = $tableInfo;
+                // Filter records by language for tables that have language support
+                if ($this->tableHasLanguageSupport($table)) {
+                    $tableInfo = $this->filterRecordsByLanguage($tableInfo, $languageId);
+                }
+                if (!empty($tableInfo['records'])) {
+                    $recordsInfo[$table] = $tableInfo;
+                }
             }
         }
         
@@ -282,9 +388,46 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
+     * Check if table has language support
+     */
+    protected function tableHasLanguageSupport(string $table): bool
+    {
+        return isset($GLOBALS['TCA'][$table]['ctrl']['languageField']);
+    }
+    
+    /**
+     * Filter records by language
+     */
+    protected function filterRecordsByLanguage(array $tableInfo, int $languageId): array
+    {
+        $filteredRecords = [];
+        
+        foreach ($tableInfo['records'] as $record) {
+            $recordLang = (int)($record['sys_language_uid'] ?? 0);
+            
+            if ($languageId === 0) {
+                // Default language: only show records with sys_language_uid = 0
+                if ($recordLang === 0 || $recordLang === -1) {
+                    $filteredRecords[] = $record;
+                }
+            } else {
+                // Specific language: show records in that language or default language
+                if ($recordLang === $languageId || $recordLang === 0 || $recordLang === -1) {
+                    $filteredRecords[] = $record;
+                }
+            }
+        }
+        
+        return [
+            'total' => count($filteredRecords),
+            'records' => $filteredRecords,
+        ];
+    }
+    
+    /**
      * Format page information as readable text
      */
-    protected function formatPageInfo(array $pageData, array $recordsInfo, ?string $pageUrl = null): string
+    protected function formatPageInfo(array $pageData, array $recordsInfo, ?string $pageUrl = null, int $languageId = 0, array $translations = []): string
     {
         $result = "PAGE INFORMATION\n";
         $result .= "================\n\n";
@@ -301,11 +444,34 @@ class GetPageTool extends AbstractRecordTool
             $result .= "Navigation Title: " . $pageData['nav_title'] . "\n";
         }
         
+        if (!empty($pageData['subtitle'])) {
+            $result .= "Subtitle: " . $pageData['subtitle'] . "\n";
+        }
+        
         $result .= "Parent Page (PID): " . $pageData['pid'] . "\n";
         $result .= "Doktype: " . $pageData['doktype'] . "\n";
         $result .= "Hidden: " . ($pageData['hidden'] ? 'Yes' : 'No') . "\n";
         $result .= "Created: " . date('Y-m-d H:i:s', (int)$pageData['crdate']) . "\n";
-        $result .= "Last Modified: " . date('Y-m-d H:i:s', (int)$pageData['tstamp']) . "\n\n";
+        $result .= "Last Modified: " . date('Y-m-d H:i:s', (int)$pageData['tstamp']) . "\n";
+        
+        // Add language/translation information
+        if ($languageId > 0) {
+            $isoCode = $this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown';
+            $result .= "Language: " . strtoupper($isoCode) . " (ID: $languageId)\n";
+            $result .= "Translated: " . (($pageData['_translated'] ?? false) ? 'Yes' : 'No') . "\n";
+        }
+        
+        // Show available translations
+        if (!empty($translations)) {
+            $result .= "Available Translations: ";
+            $translationList = [];
+            foreach ($translations as $translation) {
+                $translationList[] = strtoupper($translation['isoCode']);
+            }
+            $result .= implode(', ', $translationList) . "\n";
+        }
+        
+        $result .= "\n";
         
         // Records on the page
         $result .= "RECORDS ON THIS PAGE\n";

@@ -15,12 +15,20 @@ use Hn\McpServer\Utility\RecordFormattingUtility;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use TYPO3\CMS\Core\Site\SiteFinder;
+use Hn\McpServer\Service\LanguageService;
 
 /**
  * Tool for searching records across TYPO3 tables using TCA-based searchable fields
  */
 class SearchTool extends AbstractRecordTool
 {
+    protected LanguageService $languageService;
+    
+    public function __construct()
+    {
+        parent::__construct();
+        $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
+    }
     /**
      * Get the tool type
      */
@@ -34,11 +42,9 @@ class SearchTool extends AbstractRecordTool
      */
     public function getSchema(): array
     {
-        //$languageRecommendations = $this->getLanguageRecommendations();
-        
-        return [
+        $schema = [
             'description' => "Search for records across workspace-capable TYPO3 tables using TCA-based searchable fields. " .
-                "Uses SQL LIKE queries for pattern matching.\n\n",
+                "Uses SQL LIKE queries for pattern matching. Results include language information when multiple languages are configured.\n\n",
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -68,44 +74,58 @@ class SearchTool extends AbstractRecordTool
                 ],
                 'required' => ['terms'],
             ],
-            'examples' => [
-                [
-                    'description' => 'Search for single term across all tables',
-                    'parameters' => [
-                        'terms' => ['welcome']
-                    ]
-                ],
-                [
-                    'description' => 'Search for multiple terms with OR logic',
-                    'parameters' => [
-                        'terms' => ['news', 'article', 'blog'],
-                        'termLogic' => 'OR'
-                    ]
-                ],
-                [
-                    'description' => 'Search for multiple terms that must all match',
-                    'parameters' => [
-                        'terms' => ['TYPO3', 'extension'],
-                        'termLogic' => 'AND'
-                    ]
-                ],
-                [
-                    'description' => 'Search only in content elements',
-                    'parameters' => [
-                        'terms' => ['contact'],
-                        'table' => 'tt_content'
-                    ]
-                ],
-                [
-                    'description' => 'Search on specific page with multiple terms',
-                    'parameters' => [
-                        'terms' => ['contact', 'form'],
-                        'pageId' => 123,
-                        'termLogic' => 'AND'
-                    ]
+        ];
+        
+        // Only add language parameter if multiple languages are configured
+        $availableLanguages = $this->languageService->getAvailableIsoCodes();
+        if (count($availableLanguages) > 1) {
+            $schema['parameters']['properties']['language'] = [
+                'type' => 'string',
+                'description' => 'Language ISO code to filter search results (e.g., "de", "fr"). When specified, searches only in content for that language.',
+                'enum' => $availableLanguages,
+            ];
+        }
+        
+        // Add examples
+        $schema['examples'] = [
+            [
+                'description' => 'Search for single term across all tables',
+                'parameters' => [
+                    'terms' => ['welcome']
+                ]
+            ],
+            [
+                'description' => 'Search for multiple terms with OR logic',
+                'parameters' => [
+                    'terms' => ['news', 'article', 'blog'],
+                    'termLogic' => 'OR'
+                ]
+            ],
+            [
+                'description' => 'Search for multiple terms that must all match',
+                'parameters' => [
+                    'terms' => ['TYPO3', 'extension'],
+                    'termLogic' => 'AND'
+                ]
+            ],
+            [
+                'description' => 'Search only in content elements',
+                'parameters' => [
+                    'terms' => ['contact'],
+                    'table' => 'tt_content'
+                ]
+            ],
+            [
+                'description' => 'Search on specific page with multiple terms',
+                'parameters' => [
+                    'terms' => ['contact', 'form'],
+                    'pageId' => 123,
+                    'termLogic' => 'AND'
                 ]
             ]
         ];
+        
+        return $schema;
     }
 
     /**
@@ -164,6 +184,18 @@ class SearchTool extends AbstractRecordTool
         $table = trim($params['table'] ?? '');
         $pageId = isset($params['pageId']) ? (int)$params['pageId'] : null;
         $limit = 50;
+        
+        // Handle language parameter
+        $languageId = null;
+        if (isset($params['language'])) {
+            $languageId = $this->languageService->getUidFromIsoCode($params['language']);
+            if ($languageId === null) {
+                return new CallToolResult(
+                    [new TextContent('Unknown language code: ' . $params['language'])],
+                    true // isError
+                );
+            }
+        }
 
         // Validate search parameters
         $searchTerms = $this->validateAndNormalizeSearchTerms($terms);
@@ -185,10 +217,10 @@ class SearchTool extends AbstractRecordTool
 
         try {
             // Get search results
-            $searchResults = $this->performSearch($searchTerms, $termLogic, $table, $pageId, $limit);
+            $searchResults = $this->performSearch($searchTerms, $termLogic, $table, $pageId, $limit, $languageId);
             
             // Format results
-            $formattedResults = $this->formatSearchResults($searchResults, $searchTerms, $termLogic);
+            $formattedResults = $this->formatSearchResults($searchResults, $searchTerms, $termLogic, $languageId);
             
             return new CallToolResult([new TextContent($formattedResults)]);
         } catch (\Throwable $e) {
@@ -246,7 +278,7 @@ class SearchTool extends AbstractRecordTool
     /**
      * Perform search across tables (including inline relations)
      */
-    protected function performSearch(array $searchTerms, string $termLogic, string $table, ?int $pageId, int $limit): array
+    protected function performSearch(array $searchTerms, string $termLogic, string $table, ?int $pageId, int $limit, ?int $languageId = null): array
     {
         $searchResults = [];
         $inlineTableMetadata = [];
@@ -272,7 +304,7 @@ class SearchTool extends AbstractRecordTool
                 continue;
             }
             
-            $results = $this->searchInTable($tableName, $searchTerms, $termLogic, $searchableFields, $pageId, $limit);
+            $results = $this->searchInTable($tableName, $searchTerms, $termLogic, $searchableFields, $pageId, $limit, $languageId);
             
             if (!empty($results) && !empty($results['records'])) {
                 // Mark inline table results for attribution
@@ -552,7 +584,7 @@ class SearchTool extends AbstractRecordTool
     /**
      * Search in a specific table with multiple terms and AND/OR logic
      */
-    protected function searchInTable(string $table, array $searchTerms, string $termLogic, array $searchableFields, ?int $pageId, int $limit): array
+    protected function searchInTable(string $table, array $searchTerms, string $termLogic, array $searchableFields, ?int $pageId, int $limit, ?int $languageId = null): array
     {
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
@@ -613,6 +645,28 @@ class SearchTool extends AbstractRecordTool
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
             );
         }
+        
+        // Filter by language if specified and table has language support
+        if ($languageId !== null && $this->tableHasLanguageSupport($table)) {
+            if ($languageId === 0) {
+                // Default language: only show records with sys_language_uid = 0 or -1 (all languages)
+                $queryBuilder->andWhere(
+                    $queryBuilder->expr()->or(
+                        $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER)),
+                        $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(-1, ParameterType::INTEGER))
+                    )
+                );
+            } else {
+                // Specific language: show records in that language, default language, or all languages
+                $queryBuilder->andWhere(
+                    $queryBuilder->expr()->or(
+                        $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter($languageId, ParameterType::INTEGER)),
+                        $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER)),
+                        $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(-1, ParameterType::INTEGER))
+                    )
+                );
+            }
+        }
 
         // Apply default sorting
         RecordFormattingUtility::applyDefaultSorting($queryBuilder, $table);
@@ -625,7 +679,7 @@ class SearchTool extends AbstractRecordTool
 
         // Return records in expected structure format
         return [
-            'records' => $this->enhanceRecordsWithPageInfo($records, $table),
+            'records' => $this->enhanceRecordsWithPageInfo($records, $table, $languageId),
             'total' => count($records),
             'search_terms' => $searchTerms,
             'term_logic' => $termLogic,
@@ -633,9 +687,17 @@ class SearchTool extends AbstractRecordTool
     }
 
     /**
+     * Check if table has language support
+     */
+    protected function tableHasLanguageSupport(string $table): bool
+    {
+        return isset($GLOBALS['TCA'][$table]['ctrl']['languageField']);
+    }
+    
+    /**
      * Enhance records with page information
      */
-    protected function enhanceRecordsWithPageInfo(array $records, string $table): array
+    protected function enhanceRecordsWithPageInfo(array $records, string $table, ?int $languageId = null): array
     {
         if (empty($records)) {
             return $records;
@@ -731,7 +793,7 @@ class SearchTool extends AbstractRecordTool
     /**
      * Format search results
      */
-    protected function formatSearchResults(array $searchResults, array $searchTerms, string $termLogic): string
+    protected function formatSearchResults(array $searchResults, array $searchTerms, string $termLogic, ?int $languageId = null): string
     {
 
         $result = "SEARCH RESULTS\n";
@@ -745,6 +807,12 @@ class SearchTool extends AbstractRecordTool
             $result .= "Logic: " . $termLogic . " (records must match " . 
                       ($termLogic === 'AND' ? 'ALL terms' : 'ANY term') . ")\n";
         }
+        
+        if ($languageId !== null) {
+            $isoCode = $this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown';
+            $result .= "Language Filter: " . strtoupper($isoCode) . " (ID: $languageId)\n";
+        }
+        
         $result .= "\n";
 
         $totalResults = 0;
@@ -766,7 +834,7 @@ class SearchTool extends AbstractRecordTool
         } else {
             // Format results by table
             foreach ($searchResults as $table => $records) {
-                $result .= $this->formatTableResults($table, $records, $searchTerms);
+                $result .= $this->formatTableResults($table, $records, $searchTerms, $languageId);
             }
         }
 
@@ -776,7 +844,7 @@ class SearchTool extends AbstractRecordTool
     /**
      * Format results for a specific table
      */
-    protected function formatTableResults(string $table, array $tableData, array $searchTerms): string
+    protected function formatTableResults(string $table, array $tableData, array $searchTerms, ?int $languageId = null): string
     {
         $tableLabel = RecordFormattingUtility::getTableLabel($table);
         $result = "TABLE: $tableLabel ($table)\n";
@@ -795,7 +863,7 @@ class SearchTool extends AbstractRecordTool
         $result .= "Found " . count($records) . " record(s)\n\n";
 
         foreach ($records as $record) {
-            $result .= $this->formatRecord($table, $record, $searchTerms);
+            $result .= $this->formatRecord($table, $record, $searchTerms, $languageId);
         }
 
         $result .= "\n";
@@ -805,7 +873,7 @@ class SearchTool extends AbstractRecordTool
     /**
      * Format a single record
      */
-    protected function formatRecord(string $table, array $record, array $searchTerms): string
+    protected function formatRecord(string $table, array $record, array $searchTerms, ?int $languageId = null): string
     {
         $title = RecordFormattingUtility::getRecordTitle($table, $record);
         $uid = $record['uid'] ?? 'unknown';
@@ -825,6 +893,17 @@ class SearchTool extends AbstractRecordTool
             $cType = $record['CType'];
             $cTypeLabel = RecordFormattingUtility::getContentTypeLabel($cType);
             $result .= "  🎯 Type: $cTypeLabel ($cType)\n";
+        }
+        
+        // Add language information if table has language support
+        if ($this->tableHasLanguageSupport($table) && isset($record['sys_language_uid'])) {
+            $recordLangId = (int)$record['sys_language_uid'];
+            if ($recordLangId > 0) {
+                $langCode = $this->languageService->getIsoCodeFromUid($recordLangId) ?? 'unknown';
+                $result .= "  🌐 Language: " . strtoupper($langCode) . "\n";
+            } elseif ($recordLangId === -1) {
+                $result .= "  🌐 Language: All\n";
+            }
         }
 
         // Show preview of matching content

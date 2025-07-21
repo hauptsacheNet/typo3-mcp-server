@@ -7,6 +7,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\GetPageTreeTool;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\SiteInformationService;
+use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
@@ -31,7 +32,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
     public function testGetPageTreeDirectly(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTreeTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
         
         // Test getting page tree from root (pid=0)
         $result = $tool->execute([
@@ -60,7 +62,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
     public function testGetPageTreeFromSpecificPage(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTreeTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
         
         // Get tree starting from page 1 (Home)
         $result = $tool->execute([
@@ -86,7 +89,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
     public function testDepthLimitation(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTreeTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
         
         // Get tree with depth 1
         $result = $tool->execute([
@@ -115,7 +119,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
     {
         // Create tool registry with the GetPageTreeTool
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tools = [new GetPageTreeTool($siteInformationService)];
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tools = [new GetPageTreeTool($siteInformationService, $languageService)];
         $registry = new ToolRegistry($tools);
         
         // Get tool from registry
@@ -140,7 +145,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
     public function testToolName(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTreeTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
         $this->assertEquals('GetPageTree', $tool->getName());
     }
 
@@ -150,7 +156,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
     public function testToolSchema(): void
     {
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
-        $tool = new GetPageTreeTool($siteInformationService);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
         $schema = $tool->getSchema();
         
         $this->assertIsArray($schema);

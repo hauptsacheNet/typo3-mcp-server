@@ -11,6 +11,7 @@ use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
+use Hn\McpServer\Service\LanguageService;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -19,6 +20,14 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class ReadTableTool extends AbstractRecordTool
 {
+    protected LanguageService $languageService;
+    
+    public function __construct()
+    {
+        parent::__construct();
+        $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
+    }
+
     /**
      * Get the tool type
      */
@@ -32,56 +41,93 @@ class ReadTableTool extends AbstractRecordTool
      */
     public function getSchema(): array
     {
+        // Check if multiple languages are available
+        $availableLanguages = $this->languageService->getAvailableIsoCodes();
+        $hasMultipleLanguages = count($availableLanguages) > 1;
+        
+        // Build the base properties
+        $properties = [
+            'table' => [
+                'type' => 'string',
+                'description' => 'The table name to read records from',
+            ],
+            'pid' => [
+                'type' => 'integer',
+                'description' => 'Filter by page ID (recommended - use this instead of individual record lookups)',
+            ],
+            'uid' => [
+                'type' => 'integer',
+                'description' => 'Filter by record UID (use pid filter instead to read multiple records of a page)',
+            ],
+            'where' => [
+                'type' => 'string',
+                'description' => 'SQL WHERE condition for filtering (without the WHERE keyword)',
+            ],
+            'limit' => [
+                'type' => 'integer',
+                'description' => 'Maximum number of records to return (default: 20)',
+            ],
+            'offset' => [
+                'type' => 'integer',
+                'description' => 'Offset for pagination',
+            ],
+        ];
+        
+        // Only add language parameters if multiple languages are configured
+        if ($hasMultipleLanguages) {
+            $properties['language'] = [
+                'type' => 'string',
+                'description' => 'Language ISO code to filter records by (e.g., "en", "de", "fr"). Without this parameter, records from ALL languages are returned mixed together, similar to TYPO3\'s list module. For UID lookups, consider omitting this parameter to ensure the record can be found regardless of language.',
+                'enum' => $availableLanguages,
+            ];
+            $properties['includeTranslationSource'] = [
+                'type' => 'boolean',
+                'description' => 'Include translation source information for translated records (default: false)',
+            ];
+        }
+        
         return [
-            'description' => 'Read records from TYPO3 tables with filtering, pagination, and relation embedding. For page content, use pid filter instead of individual record lookups.',
+            'description' => 'Read records from TYPO3 tables with filtering, pagination, and relation embedding. By default, returns records from ALL languages mixed together (matching TYPO3\'s list module behavior). Use the language parameter to filter to a specific language. For page content, use pid filter instead of individual record lookups.',
             'parameters' => [
                 'type' => 'object',
-                'properties' => [
-                    'table' => [
-                        'type' => 'string',
-                        'description' => 'The table name to read records from',
-                    ],
-                    'pid' => [
-                        'type' => 'integer',
-                        'description' => 'Filter by page ID (recommended - use this instead of individual record lookups)',
-                    ],
-                    'uid' => [
-                        'type' => 'integer',
-                        'description' => 'Filter by record UID (use pid filter instead to read multiple records of a page)',
-                    ],
-                    'where' => [
-                        'type' => 'string',
-                        'description' => 'SQL WHERE condition for filtering (without the WHERE keyword)',
-                    ],
-                    'limit' => [
-                        'type' => 'integer',
-                        'description' => 'Maximum number of records to return (default: 20)',
-                    ],
-                    'offset' => [
-                        'type' => 'integer',
-                        'description' => 'Offset for pagination',
-                    ],
-                ],
+                'properties' => $properties,
             ],
             'examples' => [
                 [
-                    'description' => 'Read all content elements on a page',
+                    'description' => 'Read all content elements on a page (all languages mixed)',
                     'parameters' => [
                         'table' => 'tt_content',
                         'pid' => 123
                     ]
                 ],
                 [
-                    'description' => 'Read a specific record',
+                    'description' => 'Read a specific record by UID (searches all languages)',
                     'parameters' => [
                         'table' => 'pages',
                         'uid' => 1
+                    ]
+                ],
+                [
+                    'description' => 'Read only German content elements on a page (filters by language)',
+                    'parameters' => [
+                        'table' => 'tt_content',
+                        'pid' => 123,
+                        'language' => 'de'
+                    ]
+                ],
+                [
+                    'description' => 'Read translated content with source information',
+                    'parameters' => [
+                        'table' => 'tt_content',
+                        'pid' => 123,
+                        'language' => 'de',
+                        'includeTranslationSource' => true
                     ]
                 ]
             ]
         ];
     }
-
+    
     /**
      * Execute the tool
      */
@@ -96,6 +142,8 @@ class ReadTableTool extends AbstractRecordTool
         $condition = $params['where'] ?? '';
         $limit = isset($params['limit']) ? (int)$params['limit'] : 20;
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
+        $language = $params['language'] ?? null;
+        $includeTranslationSource = $params['includeTranslationSource'] ?? false;
 
         if (empty($table)) {
             return $this->createErrorResult('Table name is required');
@@ -109,6 +157,15 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         try {
+            // Convert language ISO code to UID if provided
+            $languageUid = null;
+            if ($language !== null) {
+                $languageUid = $this->languageService->getUidFromIsoCode($language);
+                if ($languageUid === null) {
+                    return $this->createErrorResult("Unknown language code: {$language}");
+                }
+            }
+            
             // Get records from the table
             $result = $this->getRecords(
                 $table,
@@ -116,11 +173,17 @@ class ReadTableTool extends AbstractRecordTool
                 $uid,
                 $condition,
                 $limit,
-                $offset
+                $offset,
+                $languageUid
             );
 
             // Include related records
             $result = $this->includeRelations($result, $table);
+            
+            // Include translation metadata if requested
+            if ($includeTranslationSource && $languageUid !== null && $languageUid > 0) {
+                $result['translationSource'] = $this->getTranslationSourceData($result['records'], $table);
+            }
 
             // Return the result as JSON
             return $this->createJsonResult($result);
@@ -138,7 +201,8 @@ class ReadTableTool extends AbstractRecordTool
         ?int $uid,
         string $condition,
         int $limit,
-        int $offset
+        int $offset,
+        ?int $languageUid = null
     ): array {
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
@@ -161,6 +225,16 @@ class ReadTableTool extends AbstractRecordTool
             $queryBuilder->andWhere(
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
             );
+        }
+        
+        // Filter by language if specified and table has language field
+        if ($languageUid !== null) {
+            $languageField = $this->tableAccessService->getLanguageFieldName($table);
+            if (!empty($languageField)) {
+                $queryBuilder->andWhere(
+                    $queryBuilder->expr()->eq($languageField, $queryBuilder->createNamedParameter($languageUid, ParameterType::INTEGER))
+                );
+            }
         }
 
         // Filter by uid if specified
@@ -236,6 +310,16 @@ class ReadTableTool extends AbstractRecordTool
             $countQueryBuilder->andWhere(
                 $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
             );
+        }
+        
+        // Apply language filter to count query as well
+        if ($languageUid !== null) {
+            $languageField = $this->tableAccessService->getLanguageFieldName($table);
+            if (!empty($languageField)) {
+                $countQueryBuilder->andWhere(
+                    $countQueryBuilder->expr()->eq($languageField, $countQueryBuilder->createNamedParameter($languageUid, ParameterType::INTEGER))
+                );
+            }
         }
         
         if ($uid !== null) {
@@ -562,7 +646,7 @@ class ReadTableTool extends AbstractRecordTool
             }
 
             // Regular foreign table relation without MM
-            $this->includeRegularRelations($records, $fieldName);
+            $this->includeRegularRelations($records, $fieldName, $fieldConfig);
             return;
         }
 
@@ -597,19 +681,42 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Include regular (non-MM) relations for a field
      */
-    protected function includeRegularRelations(array &$records, string $fieldName): void
+    protected function includeRegularRelations(array &$records, string $fieldName, array $fieldConfig): void
     {
+        // Check if this field supports multiple values
+        $supportsMultiple = false;
+        if (isset($fieldConfig['config']['maxitems']) && $fieldConfig['config']['maxitems'] > 1) {
+            $supportsMultiple = true;
+        }
+        if (isset($fieldConfig['config']['multiple']) && $fieldConfig['config']['multiple']) {
+            $supportsMultiple = true;
+        }
+        
         // Convert comma-separated values to array for each record
         foreach ($records as &$record) {
             if (isset($record[$fieldName])) {
-                // Always convert to array for consistency
-                if (empty($record[$fieldName]) || $record[$fieldName] === 0 || $record[$fieldName] === '0') {
-                    $record[$fieldName] = [];
-                } elseif (is_int($record[$fieldName])) {
-                    $record[$fieldName] = [$record[$fieldName]];
+                if ($supportsMultiple) {
+                    // Multi-select field - convert to array
+                    if (empty($record[$fieldName]) || $record[$fieldName] === 0 || $record[$fieldName] === '0') {
+                        $record[$fieldName] = [];
+                    } elseif (is_int($record[$fieldName])) {
+                        $record[$fieldName] = [$record[$fieldName]];
+                    } else {
+                        $values = GeneralUtility::intExplode(',', (string)$record[$fieldName], true);
+                        $record[$fieldName] = $values;
+                    }
                 } else {
-                    $values = GeneralUtility::intExplode(',', (string)$record[$fieldName], true);
-                    $record[$fieldName] = $values;
+                    // Single-select field - keep as single value
+                    if (is_string($record[$fieldName]) && strpos($record[$fieldName], ',') !== false) {
+                        // If there's a comma, take only the first value
+                        $values = GeneralUtility::intExplode(',', $record[$fieldName], true);
+                        $record[$fieldName] = !empty($values) ? $values[0] : 0;
+                    } else {
+                        // Convert to integer if numeric
+                        if (is_numeric($record[$fieldName])) {
+                            $record[$fieldName] = (int)$record[$fieldName];
+                        }
+                    }
                 }
             }
         }
@@ -841,6 +948,107 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         return true;
+    }
+    
+    /**
+     * Get translation source data for records
+     */
+    protected function getTranslationSourceData(array $records, string $table): array
+    {
+        $translationData = [];
+        
+        // Get translation parent field name
+        $translationParentField = $this->tableAccessService->getTranslationParentFieldName($table);
+        if (empty($translationParentField)) {
+            return [];
+        }
+        
+        // Collect parent UIDs
+        $parentUids = [];
+        foreach ($records as $record) {
+            if (!empty($record[$translationParentField])) {
+                $parentUids[] = (int)$record[$translationParentField];
+            }
+        }
+        
+        if (empty($parentUids)) {
+            return [];
+        }
+        
+        // Load parent records
+        $parentRecords = $this->loadParentRecords($table, array_unique($parentUids));
+        
+        // Build translation metadata
+        foreach ($records as $record) {
+            if (!empty($record[$translationParentField])) {
+                $parentUid = (int)$record[$translationParentField];
+                $recordUid = (int)$record['uid'];
+                
+                if (isset($parentRecords[$parentUid])) {
+                    $parentRecord = $parentRecords[$parentUid];
+                    
+                    // Get excluded and synchronized fields
+                    $excludedFields = $this->tableAccessService->getExcludedFieldsInTranslation($table);
+                    $inheritedValues = [];
+                    
+                    // Collect inherited field values
+                    foreach ($excludedFields as $field) {
+                        if (isset($parentRecord[$field])) {
+                            $inheritedValues[$field] = $this->convertFieldValue($table, $field, $parentRecord[$field]);
+                        }
+                    }
+                    
+                    $translationData[$recordUid] = [
+                        'sourceUid' => $parentUid,
+                        'sourceLanguage' => $this->languageService->getIsoCodeFromUid(0) ?? 'default',
+                        'inheritedFields' => $inheritedValues
+                    ];
+                }
+            }
+        }
+        
+        return $translationData;
+    }
+    
+    /**
+     * Load parent records for translations
+     */
+    protected function loadParentRecords(string $table, array $parentUids): array
+    {
+        if (empty($parentUids)) {
+            return [];
+        }
+        
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
+        
+        // Apply restrictions
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+        
+        $records = $queryBuilder
+            ->select('*')
+            ->from($table)
+            ->where(
+                $queryBuilder->expr()->in(
+                    'uid',
+                    $queryBuilder->createNamedParameter($parentUids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                )
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+        
+        // Process and index by UID
+        $indexedRecords = [];
+        foreach ($records as $record) {
+            $processedRecord = $this->processRecord($record, $table);
+            $indexedRecords[$processedRecord['uid']] = $processedRecord;
+        }
+        
+        return $indexedRecords;
     }
 
 }

@@ -1,0 +1,7 @@
+"tt_content"
+,"uid","pid","CType","header","bodytext","sys_language_uid","l18n_parent","colPos","sorting","hidden","deleted","starttime","endtime","t3ver_oid","t3ver_wsid","t3ver_state","tstamp","crdate"
+,200,1,"text","Welcome to our website","This is the main content in English.",0,0,0,256,0,0,0,0,0,0,0,1734875000,1734875000
+,201,1,"text","Willkommen auf unserer Website","Dies ist der Hauptinhalt auf Deutsch.",1,200,0,256,0,0,0,0,0,0,0,1734875000,1734875000
+,202,1,"text","Bienvenue sur notre site","Ceci est le contenu principal en français.",2,200,0,256,0,0,0,0,0,0,0,1734875000,1734875000
+,203,1,"textmedia","About Us","Learn more about our company.",0,0,0,512,0,0,0,0,0,0,0,1734875000,1734875000
+,204,1,"textmedia","Über uns","Erfahren Sie mehr über unser Unternehmen.",1,203,0,512,0,0,0,0,0,0,0,1734875000,1734875000

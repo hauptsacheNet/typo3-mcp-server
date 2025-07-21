@@ -52,9 +52,6 @@ class GetTableSchemaFlexFormTest extends FunctionalTestCase
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $content = $result->content[0]->text;
         
-        echo "\n=== Schema for tt_content type=list ===\n";
-        echo substr($content, 0, 2000) . "\n...\n";
-        
         // Check if pi_flexform appears
         $hasFlexForm = strpos($content, 'pi_flexform') !== false;
         $this->assertTrue($hasFlexForm, 'Schema for list type should include pi_flexform field');

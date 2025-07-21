@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
@@ -18,6 +19,14 @@ use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
  */
 class WriteTableTool extends AbstractRecordTool
 {
+    protected LanguageService $languageService;
+    
+    public function __construct()
+    {
+        parent::__construct();
+        $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
+    }
+    
     /**
      * Get the tool type
      */
@@ -32,14 +41,14 @@ class WriteTableTool extends AbstractRecordTool
     public function getSchema(): array
     {
         return [
-            'description' => 'Create, update, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live.',
+            'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live. Language fields (sys_language_uid) can be provided as ISO codes (e.g., "de", "fr") instead of numeric IDs.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
                     'action' => [
                         'type' => 'string',
-                        'description' => 'Action to perform: "create", "update", or "delete"',
-                        'enum' => ['create', 'update', 'delete'],
+                        'description' => 'Action to perform: "create", "update", "translate", or "delete"',
+                        'enum' => ['create', 'update', 'translate', 'delete'],
                     ],
                     'table' => [
                         'type' => 'string',
@@ -55,7 +64,7 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'data' => [
                         'type' => 'object',
-                        'description' => 'Record data (required for "create" and "update" actions). Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables.',
+                        'description' => 'Record data (required for "create", "update", and "translate" actions). For translate action, must contain sys_language_uid with target language. Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables.',
                     ],
                     'position' => [
                         'type' => 'string',
@@ -77,6 +86,20 @@ class WriteTableTool extends AbstractRecordTool
                             'CType' => 'textmedia',
                             'header' => 'New Content Element',
                             'bodytext' => 'This is a new content element'
+                        ]
+                    ]
+                ],
+                [
+                    'description' => 'Create content in German using ISO code',
+                    'parameters' => [
+                        'action' => 'create',
+                        'table' => 'tt_content',
+                        'pid' => 123,
+                        'data' => [
+                            'CType' => 'textmedia',
+                            'header' => 'Deutscher Inhalt',
+                            'bodytext' => 'Dies ist ein deutscher Text',
+                            'sys_language_uid' => 'de'  // ISO code instead of numeric ID
                         ]
                     ]
                 ],
@@ -163,6 +186,29 @@ class WriteTableTool extends AbstractRecordTool
                             ]
                         ]
                     ]
+                ],
+                [
+                    'description' => 'Translate existing content to French',
+                    'parameters' => [
+                        'action' => 'translate',
+                        'table' => 'tt_content',
+                        'uid' => 456,  // UID of the record to translate
+                        'data' => [
+                            'sys_language_uid' => 'fr'  // Target language ISO code
+                        ]
+                    ]
+                ],
+                [
+                    'description' => 'Update German translation of a record',
+                    'parameters' => [
+                        'action' => 'update',
+                        'table' => 'tt_content',
+                        'uid' => 789,  // UID of the German record
+                        'data' => [
+                            'header' => 'Aktualisierte Überschrift',
+                            'bodytext' => 'Aktualisierter deutscher Text'
+                        ]
+                    ]
                 ]
             ],
         ];
@@ -186,11 +232,33 @@ class WriteTableTool extends AbstractRecordTool
         
         // Validate parameters
         if (empty($action)) {
-            return $this->createErrorResult('Action is required (create, update, or delete)');
+            return $this->createErrorResult('Action is required (create, update, translate, or delete)');
         }
         
         if (empty($table)) {
             return $this->createErrorResult('Table name is required');
+        }
+        
+        /**
+         * IMPORTANT FEATURE: ISO Code Support for sys_language_uid
+         * 
+         * The WriteTableTool accepts ISO language codes (e.g., 'de', 'fr', 'en') for the
+         * sys_language_uid field instead of numeric IDs. This makes it much easier for LLMs
+         * to work with multilingual content without needing to know the numeric language IDs.
+         * 
+         * Example: 
+         *   'sys_language_uid' => 'de'  // Will be converted to numeric ID (e.g., 1)
+         * 
+         * This conversion happens automatically for any table that has a sys_language_uid field.
+         * The available ISO codes depend on the site configuration.
+         */
+        // Convert sys_language_uid from ISO code to UID if present
+        if (!empty($data) && isset($data['sys_language_uid']) && is_string($data['sys_language_uid'])) {
+            $languageUid = $this->languageService->getUidFromIsoCode($data['sys_language_uid']);
+            if ($languageUid === null) {
+                return $this->createErrorResult('Unknown language code: ' . $data['sys_language_uid']);
+            }
+            $data['sys_language_uid'] = $languageUid;
         }
         
         // Validate table access using TableAccessService
@@ -228,6 +296,20 @@ class WriteTableTool extends AbstractRecordTool
                 }
                 break;
                 
+            case 'translate':
+                if ($uid === null) {
+                    return $this->createErrorResult('Record UID is required for translate action');
+                }
+                
+                if (empty($data)) {
+                    return $this->createErrorResult('Data is required for translate action');
+                }
+                
+                if (!isset($data['sys_language_uid'])) {
+                    return $this->createErrorResult('sys_language_uid is required in data for translate action');
+                }
+                break;
+                
             default:
                 return $this->createErrorResult('Invalid action: ' . $action);
         }
@@ -243,6 +325,11 @@ class WriteTableTool extends AbstractRecordTool
                     
                 case 'delete':
                     return $this->deleteRecord($table, $uid);
+                    
+                case 'translate':
+                    // The language UID has already been converted from ISO code if needed
+                    $targetLanguageUid = (int)$data['sys_language_uid'];
+                    return $this->translateRecord($table, $uid, $targetLanguageUid);
             }
         } catch (\Throwable $e) {
             return $this->createErrorResult('Error executing action: ' . $e->getMessage());
@@ -566,6 +653,110 @@ class WriteTableTool extends AbstractRecordTool
             'action' => 'delete',
             'table' => $table,
             'uid' => $uid, // Return the live UID that was passed in
+        ]);
+    }
+    
+    /**
+     * Translate a record to another language
+     */
+    protected function translateRecord(string $table, int $uid, int $targetLanguageUid): CallToolResult
+    {
+        // Check if table supports translations
+        $languageField = $this->tableAccessService->getLanguageFieldName($table);
+        if (!$languageField) {
+            return $this->createErrorResult('Table ' . $table . ' does not support translations');
+        }
+        
+        // Check if translation parent field exists
+        $translationParentField = $this->tableAccessService->getTranslationParentFieldName($table);
+        if (!$translationParentField) {
+            return $this->createErrorResult('Table ' . $table . ' does not have a translation parent field configured');
+        }
+        
+        // Get the record to be translated
+        $record = BackendUtility::getRecord($table, $uid);
+        if (!$record) {
+            return $this->createErrorResult('Record not found');
+        }
+        
+        // Check if this is already a translation
+        if (!empty($record[$translationParentField]) && $record[$translationParentField] > 0) {
+            return $this->createErrorResult('Cannot translate a record that is already a translation. Translate the original record instead.');
+        }
+        
+        // Check if translation already exists
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable($table);
+        
+        $existingTranslation = $queryBuilder
+            ->select('uid')
+            ->from($table)
+            ->where(
+                $queryBuilder->expr()->eq($translationParentField, $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->eq($languageField, $queryBuilder->createNamedParameter($targetLanguageUid, ParameterType::INTEGER))
+            )
+            ->setMaxResults(1)
+            ->executeQuery()
+            ->fetchOne();
+        
+        if ($existingTranslation) {
+            $targetIsoCode = $this->languageService->getIsoCodeFromUid($targetLanguageUid) ?? $targetLanguageUid;
+            return $this->createErrorResult('Translation already exists for language "' . $targetIsoCode . '" (UID: ' . $existingTranslation . ')');
+        }
+        
+        // Use DataHandler to create the translation
+        $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+        
+        // Use the localize command to create a translation
+        $cmdMap = [
+            $table => [
+                $uid => [
+                    'localize' => $targetLanguageUid
+                ]
+            ]
+        ];
+        
+        $dataHandler->start([], $cmdMap);
+        $dataHandler->process_cmdmap();
+        
+        // Check for errors
+        if (!empty($dataHandler->errorLog)) {
+            return $this->createErrorResult('Error creating translation: ' . implode(', ', $dataHandler->errorLog));
+        }
+        
+        // Get the UID of the newly created translation
+        $newTranslationUid = null;
+        if (isset($dataHandler->copyMappingArray[$table][$uid])) {
+            $newTranslationUid = $dataHandler->copyMappingArray[$table][$uid];
+        }
+        
+        if (!$newTranslationUid) {
+            // Try to find the translation we just created
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable($table);
+            
+            $newTranslationUid = $queryBuilder
+                ->select('uid')
+                ->from($table)
+                ->where(
+                    $queryBuilder->expr()->eq($translationParentField, $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
+                    $queryBuilder->expr()->eq($languageField, $queryBuilder->createNamedParameter($targetLanguageUid, ParameterType::INTEGER))
+                )
+                ->orderBy('uid', 'DESC')
+                ->setMaxResults(1)
+                ->executeQuery()
+                ->fetchOne();
+        }
+        
+        $targetIsoCode = $this->languageService->getIsoCodeFromUid($targetLanguageUid) ?? $targetLanguageUid;
+        
+        return $this->createJsonResult([
+            'action' => 'translate',
+            'table' => $table,
+            'sourceUid' => $uid,
+            'translationUid' => $newTranslationUid ?: 'Translation created but UID not found',
+            'targetLanguage' => $targetIsoCode,
         ]);
     }
     

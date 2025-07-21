@@ -706,6 +706,55 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
+     * Get the translation parent field name for a table
+     */
+    public function getTranslationParentFieldName(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['transOrigPointerField'] ?? null;
+    }
+    
+    /**
+     * Get the translation source field name for a table
+     */
+    public function getTranslationSourceFieldName(string $table): ?string
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        return $ctrl['translationSource'] ?? null;
+    }
+    
+    /**
+     * Get fields that are excluded in translations (l10n_mode = 'exclude')
+     */
+    public function getExcludedFieldsInTranslation(string $table): array
+    {
+        $excludedFields = [];
+        $columns = $GLOBALS['TCA'][$table]['columns'] ?? [];
+        
+        foreach ($columns as $fieldName => $fieldConfig) {
+            $l10nMode = $fieldConfig['l10n_mode'] ?? '';
+            if ($l10nMode === 'exclude') {
+                $excludedFields[] = $fieldName;
+            }
+        }
+        
+        return $excludedFields;
+    }
+    
+    /**
+     * Check if a field allows language synchronization
+     */
+    public function isFieldLanguageSynchronizable(string $table, string $field): bool
+    {
+        $fieldConfig = $this->getFieldConfig($table, $field);
+        if (!$fieldConfig) {
+            return false;
+        }
+        
+        return (bool)($fieldConfig['config']['behaviour']['allowLanguageSynchronization'] ?? false);
+    }
+    
+    /**
      * Get the search fields for a table
      */
     public function getSearchFields(string $table): array

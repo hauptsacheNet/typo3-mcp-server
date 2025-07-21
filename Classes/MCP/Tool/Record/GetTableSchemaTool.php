@@ -361,7 +361,7 @@ class GetTableSchemaTool extends AbstractRecordTool
             $this->addFlexFormIdentifiers($result, $config, $table, $fieldName, $filterType);
         } else {
             // For other field types, use the TcaFormattingUtility
-            TcaFormattingUtility::addFieldDetailsInline($result, $config);
+            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName);
         }
     }
     
