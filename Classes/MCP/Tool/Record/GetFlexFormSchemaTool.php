@@ -122,11 +122,11 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
             $identifier = '*,form_formframework';
         }
 
-        // Build the result
-        $result = "FLEXFORM SCHEMA: $identifier\n";
-        $result .= "=======================================\n\n";
-        $result .= "Table: $table\n";
-        $result .= "Field: $field\n\n";
+        // Build the header
+        $header = "FLEXFORM SCHEMA: $identifier\n";
+        $header .= "=======================================\n\n";
+        $header .= "Table: $table\n";
+        $header .= "Field: $field\n\n";
 
         // Check if the identifier exists directly in the ds array
         if (isset($flexFormConfig['ds'][$identifier])) {
@@ -136,7 +136,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
             if (is_string($dsValue) && strpos($dsValue, 'FILE:') === 0) {
                 $file = substr($dsValue, 5);
                 $file = GeneralUtility::getFileAbsFileName($file);
-                $result .= "Schema defined in file: " . $file . "\n\n";
+                $prefix = "Schema defined in file: " . $file . "\n\n";
 
                 if (file_exists($file)) {
                     $content = file_get_contents($file);
@@ -145,172 +145,12 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                         $xmlArray = GeneralUtility::xml2array($content);
                         
                         if ($xmlArray) {
-                            // Collect all field names for JSON example
-                            $allFieldNames = [];
-
-                            // Process sheets
-                            if (isset($xmlArray['sheets'])) {
-                                $result .= "SHEETS:\n";
-                                $result .= "-------\n";
-                                
-                                foreach ($xmlArray['sheets'] as $sheetName => $sheet) {
-                                    $result .= "Sheet: $sheetName\n";
-                                    
-                                    // Process fields
-                                    if (isset($sheet['ROOT']['el'])) {
-                                        $result .= "  Fields:\n";
-                                        
-                                        foreach ($sheet['ROOT']['el'] as $fieldName => $field) {
-                                            $allFieldNames[] = $fieldName;
-                                            $result .= "  - $fieldName";
-                                            
-                                            // Get field type and label
-                                            $fieldType = 'unknown';
-                                            $fieldLabel = $fieldName;
-                                            $fieldDescription = '';
-                                            
-                                            // Handle both TCEforms structure and direct field configuration
-                                            if (isset($field['TCEforms'])) {
-                                                // TCEforms structure (older format)
-                                                // Get field label
-                                                if (isset($field['TCEforms']['label'])) {
-                                                    $fieldLabel = TableAccessService::translateLabel($field['TCEforms']['label']);
-                                                    $result .= " (" . $fieldLabel . ")";
-                                                }
-                                                
-                                                // Get field type and config
-                                                if (isset($field['TCEforms']['config']['type'])) {
-                                                    $fieldType = $field['TCEforms']['config']['type'];
-                                                    $result .= ": " . $fieldType;
-                                                    
-                                                    // Add field details based on type
-                                                    TcaFormattingUtility::addFieldDetailsInline($result, $field['TCEforms']['config']);
-                                                }
-                                                
-                                                // Get field description
-                                                if (isset($field['TCEforms']['description'])) {
-                                                    $fieldDescription = TableAccessService::translateLabel($field['TCEforms']['description']);
-                                                    $result .= " - " . $fieldDescription;
-                                                }
-                                            } else {
-                                                // Direct field configuration (newer format)
-                                                // Get field label
-                                                if (isset($field['label'])) {
-                                                    $fieldLabel = TableAccessService::translateLabel($field['label']);
-                                                    $result .= " (" . $fieldLabel . ")";
-                                                }
-                                                
-                                                // Get field type and config
-                                                if (isset($field['config']['type'])) {
-                                                    $fieldType = $field['config']['type'];
-                                                    $result .= ": " . $fieldType;
-                                                    
-                                                    // Add field details based on type
-                                                    TcaFormattingUtility::addFieldDetailsInline($result, $field['config']);
-                                                }
-                                                
-                                                // Get field description
-                                                if (isset($field['description'])) {
-                                                    $fieldDescription = TableAccessService::translateLabel($field['description']);
-                                                    $result .= " - " . $fieldDescription;
-                                                }
-                                            }
-                                            
-                                            // Add JSON path info
-                                            $result .= "\n    JSON Path: " . $this->getJsonPath($fieldName);
-
-                                            $result .= "\n";
-                                        }
-                                    }
-                                    
-                                    $result .= "\n";
-                                }
-                            } elseif (isset($xmlArray['ROOT']['el'])) {
-                                $result .= "FIELDS:\n";
-                                $result .= "------\n";
-                                
-                                foreach ($xmlArray['ROOT']['el'] as $fieldName => $field) {
-                                    $allFieldNames[] = $fieldName;
-                                    $result .= "- $fieldName";
-                                    
-                                    // Get field type and label
-                                    $fieldType = 'unknown';
-                                    $fieldLabel = $fieldName;
-                                    $fieldDescription = '';
-                                    
-                                    // Handle both TCEforms structure and direct field configuration
-                                    if (isset($field['TCEforms'])) {
-                                        // TCEforms structure (older format)
-                                        // Get field label
-                                        if (isset($field['TCEforms']['label'])) {
-                                            $fieldLabel = TableAccessService::translateLabel($field['TCEforms']['label']);
-                                            $result .= " (" . $fieldLabel . ")";
-                                        }
-                                        
-                                        // Get field type and config
-                                        if (isset($field['TCEforms']['config']['type'])) {
-                                            $fieldType = $field['TCEforms']['config']['type'];
-                                            $result .= ": " . $fieldType;
-                                            
-                                            // Add field details based on type
-                                            TcaFormattingUtility::addFieldDetailsInline($result, $field['TCEforms']['config']);
-                                        }
-                                        
-                                        // Get field description
-                                        if (isset($field['TCEforms']['description'])) {
-                                            $fieldDescription = TableAccessService::translateLabel($field['TCEforms']['description']);
-                                            $result .= " - " . $fieldDescription;
-                                        }
-                                    } else {
-                                        // Direct field configuration (newer format)
-                                        // Get field label
-                                        if (isset($field['label'])) {
-                                            $fieldLabel = TableAccessService::translateLabel($field['label']);
-                                            $result .= " (" . $fieldLabel . ")";
-                                        }
-                                        
-                                        // Get field type and config
-                                        if (isset($field['config']['type'])) {
-                                            $fieldType = $field['config']['type'];
-                                            $result .= ": " . $fieldType;
-                                            
-                                            // Add field details based on type
-                                            TcaFormattingUtility::addFieldDetailsInline($result, $field['config']);
-                                        }
-                                        
-                                        // Get field description
-                                        if (isset($field['description'])) {
-                                            $fieldDescription = TableAccessService::translateLabel($field['description']);
-                                            $result .= " - " . $fieldDescription;
-                                        }
-                                    }
-                                    
-                                    // Add JSON path info
-                                    $result .= "\n  JSON Path: " . $this->getJsonPath($fieldName);
-
-                                    $result .= "\n";
-                                }
-                                
-                                $result .= "\n";
-                            }
+                            $processedData = $this->processFlexFormXml($xmlArray);
+                            $result = $this->formatFlexFormSchema($processedData, $header . $prefix);
+                            return $this->createSuccessResult($result);
                         } else {
-                            $result .= "Failed to parse XML schema\n";
+                            return $this->createErrorResult("Failed to parse XML schema from file: $file");
                         }
-
-                        // Generate a JSON structure example
-                        $result .= "JSON STRUCTURE:\n";
-                        $result .= "==============\n";
-                        $result .= "When reading or writing FlexForm data, use nested objects/arrays:\n\n";
-
-                        if (!empty($allFieldNames)) {
-                            $jsonExample = $this->buildJsonExample($allFieldNames);
-                            $result .= json_encode($jsonExample, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-                        } else {
-                            $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-                        }
-
-                        $result .= "\n\nNote: Field names with dots (e.g., \"settings.orderBy\") are automatically\n";
-                        $result .= "converted to nested structures by TYPO3.";
                     } else {
                         return $this->createErrorResult("FlexForm file is empty: $file");
                     }
@@ -318,188 +158,24 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                     return $this->createErrorResult("FlexForm file not found: $file");
                 }
             } elseif (is_string($dsValue)) {
-                $result .= "Schema defined inline as XML\n\n";
+                $prefix = "Schema defined inline as XML\n\n";
 
                 // Parse the XML content using TYPO3's built-in method
                 $xmlArray = GeneralUtility::xml2array($dsValue);
                 
                 if ($xmlArray) {
-                    // Collect all field names for JSON example
-                    $allFieldNames = [];
-
-                    // Process sheets
-                    if (isset($xmlArray['sheets'])) {
-                        $result .= "SHEETS:\n";
-                        $result .= "-------\n";
-                        
-                        foreach ($xmlArray['sheets'] as $sheetName => $sheet) {
-                            $result .= "Sheet: $sheetName\n";
-                            
-                            // Process fields
-                            if (isset($sheet['ROOT']['el'])) {
-                                $result .= "  Fields:\n";
-                                
-                                foreach ($sheet['ROOT']['el'] as $fieldName => $field) {
-                                    $allFieldNames[] = $fieldName;
-                                    $result .= "  - $fieldName";
-                                    
-                                    // Get field type and label
-                                    $fieldType = 'unknown';
-                                    $fieldLabel = $fieldName;
-                                    $fieldDescription = '';
-                                    
-                                    // Handle both TCEforms structure and direct field configuration
-                                    if (isset($field['TCEforms'])) {
-                                        // TCEforms structure (older format)
-                                        // Get field label
-                                        if (isset($field['TCEforms']['label'])) {
-                                            $fieldLabel = TableAccessService::translateLabel($field['TCEforms']['label']);
-                                            $result .= " (" . $fieldLabel . ")";
-                                        }
-                                        
-                                        // Get field type and config
-                                        if (isset($field['TCEforms']['config']['type'])) {
-                                            $fieldType = $field['TCEforms']['config']['type'];
-                                            $result .= ": " . $fieldType;
-                                            
-                                            // Add field details based on type
-                                            TcaFormattingUtility::addFieldDetailsInline($result, $field['TCEforms']['config']);
-                                        }
-                                        
-                                        // Get field description
-                                        if (isset($field['TCEforms']['description'])) {
-                                            $fieldDescription = TableAccessService::translateLabel($field['TCEforms']['description']);
-                                            $result .= " - " . $fieldDescription;
-                                        }
-                                    } else {
-                                        // Direct field configuration (newer format)
-                                        // Get field label
-                                        if (isset($field['label'])) {
-                                            $fieldLabel = TableAccessService::translateLabel($field['label']);
-                                            $result .= " (" . $fieldLabel . ")";
-                                        }
-                                        
-                                        // Get field type and config
-                                        if (isset($field['config']['type'])) {
-                                            $fieldType = $field['config']['type'];
-                                            $result .= ": " . $fieldType;
-                                            
-                                            // Add field details based on type
-                                            TcaFormattingUtility::addFieldDetailsInline($result, $field['config']);
-                                        }
-                                        
-                                        // Get field description
-                                        if (isset($field['description'])) {
-                                            $fieldDescription = TableAccessService::translateLabel($field['description']);
-                                            $result .= " - " . $fieldDescription;
-                                        }
-                                    }
-                                    
-                                    // Add JSON path info
-                                    $result .= "\n    JSON Path: " . $this->getJsonPath($fieldName);
-
-                                    $result .= "\n";
-                                }
-                            }
-                            
-                            $result .= "\n";
-                        }
-                    } elseif (isset($xmlArray['ROOT']['el'])) {
-                        $result .= "FIELDS:\n";
-                        $result .= "------\n";
-                        
-                        foreach ($xmlArray['ROOT']['el'] as $fieldName => $field) {
-                            $allFieldNames[] = $fieldName;
-                            $result .= "- $fieldName";
-                            
-                            // Get field type and label
-                            $fieldType = 'unknown';
-                            $fieldLabel = $fieldName;
-                            $fieldDescription = '';
-                            
-                            // Handle both TCEforms structure and direct field configuration
-                            if (isset($field['TCEforms'])) {
-                                // TCEforms structure (older format)
-                                // Get field label
-                                if (isset($field['TCEforms']['label'])) {
-                                    $fieldLabel = TableAccessService::translateLabel($field['TCEforms']['label']);
-                                    $result .= " (" . $fieldLabel . ")";
-                                }
-                                
-                                // Get field type and config
-                                if (isset($field['TCEforms']['config']['type'])) {
-                                    $fieldType = $field['TCEforms']['config']['type'];
-                                    $result .= ": " . $fieldType;
-                                    
-                                    // Add field details based on type
-                                    TcaFormattingUtility::addFieldDetailsInline($result, $field['TCEforms']['config']);
-                                }
-                                
-                                // Get field description
-                                if (isset($field['TCEforms']['description'])) {
-                                    $fieldDescription = TableAccessService::translateLabel($field['TCEforms']['description']);
-                                    $result .= " - " . $fieldDescription;
-                                }
-                            } else {
-                                // Direct field configuration (newer format)
-                                // Get field label
-                                if (isset($field['label'])) {
-                                    $fieldLabel = TableAccessService::translateLabel($field['label']);
-                                    $result .= " (" . $fieldLabel . ")";
-                                }
-                                
-                                // Get field type and config
-                                if (isset($field['config']['type'])) {
-                                    $fieldType = $field['config']['type'];
-                                    $result .= ": " . $fieldType;
-                                    
-                                    // Add field details based on type
-                                    TcaFormattingUtility::addFieldDetailsInline($result, $field['config']);
-                                }
-                                
-                                // Get field description
-                                if (isset($field['description'])) {
-                                    $fieldDescription = TableAccessService::translateLabel($field['description']);
-                                    $result .= " - " . $fieldDescription;
-                                }
-                            }
-                            
-                            // Add JSON path info
-                            $result .= "\n  JSON Path: " . $this->getJsonPath($fieldName);
-
-                            $result .= "\n";
-                        }
-                        
-                        $result .= "\n";
-                    }
+                    $processedData = $this->processFlexFormXml($xmlArray);
+                    $result = $this->formatFlexFormSchema($processedData, $header . $prefix);
+                    return $this->createSuccessResult($result);
                 } else {
-                    $result .= "Failed to parse XML schema\n";
+                    return $this->createErrorResult("Failed to parse inline XML schema");
                 }
-
-                // Generate a JSON structure example
-                $result .= "JSON STRUCTURE:\n";
-                $result .= "==============\n";
-                $result .= "When reading or writing FlexForm data, use nested objects/arrays:\n\n";
-
-                if (!empty($allFieldNames)) {
-                    $jsonExample = $this->buildJsonExample($allFieldNames);
-                    $result .= json_encode($jsonExample, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-                } else {
-                    $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-                }
-
-                $result .= "\n\nNote: Field names with dots (e.g., \"settings.orderBy\") are automatically\n";
-                $result .= "converted to nested structures by TYPO3.";
             } elseif (is_array($dsValue)) {
-                $result .= "Schema defined as PHP array\n\n";
-
-                // Generate a JSON structure example
-                $result .= "JSON STRUCTURE:\n";
-                $result .= "==============\n";
-                $result .= "When reading or writing FlexForm data, use nested objects/arrays:\n\n";
-                $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-                $result .= "\n\nNote: Field names with dots (e.g., \"settings.orderBy\") are automatically\n";
-                $result .= "converted to nested structures by TYPO3.";
+                // PHP array format - process directly
+                $processedData = $this->processFlexFormXml($dsValue);
+                $prefix = "Schema defined as PHP array\n\n";
+                $result = $this->formatFlexFormSchema($processedData, $prefix);
+                return $this->createSuccessResult($result);
             }
 
             return $this->createSuccessResult($result);
@@ -541,6 +217,217 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
 
         $parts = explode('.', $fieldName);
         return 'pi_flexform.' . implode('.', $parts);
+    }
+
+    /**
+     * Process a single field configuration
+     *
+     * @param string $fieldName The field name
+     * @param array $field The field configuration
+     * @return array Processed field data with type, label, description, etc.
+     */
+    protected function processField(string $fieldName, array $field): array
+    {
+        $fieldData = [
+            'name' => $fieldName,
+            'type' => 'unknown',
+            'label' => $fieldName,
+            'description' => '',
+            'config' => [],
+            'jsonPath' => $this->getJsonPath($fieldName)
+        ];
+
+        // Check if field uses TCEforms structure (older format) or direct configuration (newer format)
+        $fieldConfig = isset($field['TCEforms']) ? $field['TCEforms'] : $field;
+
+        // Get field label
+        if (isset($fieldConfig['label'])) {
+            $fieldData['label'] = TableAccessService::translateLabel($fieldConfig['label']);
+        }
+
+        // Get field type and config
+        if (isset($fieldConfig['config']['type'])) {
+            $fieldData['type'] = $fieldConfig['config']['type'];
+            $fieldData['config'] = $fieldConfig['config'];
+        }
+
+        // Get field description
+        if (isset($fieldConfig['description'])) {
+            $fieldData['description'] = TableAccessService::translateLabel($fieldConfig['description']);
+        }
+
+        return $fieldData;
+    }
+
+    /**
+     * Process a collection of fields
+     *
+     * @param array $fields The fields to process
+     * @return array Array of processed field data
+     */
+    protected function processFields(array $fields): array
+    {
+        $processedFields = [];
+
+        foreach ($fields as $fieldName => $field) {
+            $processedFields[] = $this->processField($fieldName, $field);
+        }
+
+        return $processedFields;
+    }
+
+    /**
+     * Process FlexForm sheets
+     *
+     * @param array $sheets The sheets to process
+     * @return array Processed sheets data
+     */
+    protected function processSheets(array $sheets): array
+    {
+        $processedSheets = [];
+
+        foreach ($sheets as $sheetName => $sheet) {
+            $sheetData = [
+                'name' => $sheetName,
+                'fields' => []
+            ];
+
+            if (isset($sheet['ROOT']['el'])) {
+                $sheetData['fields'] = $this->processFields($sheet['ROOT']['el']);
+            }
+
+            $processedSheets[] = $sheetData;
+        }
+
+        return $processedSheets;
+    }
+
+    /**
+     * Process FlexForm XML structure
+     *
+     * @param array $xmlArray The parsed XML array
+     * @return array Processed FlexForm data
+     */
+    protected function processFlexFormXml(array $xmlArray): array
+    {
+        $data = [
+            'sheets' => [],
+            'fields' => [],
+            'hasSheets' => false
+        ];
+
+        if (isset($xmlArray['sheets'])) {
+            // Multi-sheet FlexForm
+            $data['hasSheets'] = true;
+            $data['sheets'] = $this->processSheets($xmlArray['sheets']);
+
+            // Collect all field names for JSON example
+            foreach ($data['sheets'] as $sheet) {
+                foreach ($sheet['fields'] as $field) {
+                    $data['fields'][] = $field['name'];
+                }
+            }
+        } elseif (isset($xmlArray['ROOT']['el'])) {
+            // Single sheet FlexForm
+            $processedFields = $this->processFields($xmlArray['ROOT']['el']);
+            $data['fields'] = array_column($processedFields, 'name');
+
+            // Store as single unnamed sheet for consistency
+            $data['sheets'][] = [
+                'name' => null,
+                'fields' => $processedFields
+            ];
+        }
+
+        return $data;
+    }
+
+    /**
+     * Format processed FlexForm data as text
+     *
+     * @param array $data Processed FlexForm data
+     * @param string $prefix Additional prefix text
+     * @return string Formatted text output
+     */
+    protected function formatFlexFormSchema(array $data, string $prefix = ''): string
+    {
+        $result = $prefix;
+
+        if ($data['hasSheets']) {
+            $result .= "SHEETS:\n";
+            $result .= "-------\n";
+
+            foreach ($data['sheets'] as $sheet) {
+                $result .= "Sheet: {$sheet['name']}\n";
+                $result .= "  Fields:\n";
+
+                foreach ($sheet['fields'] as $field) {
+                    $result .= $this->formatField($field, '  ');
+                }
+
+                $result .= "\n";
+            }
+        } else {
+            $result .= "FIELDS:\n";
+            $result .= "------\n";
+
+            if (!empty($data['sheets'][0]['fields'])) {
+                foreach ($data['sheets'][0]['fields'] as $field) {
+                    $result .= $this->formatField($field, '');
+                }
+            }
+
+            $result .= "\n";
+        }
+
+        // Add JSON structure example
+        $result .= "JSON STRUCTURE:\n";
+        $result .= "==============\n";
+        $result .= "When reading or writing FlexForm data, use nested objects/arrays:\n\n";
+
+        if (!empty($data['fields'])) {
+            $jsonExample = $this->buildJsonExample($data['fields']);
+            $result .= json_encode($jsonExample, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        } else {
+            $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+
+        $result .= "\n\nNote: Field names with dots (e.g., \"settings.orderBy\") are automatically\n";
+        $result .= "converted to nested structures by TYPO3.";
+
+        return $result;
+    }
+
+    /**
+     * Format a single field for text output
+     *
+     * @param array $field The field data
+     * @param string $indent Indentation prefix
+     * @return string Formatted field text
+     */
+    protected function formatField(array $field, string $indent): string
+    {
+        $result = $indent . "- {$field['name']}";
+
+        if ($field['label'] !== $field['name']) {
+            $result .= " ({$field['label']})";
+        }
+
+        $result .= ": {$field['type']}";
+
+        // Add field details based on type
+        if (!empty($field['config'])) {
+            TcaFormattingUtility::addFieldDetailsInline($result, $field['config']);
+        }
+
+        if (!empty($field['description'])) {
+            $result .= " - {$field['description']}";
+        }
+
+        $result .= "\n";
+        $result .= $indent . "  JSON Path: {$field['jsonPath']}\n";
+
+        return $result;
     }
 
     /**
