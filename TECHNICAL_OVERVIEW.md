@@ -142,21 +142,22 @@ Here are practical examples of how the MCP Server enables AI-powered content man
 **Tool calls**:
 ```json
 // 1. Get page info
-{"tool": "GetPage", "params": {"identifier": "/about-us"}}
+{"tool": "GetPage", "params": {"url": "/about-us"}}
 
 // 2. Read content elements
 {"tool": "ReadTable", "params": {
   "table": "tt_content",
-  "where": {"pid": 123, "sys_language_uid": 0}
+  "pid": 123
+  // No language parameter = default language
 }}
 
 // 3. Create translations
 {"tool": "WriteTable", "params": {
   "table": "tt_content",
+  "action": "translate",
+  "uid": 456,
   "data": {
-    "pid": 123,
-    "sys_language_uid": 1,
-    "l10n_parent": 456,
+    "sys_language_uid": "de",
     "header": "Über uns",
     "bodytext": "[translated content]"
   }
@@ -182,7 +183,7 @@ Here are practical examples of how the MCP Server enables AI-powered content man
 // or
 {"tool": "ReadTable", "params": {
   "table": "pages",
-  "where": {"doktype": 254},
+  "where": "doktype = 254",
   "limit": 10
 }}
 
@@ -192,14 +193,15 @@ Here are practical examples of how the MCP Server enables AI-powered content man
 // 3. Look for existing categories
 {"tool": "ReadTable", "params": {
   "table": "tx_news_domain_model_category",
-  "where": {"pid": 789}
+  "pid": 789
 }}
 
 // 4. Create news article
 {"tool": "WriteTable", "params": {
   "table": "tx_news_domain_model_news",
+  "action": "create",
+  "pid": 789,
   "data": {
-    "pid": 789,
     "title": "Annual Report 2024 Released",
     "teaser": "Our latest financial results...",
     "bodytext": "[full article content]",
