@@ -137,11 +137,10 @@ class ContentElementTest extends LlmTestCase
             'action' => 'create',
             'table' => 'tt_content',
             'data' => [
-                'CType' => 'header',
                 'header' => 'Our Services'
             ]
         ]);
-        
+
         // Execute and verify
         $writeResult = $this->executeToolCall($response->getToolCalls()[0]);
         $this->assertFalse($writeResult['isError'] ?? false);
