@@ -46,7 +46,6 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                     'identifier' => [
                         'type' => 'string',
                         'description' => 'The FlexForm identifier (e.g., "form_formframework", "*,news_pi1"). For plugins, often uses pattern "*,list_type_value"',
-                        'required' => true,
                     ],
                     'recordUid' => [
                         'type' => 'integer',
@@ -148,7 +147,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                         if ($xmlArray) {
                             // Collect all field names for JSON example
                             $allFieldNames = [];
-                            
+
                             // Process sheets
                             if (isset($xmlArray['sheets'])) {
                                 $result .= "SHEETS:\n";
@@ -219,7 +218,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                             
                                             // Add JSON path info
                                             $result .= "\n    JSON Path: " . $this->getJsonPath($fieldName);
-                                            
+
                                             $result .= "\n";
                                         }
                                     }
@@ -288,7 +287,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                     
                                     // Add JSON path info
                                     $result .= "\n  JSON Path: " . $this->getJsonPath($fieldName);
-                                    
+
                                     $result .= "\n";
                                 }
                                 
@@ -302,14 +301,14 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                         $result .= "JSON STRUCTURE:\n";
                         $result .= "==============\n";
                         $result .= "When reading or writing FlexForm data, use nested objects/arrays:\n\n";
-                        
+
                         if (!empty($allFieldNames)) {
                             $jsonExample = $this->buildJsonExample($allFieldNames);
                             $result .= json_encode($jsonExample, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
                         } else {
                             $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
                         }
-                        
+
                         $result .= "\n\nNote: Field names with dots (e.g., \"settings.orderBy\") are automatically\n";
                         $result .= "converted to nested structures by TYPO3.";
                     } else {
@@ -327,7 +326,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                 if ($xmlArray) {
                     // Collect all field names for JSON example
                     $allFieldNames = [];
-                    
+
                     // Process sheets
                     if (isset($xmlArray['sheets'])) {
                         $result .= "SHEETS:\n";
@@ -398,7 +397,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                                     
                                     // Add JSON path info
                                     $result .= "\n    JSON Path: " . $this->getJsonPath($fieldName);
-                                    
+
                                     $result .= "\n";
                                 }
                             }
@@ -467,7 +466,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                             
                             // Add JSON path info
                             $result .= "\n  JSON Path: " . $this->getJsonPath($fieldName);
-                            
+
                             $result .= "\n";
                         }
                         
@@ -481,14 +480,14 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                 $result .= "JSON STRUCTURE:\n";
                 $result .= "==============\n";
                 $result .= "When reading or writing FlexForm data, use nested objects/arrays:\n\n";
-                
+
                 if (!empty($allFieldNames)) {
                     $jsonExample = $this->buildJsonExample($allFieldNames);
                     $result .= json_encode($jsonExample, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
                 } else {
                     $result .= json_encode(['pi_flexform' => ['example' => 'This is an example of the FlexForm data structure']], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
                 }
-                
+
                 $result .= "\n\nNote: Field names with dots (e.g., \"settings.orderBy\") are automatically\n";
                 $result .= "converted to nested structures by TYPO3.";
             } elseif (is_array($dsValue)) {
@@ -529,7 +528,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
 
         return $values;
     }
-    
+
     /**
      * Convert dot notation field name to JSON path
      * e.g., "settings.orderBy" -> "pi_flexform.settings.orderBy"
@@ -539,18 +538,18 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
         if (strpos($fieldName, '.') === false) {
             return 'pi_flexform.' . $fieldName;
         }
-        
+
         $parts = explode('.', $fieldName);
         return 'pi_flexform.' . implode('.', $parts);
     }
-    
+
     /**
      * Build example JSON structure from field names
      */
     protected function buildJsonExample(array $fieldNames): array
     {
         $example = ['pi_flexform' => []];
-        
+
         foreach ($fieldNames as $fieldName) {
             // Skip non-field entries
             if (strpos($fieldName, '.') === false) {
@@ -559,7 +558,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                 // Handle nested structure
                 $parts = explode('.', $fieldName);
                 $current = &$example['pi_flexform'];
-                
+
                 // Navigate/create the nested structure
                 for ($i = 0; $i < count($parts) - 1; $i++) {
                     if (!isset($current[$parts[$i]])) {
@@ -567,12 +566,12 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                     }
                     $current = &$current[$parts[$i]];
                 }
-                
+
                 // Set the final value
                 $current[$parts[count($parts) - 1]] = '<' . $parts[count($parts) - 1] . ' value>';
             }
         }
-        
+
         return $example;
     }
 

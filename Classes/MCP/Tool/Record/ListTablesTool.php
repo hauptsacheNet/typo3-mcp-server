@@ -30,7 +30,8 @@ class ListTablesTool extends AbstractRecordTool
             'description' => 'List available tables in TYPO3 that can be accessed via MCP, organized by extension.',
             'parameters' => [
                 'type' => 'object',
-                'properties' => [],
+                'properties' => new \stdClass(),
+                'required' => [],
             ],
             'examples' => [
                 [

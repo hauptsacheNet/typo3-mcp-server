@@ -36,12 +36,10 @@ class GetTableSchemaTool extends AbstractRecordTool
                     'table' => [
                         'type' => 'string',
                         'description' => 'The table to get schema information for (e.g., "tt_content", "pages")',
-                        'required' => true
                     ],
                     'type' => [
                         'type' => 'string',
                         'description' => 'Optional specific type to include (e.g., "text" for tt_content). If not provided, will show the first available type and a summary of all types.',
-                        'required' => false
                     ],
                 ],
                 'required' => ['table'],

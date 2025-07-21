@@ -26,7 +26,7 @@ class GetPageTreeTool extends AbstractRecordTool
 {
     protected SiteInformationService $siteInformationService;
     protected LanguageService $languageService;
-    
+
     public function __construct(
         SiteInformationService $siteInformationService,
         LanguageService $languageService
@@ -49,7 +49,7 @@ class GetPageTreeTool extends AbstractRecordTool
     public function getSchema(): array
     {
         $schema = [
-            'description' => 'Get the TYPO3 page tree structure as a readable text tree.',
+            'description' => 'Get the TYPO3 page tree structure as a readable text tree.Essential for understanding page hierarchy before creating new pages, finding pages by their position, and verifying parent-child relationships.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -65,7 +65,7 @@ class GetPageTreeTool extends AbstractRecordTool
                 'required' => ['startPage'],
             ],
         ];
-        
+
         // Only add language parameter if multiple languages are configured
         $availableLanguages = $this->languageService->getAvailableIsoCodes();
         if (count($availableLanguages) > 1) {
@@ -75,7 +75,7 @@ class GetPageTreeTool extends AbstractRecordTool
                 'enum' => $availableLanguages,
             ];
         }
-        
+
         return $schema;
     }
 
@@ -90,7 +90,7 @@ class GetPageTreeTool extends AbstractRecordTool
         $startPage = (int)($params['startPage'] ?? 0);
         $depth = (int)($params['depth'] ?? 3);
         $languageUid = null;
-        
+
         // Handle language parameter if provided
         if (isset($params['language'])) {
             $languageUid = $this->languageService->getUidFromIsoCode($params['language']);
@@ -152,7 +152,7 @@ class GetPageTreeTool extends AbstractRecordTool
 
         // Set up context for language and visibility
         $context = GeneralUtility::makeInstance(Context::class);
-        
+
         // Set up language aspect if needed
         if ($languageUid !== null && $languageUid > 0) {
             $languageAspect = new LanguageAspect(
@@ -163,7 +163,7 @@ class GetPageTreeTool extends AbstractRecordTool
             );
             $context->setAspect('language', $languageAspect);
         }
-        
+
         // Create PageRepository with context
         $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
 
@@ -184,7 +184,7 @@ class GetPageTreeTool extends AbstractRecordTool
             // Get language overlay if language specified
             if ($languageUid !== null && $languageUid > 0) {
                 $overlaidPage = $pageRepository->getPageOverlay($page, $languageUid);
-                
+
                 if ($overlaidPage !== $page) {
                     // Apply overlay data
                     $pageData['title'] = $overlaidPage['title'] ?: $pageData['title'];
@@ -195,7 +195,7 @@ class GetPageTreeTool extends AbstractRecordTool
                     $pageData['_translated'] = false;
                 }
             }
-            
+
             // Check if there are subpages if depth > 1
             if ($depth > 1) {
                 $subpages = $this->getPageTree((int)$page['uid'], $depth - 1, $languageUid);
@@ -234,7 +234,7 @@ class GetPageTreeTool extends AbstractRecordTool
         return (int)$query->executeQuery()->fetchOne();
     }
     
-    
+
     /**
      * Render the page tree as a text-based tree with indentation
      */
@@ -255,7 +255,7 @@ class GetPageTreeTool extends AbstractRecordTool
                     $result .= $page['_translated'] ? ' [TRANSLATED]' : ' [NOT TRANSLATED]';
                 }
             }
-            
+
             // Add URL if available
             if (!empty($page['url'])) {
                 $result .= ' - ' . $page['url'];

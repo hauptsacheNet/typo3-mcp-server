@@ -72,10 +72,7 @@ class GetPageTool extends AbstractRecordTool
                         'description' => 'The URL of the page to retrieve (alternative to uid). Can be full URL, path, or slug. ' . $domainsText,
                     ],
                 ],
-                'oneOf' => [
-                    ['required' => ['uid']],
-                    ['required' => ['url']]
-                ],
+                'required' => [],
             ],
         ];
         

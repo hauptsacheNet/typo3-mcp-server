@@ -23,7 +23,7 @@ use Hn\McpServer\Service\LanguageService;
 class SearchTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
-    
+
     public function __construct()
     {
         parent::__construct();
@@ -44,7 +44,8 @@ class SearchTool extends AbstractRecordTool
     {
         $schema = [
             'description' => "Search for records across workspace-capable TYPO3 tables using TCA-based searchable fields. " .
-                "Uses SQL LIKE queries for pattern matching. Results include language information when multiple languages are configured.\n\n",
+                "Uses SQL LIKE queries for pattern matching. Useful when you need to find pages or content that might not be visible in the page tree, " .
+                "or for thorough duplicate checking after initial exploration.",
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
@@ -75,7 +76,7 @@ class SearchTool extends AbstractRecordTool
                 'required' => ['terms'],
             ],
         ];
-        
+
         // Only add language parameter if multiple languages are configured
         $availableLanguages = $this->languageService->getAvailableIsoCodes();
         if (count($availableLanguages) > 1) {
@@ -85,7 +86,7 @@ class SearchTool extends AbstractRecordTool
                 'enum' => $availableLanguages,
             ];
         }
-        
+
         // Add examples
         $schema['examples'] = [
             [
@@ -124,7 +125,7 @@ class SearchTool extends AbstractRecordTool
                 ]
             ]
         ];
-        
+
         return $schema;
     }
 
@@ -181,13 +182,13 @@ class SearchTool extends AbstractRecordTool
     {
         // Initialize workspace context
         $this->initializeWorkspaceContext();
-        
+
         $terms = $params['terms'] ?? [];
         $termLogic = strtoupper($params['termLogic'] ?? 'OR');
         $table = trim($params['table'] ?? '');
         $pageId = isset($params['pageId']) ? (int)$params['pageId'] : null;
         $limit = 50;
-        
+
         // Handle language parameter
         $languageId = null;
         if (isset($params['language'])) {
@@ -648,7 +649,7 @@ class SearchTool extends AbstractRecordTool
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
             );
         }
-        
+
         // Filter by language if specified and table has language support
         if ($languageId !== null && $this->tableHasLanguageSupport($table)) {
             if ($languageId === 0) {
@@ -696,7 +697,7 @@ class SearchTool extends AbstractRecordTool
     {
         return isset($GLOBALS['TCA'][$table]['ctrl']['languageField']);
     }
-    
+
     /**
      * Enhance records with page information
      */
@@ -810,12 +811,12 @@ class SearchTool extends AbstractRecordTool
             $result .= "Logic: " . $termLogic . " (records must match " . 
                       ($termLogic === 'AND' ? 'ALL terms' : 'ANY term') . ")\n";
         }
-        
+
         if ($languageId !== null) {
             $isoCode = $this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown';
             $result .= "Language Filter: " . strtoupper($isoCode) . " (ID: $languageId)\n";
         }
-        
+
         $result .= "\n";
 
         $totalResults = 0;
@@ -897,7 +898,7 @@ class SearchTool extends AbstractRecordTool
             $cTypeLabel = RecordFormattingUtility::getContentTypeLabel($cType);
             $result .= "  🎯 Type: $cTypeLabel ($cType)\n";
         }
-        
+
         // Add language information if table has language support
         if ($this->tableHasLanguageSupport($table) && isset($record['sys_language_uid'])) {
             $recordLangId = (int)$record['sys_language_uid'];
