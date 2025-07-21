@@ -271,8 +271,9 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertStringContainsString('textmedia', $content);
         
         // Verify column position information
-        $this->assertStringContainsString('Column: Main Content', $content);
         $this->assertStringContainsString('[colPos: 0]', $content);
+        // Column name can vary based on backend layout configuration
+        $this->assertMatchesRegularExpression('/Column: .+ \[colPos: 0\]/', $content);
     }
 
     /**

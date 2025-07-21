@@ -478,7 +478,7 @@ class GetPageTool extends AbstractRecordTool
         
         // Handle tt_content specially - group by column position
         if (isset($recordsInfo['tt_content'])) {
-            $result .= $this->formatContentElements($recordsInfo['tt_content']);
+            $result .= $this->formatContentElements($recordsInfo['tt_content'], (int)$pageData['uid']);
             // Remove tt_content from the recordsInfo so we don't process it again below
             unset($recordsInfo['tt_content']);
         }
@@ -516,14 +516,18 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Format content elements grouped by column position
      */
-    protected function formatContentElements(array $contentInfo): string
+    protected function formatContentElements(array $contentInfo, int $pageId): string
     {
         $result = "Content Elements (tt_content)\n";
         $result .= "----------------------------\n";
         $result .= "Total: " . $contentInfo['total'] . " elements\n\n";
         
-        // Get column position definitions
-        $colPosDefs = RecordFormattingUtility::getColumnPositionDefinitions();
+        // Get column position definitions for this specific page
+        $hasCustomLayout = false;
+        $colPosDefs = RecordFormattingUtility::getColumnPositionDefinitions($pageId, $hasCustomLayout);
+        
+        // Determine which columns are actually defined in the backend layout
+        $definedColumns = array_keys($colPosDefs);
         
         // Group content elements by column position
         $groupedElements = [];
@@ -542,6 +546,12 @@ class GetPageTool extends AbstractRecordTool
         foreach ($groupedElements as $colPos => $elements) {
             $colPosName = $colPosDefs[$colPos] ?? 'Column ' . $colPos;
             $result .= "Column: " . $colPosName . " [colPos: " . $colPos . "] - " . count($elements) . " elements\n";
+            
+            // Check if this column exists in the backend layout (only warn if custom layout is in use)
+            if ($hasCustomLayout && !in_array($colPos, $definedColumns)) {
+                $result .= "⚠️  Note: This column is not defined in the current backend layout\n";
+                $result .= "💡 Tip: Content in this column may not be visible in the frontend\n";
+            }
             
             foreach ($elements as $element) {
                 $title = RecordFormattingUtility::getRecordTitle('tt_content', $element);
@@ -572,6 +582,29 @@ class GetPageTool extends AbstractRecordTool
                     case 'html':
                         if (!empty($element['bodytext'])) {
                             $result .= "  Contains HTML code\n";
+                        }
+                        break;
+                        
+                    case 'list':
+                        // Show plugin information
+                        if (!empty($element['list_type'])) {
+                            $pluginName = $this->getPluginLabel($element['list_type']);
+                            $result .= "  Plugin: " . $pluginName . " [" . $element['list_type'] . "]\n";
+                            
+                            // Check if the plugin's table is workspace capable
+                            $pluginTable = $this->getPluginDataTable($element['list_type']);
+                            if ($pluginTable) {
+                                $isWorkspaceCapable = $this->isTableWorkspaceCapable($pluginTable);
+                                if (!$isWorkspaceCapable) {
+                                    $result .= "  ⚠️  Note: This plugin's data table (" . $pluginTable . ") is not workspace-capable\n";
+                                    $result .= "  💡 Tip: Look for record storage folders (doktype=254) to find and edit the actual records\n";
+                                }
+                            }
+                            
+                            // Show flexform config if available
+                            if (!empty($element['pi_flexform'])) {
+                                $result .= "  Has configuration (FlexForm)\n";
+                            }
                         }
                         break;
                 }
@@ -723,5 +756,91 @@ class GetPageTool extends AbstractRecordTool
         $request = $request->withAttribute('normalizedParams', $normalizedParams);
         
         return $request;
+    }
+    
+    /**
+     * Get a human-readable label for a plugin list_type
+     * 
+     * @param string $listType
+     * @return string
+     */
+    protected function getPluginLabel(string $listType): string
+    {
+        // Check TCA for plugin label
+        if (isset($GLOBALS['TCA']['tt_content']['columns']['list_type']['config']['items'])) {
+            foreach ($GLOBALS['TCA']['tt_content']['columns']['list_type']['config']['items'] as $item) {
+                // Handle both old and new TCA formats
+                if ((isset($item['value']) && $item['value'] === $listType) ||
+                    (isset($item[1]) && $item[1] === $listType)) {
+                    $label = $item['label'] ?? $item[0] ?? '';
+                    if ($label) {
+                        return TableAccessService::translateLabel($label);
+                    }
+                }
+            }
+        }
+        
+        // Fallback: humanize the list_type
+        $parts = explode('_', $listType);
+        if (count($parts) > 1) {
+            // Remove common prefixes like 'tx_'
+            if ($parts[0] === 'tx') {
+                array_shift($parts);
+            }
+            return ucfirst(implode(' ', $parts));
+        }
+        
+        return $listType;
+    }
+    
+    /**
+     * Try to determine the main data table for a plugin
+     * 
+     * @param string $listType
+     * @return string|null
+     */
+    protected function getPluginDataTable(string $listType): ?string
+    {
+        // Extract extension key from list_type
+        // Common patterns: extensionkey_pi1, tx_extensionkey_list
+        $extensionKey = null;
+        
+        if (preg_match('/^tx_([a-z0-9]+)_/', $listType, $matches)) {
+            $extensionKey = $matches[1];
+        } elseif (preg_match('/^([a-z0-9]+)_pi/', $listType, $matches)) {
+            $extensionKey = $matches[1];
+        }
+        
+        if (!$extensionKey) {
+            return null;
+        }
+        
+        // Common table naming patterns
+        $possibleTables = [
+            'tx_' . $extensionKey . '_domain_model_' . rtrim($extensionKey, 's'), // news -> tx_news_domain_model_news
+            'tx_' . $extensionKey . '_' . rtrim($extensionKey, 's'), // simpler pattern
+            'tx_' . $extensionKey, // fallback
+        ];
+        
+        // Check which tables actually exist
+        foreach ($possibleTables as $table) {
+            if (isset($GLOBALS['TCA'][$table])) {
+                return $table;
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Check if a table is workspace capable
+     * 
+     * @param string $table
+     * @return bool
+     */
+    protected function isTableWorkspaceCapable(string $table): bool
+    {
+        return isset($GLOBALS['TCA'][$table]['ctrl']['versioningWS']) && 
+               $GLOBALS['TCA'][$table]['ctrl']['versioningWS'] === true;
     }
 }

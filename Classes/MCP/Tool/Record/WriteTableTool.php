@@ -44,7 +44,9 @@ class WriteTableTool extends AbstractRecordTool
             'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live. Language fields (sys_language_uid) can be provided as ISO codes (e.g., "de", "fr") instead of numeric IDs.' .
                 'Before creating or updating content, always use GetPage to understand the page structure, existing content, and writing style. ' .
                 'Check existing content elements with ReadTable to ensure new content fits the page\'s tone and doesn\'t duplicate existing elements. ' .
-                'For content creation, verify the appropriate colPos by examining existing content layout.',
+                'For content creation, verify the appropriate colPos by examining existing content layout. ' .
+                'Note: If you encounter plugins (CType=list) that reference non-workspace capable tables, ' .
+                'look for record storage folders (doktype=254) where the actual records are stored.',
             'parameters' => [
                 'type' => 'object',
                 'properties' => [
