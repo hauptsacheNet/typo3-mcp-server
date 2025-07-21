@@ -267,6 +267,31 @@ class GetTableSchemaToolTest extends FunctionalTestCase
     }
 
     /**
+     * Test that richtext fields are properly marked
+     */
+    public function testRichtextFieldsAreMarked(): void
+    {
+        $tool = new GetTableSchemaTool();
+        
+        // Get schema for textmedia type which has richtext bodytext
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'type' => 'textmedia'
+        ]);
+        
+        $this->assertFalse($result->isError);
+        $content = $result->content[0]->text;
+        
+        // Verify bodytext field shows richtext indicator
+        $this->assertMatchesRegularExpression('/bodytext.*\[Richtext\/HTML\]/', $content);
+        
+        // Verify typolink support is indicated
+        $this->assertStringContainsString('[Supports typolinks', $content);
+        $this->assertStringContainsString('t3://page?uid=123', $content);
+        $this->assertStringContainsString('t3://record?identifier=table&uid=456', $content);
+    }
+
+    /**
      * Set up backend user with workspace
      */
     protected function setUpBackendUserWithWorkspace(int $uid): void

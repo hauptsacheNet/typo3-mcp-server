@@ -37,6 +37,11 @@ class TcaFormattingUtility
                 if (isset($config['max'])) {
                     $result .= " [max: " . $config['max'] . "]";
                 }
+                
+                // Check for typolink support via softref
+                if (isset($config['softref']) && strpos($config['softref'], 'typolink_tag') !== false) {
+                    $result .= " [Supports typolinks - Examples: t3://page?uid=123 for pages, t3://record?identifier=table&uid=456 for records, t3://file?uid=789 for files, https://example.com for external URLs, mailto:email@example.com for emails]";
+                }
                 break;
                 
             case 'text':
@@ -45,6 +50,16 @@ class TcaFormattingUtility
                 }
                 if (isset($config['rows'])) {
                     $result .= " [rows: " . $config['rows'] . "]";
+                }
+                
+                // Check for richtext enabled
+                if (isset($config['enableRichtext']) && $config['enableRichtext']) {
+                    $result .= " [Richtext/HTML]";
+                }
+                
+                // Check for typolink support via softref
+                if (isset($config['softref']) && strpos($config['softref'], 'typolink_tag') !== false) {
+                    $result .= " [Supports typolinks - Examples: t3://page?uid=123 for pages, t3://record?identifier=table&uid=456 for records, t3://file?uid=789 for files, https://example.com for external URLs, mailto:email@example.com for emails]";
                 }
                 break;
                 
