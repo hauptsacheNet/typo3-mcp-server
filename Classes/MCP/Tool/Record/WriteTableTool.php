@@ -28,14 +28,6 @@ class WriteTableTool extends AbstractRecordTool
     }
 
     /**
-     * Get the tool type
-     */
-    public function getToolType(): string
-    {
-        return 'write';
-    }
-
-    /**
      * Get the tool schema
      */
     public function getSchema(): array
@@ -52,7 +44,7 @@ class WriteTableTool extends AbstractRecordTool
                 'For content creation, verify the appropriate colPos by examining existing content layout. ' .
                 'Note: If you encounter plugins (CType=list) that reference non-workspace capable tables, ' .
                 'look for record storage folders (doktype=254) where the actual records are stored.',
-            'parameters' => [
+            'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
                     'action' => [
@@ -85,143 +77,10 @@ class WriteTableTool extends AbstractRecordTool
                 ],
                 'required' => ['action', 'table'],
             ],
-            'examples' => [
-                [
-                    'description' => 'Create a new content element at the bottom of the page',
-                    'parameters' => [
-                        'action' => 'create',
-                        'table' => 'tt_content',
-                        'pid' => 123,
-                        'position' => 'bottom',
-                        'data' => [
-                            'CType' => 'textmedia',
-                            'header' => 'New Content Element',
-                            'bodytext' => 'This is a new content element'
-                        ]
-                    ]
-                ],
-                [
-                    'description' => 'Create content in German using ISO code',
-                    'parameters' => [
-                        'action' => 'create',
-                        'table' => 'tt_content',
-                        'pid' => 123,
-                        'data' => [
-                            'CType' => 'textmedia',
-                            'header' => 'Deutscher Inhalt',
-                            'bodytext' => 'Dies ist ein deutscher Text',
-                            'sys_language_uid' => 'de'  // ISO code instead of numeric ID
-                        ]
-                    ]
-                ],
-                [
-                    'description' => 'Create a new content element after a specific element',
-                    'parameters' => [
-                        'action' => 'create',
-                        'table' => 'tt_content',
-                        'pid' => 123,
-                        'position' => 'after:456',
-                        'data' => [
-                            'CType' => 'textmedia',
-                            'header' => 'New Content Element',
-                            'bodytext' => 'This is a new content element'
-                        ]
-                    ]
-                ],
-                [
-                    'description' => 'Update an existing content element',
-                    'parameters' => [
-                        'action' => 'update',
-                        'table' => 'tt_content',
-                        'uid' => 456,
-                        'data' => [
-                            'header' => 'Updated Header',
-                            'bodytext' => 'This content has been updated'
-                        ]
-                    ]
-                ],
-                [
-                    'description' => 'Delete a content element',
-                    'parameters' => [
-                        'action' => 'delete',
-                        'table' => 'tt_content',
-                        'uid' => 456
-                    ]
-                ],
-                [
-                    'description' => 'Create content element with inline relation to news',
-                    'parameters' => [
-                        'action' => 'create',
-                        'table' => 'tt_content',
-                        'pid' => 123,
-                        'data' => [
-                            'header' => 'Content for news',
-                            'CType' => 'text',
-                            'tx_news_related_news' => 789  // Foreign field sets the relation
-                        ]
-                    ]
-                ],
-                [
-                    'description' => 'Remove inline relation by updating foreign field',
-                    'parameters' => [
-                        'action' => 'update',
-                        'table' => 'tt_content',
-                        'uid' => 456,
-                        'data' => [
-                            'tx_news_related_news' => 0  // Set to 0 to remove relation
-                        ]
-                    ]
-                ],
-                [
-                    'description' => 'Update news with content elements using UIDs (independent inline)',
-                    'parameters' => [
-                        'action' => 'update',
-                        'table' => 'tx_news_domain_model_news',
-                        'uid' => 123,
-                        'data' => [
-                            'content_elements' => [456, 789, 1011]  // Array of content element UIDs
-                        ]
-                    ]
-                ],
-                [
-                    'description' => 'Create news with embedded links (dependent inline)',
-                    'parameters' => [
-                        'action' => 'create',
-                        'table' => 'tx_news_domain_model_news',
-                        'pid' => 123,
-                        'data' => [
-                            'title' => 'News with links',
-                            'related_links' => [
-                                ['title' => 'External link', 'uri' => 'https://example.com', 'description' => 'Company website'],
-                                ['title' => 'Internal page', 'uri' => 't3://page?uid=42']
-                            ]
-                        ]
-                    ]
-                ],
-                [
-                    'description' => 'Translate existing content to French',
-                    'parameters' => [
-                        'action' => 'translate',
-                        'table' => 'tt_content',
-                        'uid' => 456,  // UID of the record to translate
-                        'data' => [
-                            'sys_language_uid' => 'fr'  // Target language ISO code
-                        ]
-                    ]
-                ],
-                [
-                    'description' => 'Update German translation of a record',
-                    'parameters' => [
-                        'action' => 'update',
-                        'table' => 'tt_content',
-                        'uid' => 789,  // UID of the German record
-                        'data' => [
-                            'header' => 'Aktualisierte Überschrift',
-                            'bodytext' => 'Aktualisierter deutscher Text'
-                        ]
-                    ]
-                ]
-            ],
+            'annotations' => [
+                'readOnlyHint' => false,
+                'idempotentHint' => false
+            ]
         ];
     }
 

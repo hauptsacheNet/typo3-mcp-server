@@ -35,14 +35,7 @@ class GetPageTreeTool extends AbstractRecordTool
         $this->siteInformationService = $siteInformationService;
         $this->languageService = $languageService;
     }
-    /**
-     * Get the tool type
-     */
-    public function getToolType(): string
-    {
-        return 'read';
-    }
-    
+
     /**
      * Get the tool schema
      */
@@ -50,7 +43,7 @@ class GetPageTreeTool extends AbstractRecordTool
     {
         $schema = [
             'description' => 'Get the TYPO3 page tree structure as a readable text tree.Essential for understanding page hierarchy before creating new pages, finding pages by their position, and verifying parent-child relationships.',
-            'parameters' => [
+            'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
                     'startPage' => [
@@ -69,12 +62,18 @@ class GetPageTreeTool extends AbstractRecordTool
         // Only add language parameter if multiple languages are configured
         $availableLanguages = $this->languageService->getAvailableIsoCodes();
         if (count($availableLanguages) > 1) {
-            $schema['parameters']['properties']['language'] = [
+            $schema['inputSchema']['properties']['language'] = [
                 'type' => 'string',
                 'description' => 'Language ISO code to show translated page titles (e.g., "de", "fr"). Shows translation status for each page.',
                 'enum' => $availableLanguages,
             ];
         }
+
+        // Add annotations
+        $schema['annotations'] = [
+            'readOnlyHint' => true,
+            'idempotentHint' => true
+        ];
 
         return $schema;
     }

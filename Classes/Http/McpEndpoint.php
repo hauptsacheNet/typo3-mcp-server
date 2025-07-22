@@ -169,26 +169,13 @@ class McpEndpoint
             
             foreach ($toolRegistry->getTools() as $tool) {
                 $schema = $tool->getSchema();
-                $properties = $schema['parameters']['properties'] ?? [];
-                $required = $schema['parameters']['required'] ?? [];
                 
-                // Ensure properties is an object, not an array (MCP requires object)
-                if (empty($properties)) {
-                    $properties = new \stdClass();
-                } else {
-                    // Convert associative array to object for JSON encoding
-                    $properties = (object) $properties;
-                }
-                
-                $tools[] = [
+                $toolDefinition = [
                     'name' => $tool->getName(),
-                    'description' => $schema['description'] ?? '',
-                    'inputSchema' => [
-                        'type' => 'object',
-                        'properties' => $properties,
-                        'required' => $required,
-                    ],
+                    ...$schema  // Spread the entire schema (description, inputSchema, annotations)
                 ];
+                
+                $tools[] = $toolDefinition;
             }
             
             return ['tools' => $tools];

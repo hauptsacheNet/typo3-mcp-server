@@ -14,30 +14,20 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class ListTablesTool extends AbstractRecordTool
 {
     /**
-     * Get the tool type
-     */
-    public function getToolType(): string
-    {
-        return 'schema';
-    }
-
-    /**
      * Get the tool schema
      */
     public function getSchema(): array
     {
         return [
             'description' => 'List available tables in TYPO3 that can be accessed via MCP, organized by extension.',
-            'parameters' => [
+            'inputSchema' => [
                 'type' => 'object',
                 'properties' => new \stdClass(),
                 'required' => [],
             ],
-            'examples' => [
-                [
-                    'description' => 'List all accessible tables',
-                    'parameters' => []
-                ]
+            'annotations' => [
+                'readOnlyHint' => true,
+                'idempotentHint' => true
             ]
         ];
     }
@@ -233,5 +223,5 @@ class ListTablesTool extends AbstractRecordTool
         
         return 'other';
     }
-    
+
 }

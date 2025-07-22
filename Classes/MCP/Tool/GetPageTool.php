@@ -42,13 +42,6 @@ class GetPageTool extends AbstractRecordTool
         $this->siteInformationService = $siteInformationService;
         $this->languageService = $languageService;
     }
-    /**
-     * Get the tool type
-     */
-    public function getToolType(): string
-    {
-        return 'read';
-    }
 
     /**
      * Get the tool schema
@@ -60,7 +53,7 @@ class GetPageTool extends AbstractRecordTool
         
         $schema = [
             'description' => 'Get detailed information about a TYPO3 page including its records. Can fetch by page ID or URL. Shows content in the specified language when available.',
-            'parameters' => [
+            'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
                     'uid' => [
@@ -79,19 +72,25 @@ class GetPageTool extends AbstractRecordTool
         // Only add language parameter if multiple languages are configured
         $availableLanguages = $this->languageService->getAvailableIsoCodes();
         if (count($availableLanguages) > 1) {
-            $schema['parameters']['properties']['language'] = [
+            $schema['inputSchema']['properties']['language'] = [
                 'type' => 'string',
                 'description' => 'Language ISO code to show page and content in specific language (e.g., "de", "fr"). Shows translated content and metadata when available.',
                 'enum' => $availableLanguages,
             ];
             
             // Add deprecated languageId for backward compatibility
-            $schema['parameters']['properties']['languageId'] = [
+            $schema['inputSchema']['properties']['languageId'] = [
                 'type' => 'integer',
                 'description' => 'DEPRECATED: Use "language" parameter with ISO code instead. Language ID for URL generation.',
                 'deprecated' => true,
             ];
         }
+        
+        // Add annotations
+        $schema['annotations'] = [
+            'readOnlyHint' => true,
+            'idempotentHint' => true
+        ];
         
         return $schema;
     }

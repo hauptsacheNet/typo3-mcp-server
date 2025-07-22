@@ -162,9 +162,9 @@ class GetPageTreeToolTest extends FunctionalTestCase
         
         $this->assertIsArray($schema);
         $this->assertArrayHasKey('description', $schema);
-        $this->assertArrayHasKey('parameters', $schema);
-        $this->assertArrayHasKey('properties', $schema['parameters']);
-        $this->assertArrayHasKey('startPage', $schema['parameters']['properties']);
-        $this->assertArrayHasKey('depth', $schema['parameters']['properties']);
+        $this->assertArrayHasKey('inputSchema', $schema);
+        $this->assertArrayHasKey('properties', $schema['inputSchema']);
+        $this->assertArrayHasKey('startPage', $schema['inputSchema']['properties']);
+        $this->assertArrayHasKey('depth', $schema['inputSchema']['properties']);
     }
 }

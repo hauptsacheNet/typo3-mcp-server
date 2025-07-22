@@ -281,16 +281,6 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
     }
 
     /**
-     * Test tool type
-     */
-    public function testToolType(): void
-    {
-        $tool = new GetFlexFormSchemaTool();
-        
-        $this->assertEquals('schema', $tool->getToolType());
-    }
-
-    /**
      * Test tool schema contains required information
      */
     public function testToolSchema(): void
@@ -302,23 +292,17 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         // Verify schema structure
         $this->assertIsArray($schema);
         $this->assertArrayHasKey('description', $schema);
-        $this->assertArrayHasKey('parameters', $schema);
-        $this->assertArrayHasKey('examples', $schema);
+        $this->assertArrayHasKey('inputSchema', $schema);
         
         // Verify parameters
-        $this->assertArrayHasKey('properties', $schema['parameters']);
-        $this->assertArrayHasKey('identifier', $schema['parameters']['properties']);
-        $this->assertArrayHasKey('table', $schema['parameters']['properties']);
-        $this->assertArrayHasKey('field', $schema['parameters']['properties']);
+        $this->assertArrayHasKey('properties', $schema['inputSchema']);
+        $this->assertArrayHasKey('identifier', $schema['inputSchema']['properties']);
+        $this->assertArrayHasKey('table', $schema['inputSchema']['properties']);
+        $this->assertArrayHasKey('field', $schema['inputSchema']['properties']);
         
         // Verify required fields
-        $this->assertArrayHasKey('required', $schema['parameters']);
-        $this->assertContains('identifier', $schema['parameters']['required']);
-        
-        // Verify examples
-        $this->assertNotEmpty($schema['examples']);
-        $this->assertArrayHasKey('description', $schema['examples'][0]);
-        $this->assertArrayHasKey('parameters', $schema['examples'][0]);
+        $this->assertArrayHasKey('required', $schema['inputSchema']);
+        $this->assertContains('identifier', $schema['inputSchema']['required']);
     }
 
     /**

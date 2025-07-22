@@ -167,15 +167,15 @@ class GetPageLanguageTest extends FunctionalTestCase
         $schema = $tool->getSchema();
         
         // Should have language parameter with enum
-        $this->assertArrayHasKey('language', $schema['parameters']['properties']);
-        $this->assertArrayHasKey('enum', $schema['parameters']['properties']['language']);
-        $this->assertContains('en', $schema['parameters']['properties']['language']['enum']);
-        $this->assertContains('de', $schema['parameters']['properties']['language']['enum']);
-        $this->assertContains('fr', $schema['parameters']['properties']['language']['enum']);
+        $this->assertArrayHasKey('language', $schema['inputSchema']['properties']);
+        $this->assertArrayHasKey('enum', $schema['inputSchema']['properties']['language']);
+        $this->assertContains('en', $schema['inputSchema']['properties']['language']['enum']);
+        $this->assertContains('de', $schema['inputSchema']['properties']['language']['enum']);
+        $this->assertContains('fr', $schema['inputSchema']['properties']['language']['enum']);
         
         // Should have deprecated languageId parameter
-        $this->assertArrayHasKey('languageId', $schema['parameters']['properties']);
-        $this->assertTrue($schema['parameters']['properties']['languageId']['deprecated'] ?? false);
+        $this->assertArrayHasKey('languageId', $schema['inputSchema']['properties']);
+        $this->assertTrue($schema['inputSchema']['properties']['languageId']['deprecated'] ?? false);
     }
 
     /**

@@ -77,15 +77,12 @@ class McpServerCommand extends Command
                 
                 foreach ($this->toolRegistry->getTools() as $tool) {
                     $schema = $tool->getSchema();
-                    $tools[] = [
+                    $toolDefinition = [
                         'name' => $tool->getName(),
-                        'description' => $schema['description'] ?? '',
-                        'inputSchema' => [
-                            'type' => 'object',
-                            'properties' => $schema['parameters']['properties'] ?? [],
-                            'required' => $schema['parameters']['required'] ?? [],
-                        ],
+                        ...$schema  // Spread the entire schema (description, inputSchema, annotations)
                     ];
+                    
+                    $tools[] = $toolDefinition;
                 }
                 
                 return ['tools' => $tools];

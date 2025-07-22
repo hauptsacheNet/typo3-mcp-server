@@ -883,11 +883,10 @@ class WriteTableToolTest extends FunctionalTestCase
         
         $this->assertIsArray($schema);
         $this->assertArrayHasKey('description', $schema);
-        $this->assertArrayHasKey('parameters', $schema);
-        $this->assertArrayHasKey('examples', $schema);
+        $this->assertArrayHasKey('inputSchema', $schema);
         
         // Check parameters
-        $properties = $schema['parameters']['properties'];
+        $properties = $schema['inputSchema']['properties'];
         $this->assertArrayHasKey('action', $properties);
         $this->assertArrayHasKey('table', $properties);
         $this->assertArrayHasKey('pid', $properties);
@@ -896,12 +895,9 @@ class WriteTableToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('position', $properties);
         
         // Check required fields
-        $this->assertArrayHasKey('required', $schema['parameters']);
-        $this->assertContains('action', $schema['parameters']['required']);
-        $this->assertContains('table', $schema['parameters']['required']);
-        
-        // Check examples
-        $this->assertGreaterThan(0, count($schema['examples']));
+        $this->assertArrayHasKey('required', $schema['inputSchema']);
+        $this->assertContains('action', $schema['inputSchema']['required']);
+        $this->assertContains('table', $schema['inputSchema']['required']);
     }
 
     /**

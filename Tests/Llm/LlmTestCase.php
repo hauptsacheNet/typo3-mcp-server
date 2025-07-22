@@ -74,12 +74,8 @@ abstract class LlmTestCase extends FunctionalTestCase
                 'type' => 'function',
                 'function' => [
                     'name' => $tool->getName(),
-                    'description' => $schema['description'] ?? '',
-                    'parameters' => $schema['parameters'] ?? [
-                        'type' => 'object',
-                        'properties' => [],
-                        'required' => []
-                    ]
+                    'description' => $schema['description'],
+                    'parameters' => $schema['inputSchema'],
                 ]
             ];
         }

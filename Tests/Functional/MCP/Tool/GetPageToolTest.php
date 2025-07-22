@@ -376,22 +376,22 @@ class GetPageToolTest extends FunctionalTestCase
         
         $this->assertIsArray($schema);
         $this->assertArrayHasKey('description', $schema);
-        $this->assertArrayHasKey('parameters', $schema);
-        $this->assertArrayHasKey('properties', $schema['parameters']);
-        $this->assertArrayHasKey('uid', $schema['parameters']['properties']);
-        $this->assertArrayHasKey('language', $schema['parameters']['properties']);
-        $this->assertArrayHasKey('languageId', $schema['parameters']['properties']);
+        $this->assertArrayHasKey('inputSchema', $schema);
+        $this->assertArrayHasKey('properties', $schema['inputSchema']);
+        $this->assertArrayHasKey('uid', $schema['inputSchema']['properties']);
+        $this->assertArrayHasKey('language', $schema['inputSchema']['properties']);
+        $this->assertArrayHasKey('languageId', $schema['inputSchema']['properties']);
         
         // Verify language parameter has enum with ISO codes
-        $this->assertArrayHasKey('enum', $schema['parameters']['properties']['language']);
-        $this->assertContains('en', $schema['parameters']['properties']['language']['enum']);
-        $this->assertContains('de', $schema['parameters']['properties']['language']['enum']);
+        $this->assertArrayHasKey('enum', $schema['inputSchema']['properties']['language']);
+        $this->assertContains('en', $schema['inputSchema']['properties']['language']['enum']);
+        $this->assertContains('de', $schema['inputSchema']['properties']['language']['enum']);
         
         // Verify languageId is marked as deprecated
-        $this->assertTrue($schema['parameters']['properties']['languageId']['deprecated'] ?? false);
+        $this->assertTrue($schema['inputSchema']['properties']['languageId']['deprecated'] ?? false);
         
         // Check url parameter was added
-        $this->assertArrayHasKey('url', $schema['parameters']['properties']);
+        $this->assertArrayHasKey('url', $schema['inputSchema']['properties']);
     }
 
     /**

@@ -282,11 +282,11 @@ class ReadTableToolTest extends FunctionalTestCase
         
         $this->assertIsArray($schema);
         $this->assertArrayHasKey('description', $schema);
-        $this->assertArrayHasKey('parameters', $schema);
-        $this->assertArrayHasKey('properties', $schema['parameters']);
+        $this->assertArrayHasKey('inputSchema', $schema);
+        $this->assertArrayHasKey('properties', $schema['inputSchema']);
         
         // Check key parameters
-        $properties = $schema['parameters']['properties'];
+        $properties = $schema['inputSchema']['properties'];
         $this->assertArrayHasKey('table', $properties);
         $this->assertArrayHasKey('pid', $properties);
         $this->assertArrayHasKey('uid', $properties);

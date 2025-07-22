@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Hn\McpServer\MCP\Tool\AbstractTool;
+use Hn\McpServer\MCP\Tool\ToolInterface;
 use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\CallToolResult;
@@ -15,7 +16,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 /**
  * Abstract base class for record-related MCP tools
  */
-abstract class AbstractRecordTool extends AbstractTool implements RecordToolInterface
+abstract class AbstractRecordTool extends AbstractTool implements ToolInterface
 {
     protected TableAccessService $tableAccessService;
     protected WorkspaceContextService $workspaceContextService;

@@ -16,21 +16,13 @@ use Hn\McpServer\Service\TableAccessService;
 class GetTableSchemaTool extends AbstractRecordTool
 {
     /**
-     * Get the tool type
-     */
-    public function getToolType(): string
-    {
-        return 'schema';
-    }
-
-    /**
      * Get the tool schema
      */
     public function getSchema(): array
     {
         return [
             'description' => 'Get detailed schema information for a specific table type, including fields, relations, and validation',
-            'parameters' => [
+            'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
                     'table' => [
@@ -44,20 +36,9 @@ class GetTableSchemaTool extends AbstractRecordTool
                 ],
                 'required' => ['table'],
             ],
-            'examples' => [
-                [
-                    'description' => 'Get schema for content elements',
-                    'parameters' => [
-                        'table' => 'tt_content',
-                    ]
-                ],
-                [
-                    'description' => 'Get schema for a specific content element type',
-                    'parameters' => [
-                        'table' => 'tt_content',
-                        'type' => 'textmedia'
-                    ]
-                ],
+            'annotations' => [
+                'readOnlyHint' => true,
+                'idempotentHint' => true
             ]
         ];
     }
@@ -454,4 +435,5 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         return $removedTypes;
     }
+
 }

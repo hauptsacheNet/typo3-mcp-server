@@ -16,21 +16,13 @@ use Hn\McpServer\Service\TableAccessService;
 class GetFlexFormSchemaTool extends AbstractRecordTool
 {
     /**
-     * Get the tool type
-     */
-    public function getToolType(): string
-    {
-        return 'schema';
-    }
-
-    /**
      * Get the tool schema
      */
     public function getSchema(): array
     {
         return [
             'description' => 'Get schema information for a specific FlexForm field. Returns field definitions, types, and configuration options for the FlexForm DataStructure.',
-            'parameters' => [
+            'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
                     'table' => [
@@ -54,28 +46,10 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                 ],
                 'required' => ['identifier'],
             ],
-            'examples' => [
-                [
-                    'description' => 'Get schema for Form Framework FlexForm',
-                    'parameters' => [
-                        'table' => 'tt_content',
-                        'field' => 'pi_flexform',
-                        'identifier' => 'form_formframework',
-                    ],
-                ],
-                [
-                    'description' => 'Get schema for News plugin FlexForm',
-                    'parameters' => [
-                        'identifier' => '*,news_pi1',
-                    ],
-                ],
-                [
-                    'description' => 'Get schema for News category list FlexForm',
-                    'parameters' => [
-                        'identifier' => '*,news_categorylist',
-                    ],
-                ],
-            ],
+            'annotations' => [
+                'readOnlyHint' => true,
+                'idempotentHint' => true
+            ]
         ];
     }
 
@@ -786,4 +760,5 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
 
         return $result;
     }
+
 }

@@ -29,14 +29,6 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
-     * Get the tool type
-     */
-    public function getToolType(): string
-    {
-        return 'read';
-    }
-
-    /**
      * Get the tool schema
      */
     public function getSchema(): array
@@ -94,42 +86,13 @@ class ReadTableTool extends AbstractRecordTool
         
         return [
             'description' => 'Read records from TYPO3 tables with filtering, pagination, and relation embedding. By default, returns records from ALL languages mixed together (matching TYPO3\'s list module behavior). Use the language parameter to filter to a specific language. For page content, use pid filter instead of individual record lookups.',
-            'parameters' => [
+            'inputSchema' => [
                 'type' => 'object',
                 'properties' => $properties,
             ],
-            'examples' => [
-                [
-                    'description' => 'Read all content elements on a page (all languages mixed)',
-                    'parameters' => [
-                        'table' => 'tt_content',
-                        'pid' => 123
-                    ]
-                ],
-                [
-                    'description' => 'Read a specific record by UID (searches all languages)',
-                    'parameters' => [
-                        'table' => 'pages',
-                        'uid' => 1
-                    ]
-                ],
-                [
-                    'description' => 'Read only German content elements on a page (filters by language)',
-                    'parameters' => [
-                        'table' => 'tt_content',
-                        'pid' => 123,
-                        'language' => 'de'
-                    ]
-                ],
-                [
-                    'description' => 'Read translated content with source information',
-                    'parameters' => [
-                        'table' => 'tt_content',
-                        'pid' => 123,
-                        'language' => 'de',
-                        'includeTranslationSource' => true
-                    ]
-                ]
+            'annotations' => [
+                'readOnlyHint' => true,
+                'idempotentHint' => true
             ]
         ];
     }

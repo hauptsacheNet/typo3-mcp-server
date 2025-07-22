@@ -29,13 +29,6 @@ class SearchTool extends AbstractRecordTool
         parent::__construct();
         $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
     }
-    /**
-     * Get the tool type
-     */
-    public function getToolType(): string
-    {
-        return 'search';
-    }
 
     /**
      * Get the tool schema
@@ -46,7 +39,7 @@ class SearchTool extends AbstractRecordTool
             'description' => "Search for records across workspace-capable TYPO3 tables using TCA-based searchable fields. " .
                 "Uses SQL LIKE queries for pattern matching. Useful when you need to find pages or content that might not be visible in the page tree, " .
                 "or for thorough duplicate checking after initial exploration.",
-            'parameters' => [
+            'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
                     'terms' => [
@@ -80,15 +73,35 @@ class SearchTool extends AbstractRecordTool
         // Only add language parameter if multiple languages are configured
         $availableLanguages = $this->languageService->getAvailableIsoCodes();
         if (count($availableLanguages) > 1) {
-            $schema['parameters']['properties']['language'] = [
+            $schema['inputSchema']['properties']['language'] = [
                 'type' => 'string',
                 'description' => 'Language ISO code to filter search results (e.g., "de", "fr"). When specified, searches only in content for that language.',
                 'enum' => $availableLanguages,
             ];
         }
 
-        // Add examples
-        $schema['examples'] = [
+        // Add annotations
+        $schema['annotations'] = [
+            'readOnlyHint' => true,
+            'idempotentHint' => true
+        ];
+
+        return $schema;
+    }
+
+    /**
+     * Old examples section - removed as not part of MCP spec
+     * These examples are preserved here for documentation purposes:
+     * 
+     * Search for single term: ['terms' => ['welcome']]
+     * Search with OR logic: ['terms' => ['news', 'article', 'blog'], 'termLogic' => 'OR']
+     * Search with AND logic: ['terms' => ['TYPO3', 'extension'], 'termLogic' => 'AND']
+     * Search in specific table: ['terms' => ['contact'], 'table' => 'tt_content']
+     * Search on specific page: ['terms' => ['contact', 'form'], 'pageId' => 123]
+     */
+    private function removedExamples(): array
+    {
+        return [
             [
                 'description' => 'Search for single term across all tables',
                 'parameters' => [
@@ -125,8 +138,6 @@ class SearchTool extends AbstractRecordTool
                 ]
             ]
         ];
-
-        return $schema;
     }
 
     /**
