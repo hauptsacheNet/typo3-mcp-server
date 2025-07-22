@@ -69,11 +69,11 @@ This approach combines the power of AI automation with human oversight and TYPO3
 ## Installation
 
 ```bash
-composer require hn/mcp-server
+composer require hn/typo3-mcp-server
 ```
 
 **Requirements:**
-- TYPO3 v12.4+ or v13.4+
+- TYPO3 v13.4+
 - TYPO3 Workspaces extension (automatically installed as dependency)
 
 ## Usage
