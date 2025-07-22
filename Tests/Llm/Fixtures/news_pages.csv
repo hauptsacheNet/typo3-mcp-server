@@ -1,0 +1,22 @@
+"pages"
+,"uid","pid","title","doktype","slug","is_siteroot"
+,1,0,"Welcome",1,"/",1
+,2,1,"About Us",1,"/about",0
+,3,1,"Services",1,"/services",0
+,4,3,"Consulting",1,"/services/consulting",0
+,5,3,"Development",1,"/services/development",0
+,6,1,"Products",1,"/products",0
+,7,1,"Contact",1,"/contact",0
+,8,1,"Blog",1,"/blog",0
+,9,1,"Resources",1,"/resources",0
+,10,9,"Downloads",1,"/resources/downloads",0
+,11,9,"Documentation",1,"/resources/docs",0
+,12,1,"Press",1,"/press",0
+,13,1,"Careers",1,"/careers",0
+,14,1,"Legal",1,"/legal",0
+,15,14,"Privacy Policy",1,"/legal/privacy",0
+,16,14,"Terms of Service",1,"/legal/terms",0
+,20,1,"System",254,"/system",0
+,21,20,"Categories",254,"/system/categories",0
+,22,20,"Templates",254,"/system/templates",0
+,30,20,"Content Storage",254,"/system/content",0
