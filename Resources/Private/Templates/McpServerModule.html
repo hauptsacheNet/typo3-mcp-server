@@ -128,8 +128,20 @@
                                     <li>
                                         MCP clients discover OAuth endpoints automatically
                                         <ul class="my-0">
-                                            <li><code>{baseUrl}/.well-known/oauth-authorization-server</code></li>
-                                            <li><code>{baseUrl}/.well-known/oauth-protected-resource</code></li>
+                                            <li>
+                                                <code>{baseUrl}/.well-known/oauth-authorization-server</code>
+                                                <span class="endpoint-status" data-endpoint="{baseUrl}/.well-known/oauth-authorization-server" data-check-content="true">
+                                                    <span class="status-icon"></span>
+                                                    <span class="status-tooltip"></span>
+                                                </span>
+                                            </li>
+                                            <li>
+                                                <code>{baseUrl}/.well-known/oauth-protected-resource</code>
+                                                <span class="endpoint-status" data-endpoint="{baseUrl}/.well-known/oauth-protected-resource" data-check-content="true">
+                                                    <span class="status-icon"></span>
+                                                    <span class="status-tooltip"></span>
+                                                </span>
+                                            </li>
                                         </ul>
                                     </li>
                                     <li>You'll be redirected to this TYPO3 backend for authentication</li>

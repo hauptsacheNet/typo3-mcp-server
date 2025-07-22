@@ -1,0 +1,70 @@
+.endpoint-status {
+    display: inline-block;
+    position: relative;
+    vertical-align: middle;
+}
+
+.endpoint-status .status-icon {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+    text-align: center;
+    vertical-align: middle;
+    cursor: help;
+}
+
+.endpoint-status.checking .status-icon::after {
+    content: '⏳';
+    font-size: 12px;
+}
+
+.endpoint-status.success .status-icon::after {
+    content: '✅';
+    font-size: 12px;
+}
+
+.endpoint-status.warning .status-icon::after {
+    content: '⚠️';
+    font-size: 12px;
+}
+
+.endpoint-status.error .status-icon::after {
+    content: '❌';
+    font-size: 12px;
+}
+
+.endpoint-status .status-tooltip {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 0.5rem;
+    z-index: 1000;
+    background-color: #212529 !important;
+    color: #fff !important;
+    padding: 0.5rem 0.75rem !important;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    white-space: nowrap;
+    min-width: 200px;
+    text-align: center;
+}
+
+.endpoint-status .status-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 6px solid #212529;
+}
+
+.endpoint-status:hover .status-tooltip {
+    display: block;
+}

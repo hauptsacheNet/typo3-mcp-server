@@ -416,6 +416,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     });
+    
+    // Check OAuth endpoints status
+    checkEndpointStatuses();
 });
 
 /**
@@ -624,3 +627,81 @@ function createMcpRemoteToken() {
     });
 }
 
+/**
+ * Check OAuth endpoint statuses
+ */
+function checkEndpointStatuses() {
+    const endpointElements = document.querySelectorAll('.endpoint-status');
+    
+    endpointElements.forEach(element => {
+        const endpoint = element.getAttribute('data-endpoint');
+        const checkContent = element.getAttribute('data-check-content') === 'true';
+        
+        if (endpoint) {
+            checkEndpoint(element, endpoint, checkContent);
+        }
+    });
+}
+
+/**
+ * Check a single endpoint
+ */
+function checkEndpoint(element, endpoint, checkContent) {
+    // Set checking state
+    element.classList.add('checking');
+    element.classList.remove('success', 'warning', 'error');
+    
+    const statusIcon = element.querySelector('.status-icon');
+    const statusTooltip = element.querySelector('.status-tooltip');
+    
+    // Make the request
+    fetch(endpoint, {
+        method: 'GET',
+        headers: {
+            'Accept': 'application/json'
+        },
+        mode: 'cors',
+        credentials: 'same-origin'
+    })
+    .then(response => {
+        if (response.ok) {
+            // Endpoint is reachable
+            if (checkContent) {
+                return response.text().then(text => {
+                    // Check if our MCP endpoint is mentioned
+                    if (text.includes('/mcp')) {
+                        setEndpointStatus(element, 'success', 'Endpoint is working correctly');
+                    } else {
+                        setEndpointStatus(element, 'warning', 'Endpoint is reachable but does not mention MCP endpoint');
+                    }
+                });
+            } else {
+                setEndpointStatus(element, 'success', 'Endpoint is reachable');
+            }
+        } else {
+            // Endpoint returned an error
+            setEndpointStatus(element, 'error', `Endpoint returned ${response.status} ${response.statusText}`);
+        }
+    })
+    .catch(error => {
+        // Network error or CORS issue
+        if (error.message.includes('CORS') || error.message.includes('blocked')) {
+            setEndpointStatus(element, 'error', 'Endpoint may be blocked by CORS policy or security settings');
+        } else {
+            setEndpointStatus(element, 'error', `Network error: ${error.message}`);
+        }
+    });
+}
+
+/**
+ * Set endpoint status
+ */
+function setEndpointStatus(element, status, message) {
+    element.classList.remove('checking', 'success', 'warning', 'error');
+    element.classList.add(status);
+    
+    const statusTooltip = element.querySelector('.status-tooltip');
+    if (statusTooltip) {
+        statusTooltip.textContent = message;
+    }
+}

@@ -77,6 +77,9 @@ class McpServerModuleController
         // Include JavaScript for copy functionality
         $this->pageRenderer->addJsFile('EXT:mcp_server/Resources/Public/JavaScript/mcp-module.js');
         
+        // Include CSS for endpoint status indicators
+        $this->pageRenderer->addCssFile('EXT:mcp_server/Resources/Public/Css/mcp-module.css');
+        
         // Assign variables to ModuleTemplate and render
         $moduleTemplate->assignMultiple($templateVariables);
         $moduleTemplate->setTitle('MCP Server Configuration');
