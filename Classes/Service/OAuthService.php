@@ -7,7 +7,7 @@ namespace Hn\McpServer\Service;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
-use TYPO3\CMS\Core\Http\ServerRequest;
+use Psr\Http\Message\ServerRequestInterface;
 
 /**
  * OAuth service for MCP server authentication
@@ -78,7 +78,7 @@ class OAuthService
     /**
      * Exchange authorization code for access token
      */
-    public function exchangeCodeForToken(string $code, ?string $codeVerifier = null): ?array
+    public function exchangeCodeForToken(string $code, ?string $codeVerifier = null, ?ServerRequestInterface $request = null): ?array
     {
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('tx_mcpserver_oauth_codes');
@@ -112,8 +112,10 @@ class OAuthService
         $expires = time() + self::TOKEN_EXPIRY_SECONDS;
 
         // Get client IP
-        $request = $GLOBALS['TYPO3_REQUEST'] ?? ServerRequest::fromGlobals();
-        $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
+        $clientIp = '';
+        if ($request !== null) {
+            $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
+        }
 
         // Create access token
         $tokenConnection = GeneralUtility::makeInstance(ConnectionPool::class)
@@ -151,7 +153,7 @@ class OAuthService
     /**
      * Validate access token and return user info
      */
-    public function validateToken(string $token): ?array
+    public function validateToken(string $token, ?ServerRequestInterface $request = null): ?array
     {
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('tx_mcpserver_access_tokens');
@@ -173,8 +175,10 @@ class OAuthService
         }
 
         // Update last used timestamp and IP
-        $request = $GLOBALS['TYPO3_REQUEST'] ?? ServerRequest::fromGlobals();
-        $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
+        $clientIp = '';
+        if ($request !== null) {
+            $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
+        }
 
         $queryBuilder = $connection->createQueryBuilder();
         $queryBuilder
@@ -352,14 +356,16 @@ class OAuthService
     /**
      * Create access token directly (bypassing authorization code flow)
      */
-    public function createDirectAccessToken(int $beUserId, string $clientName): string
+    public function createDirectAccessToken(int $beUserId, string $clientName, ?ServerRequestInterface $request = null): string
     {
         $accessToken = $this->generateSecureToken();
         $expires = time() + self::TOKEN_EXPIRY_SECONDS;
 
         // Get client IP
-        $request = $GLOBALS['TYPO3_REQUEST'] ?? ServerRequest::fromGlobals();
-        $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
+        $clientIp = '';
+        if ($request !== null) {
+            $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
+        }
 
         // Create access token
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)

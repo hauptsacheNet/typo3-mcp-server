@@ -294,7 +294,7 @@ class McpServerModuleController
             }
             
             // Create new mcp-remote token
-            $token = $this->oauthService->createDirectAccessToken($userId, 'mcp-remote token');
+            $token = $this->oauthService->createDirectAccessToken($userId, 'mcp-remote token', $request);
             
             return new JsonResponse([
                 'success' => true,

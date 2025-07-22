@@ -54,7 +54,7 @@ class OAuthTokenEndpoint
 
             // Exchange code for token
             $oauthService = GeneralUtility::makeInstance(OAuthService::class);
-            $tokenData = $oauthService->exchangeCodeForToken($code, $codeVerifier);
+            $tokenData = $oauthService->exchangeCodeForToken($code, $codeVerifier, $request);
 
             if (!$tokenData) {
                 return $this->createErrorResponse('invalid_grant', 'Invalid or expired authorization code');

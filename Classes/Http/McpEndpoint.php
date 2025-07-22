@@ -62,7 +62,7 @@ class McpEndpoint
             error_log("MCP: Received token: " . substr($token, 0, 20) . "...");
 
             $oauthService = GeneralUtility::makeInstance(OAuthService::class);
-            $tokenInfo = $oauthService->validateToken($token);
+            $tokenInfo = $oauthService->validateToken($token, $request);
             
             if (!$tokenInfo) {
                 error_log("MCP: Token validation failed for: " . substr($token, 0, 20) . "...");
