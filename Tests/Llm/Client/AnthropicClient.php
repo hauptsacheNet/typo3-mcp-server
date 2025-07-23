@@ -233,6 +233,10 @@ class AnthropicClient implements LlmClientInterface
         $rawResponse = $previousResponse->getRawResponse();
         foreach ($rawResponse['content'] ?? [] as $block) {
             if ($block['type'] === 'tool_use') {
+                // Fix empty array input to be empty object for Anthropic API
+                if (isset($block['input']) && $block['input'] === []) {
+                    $block['input'] = new \stdClass();
+                }
                 $content[] = $block;
             }
         }
