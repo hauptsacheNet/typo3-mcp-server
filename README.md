@@ -32,39 +32,20 @@ All these operations happen safely in workspaces, giving you full control to rev
 
 > 💡 **Want to know how it works?** Check out our [Technical Overview](TECHNICAL_OVERVIEW.md) for detailed information about the implementation, available tools, and real-world examples with actual tool calls.
 
-## What is MCP?
+## Project Status
 
-The Model Context Protocol (MCP) is a standard protocol for connecting AI systems with external tools and data sources.
-It enables AI assistants to interact with systems in a structured way, providing capabilities like:
+| Feature                    | Status          | Notes                                                                                                         |
+  |----------------------------|-----------------|---------------------------------------------------------------------------------------------------------------|
+| **MCP Connection**         | ✅ Ready         | HTTP and stdin/stdout protocols (thanks to [logiscape/mcp-sdk-php](https://github.com/logiscape/mcp-sdk-php)) |
+| **Authentication**         | ✅ Ready         | OAuth for Backend Users                                                                                       |
+| **Page Tree Navigation**   | ✅ Ready         | Page tree view similar to the TYPO3 backend                                                                   |
+| **Page Content Discovery** | ✅ Ready         | Similar to the List or Page module with backend layout support                                                |
+| **Record Reading/Writing** | ✅ Ready         | Read and write any workspace-capable TYPO3 table (core & extensions) with full schema inspection              |
+| **Content Translation**    | ⚠️ Experimental | Implemented, needs real-world testing                                                                         |
+| **Fileadmin Support**      | ❌ Missing       | Not yet implemented                                                                                           |
+| **Workspace Selection**    | ❌ Missing       | Currently uses the first writable workspace of the user                                                       |
 
-- Executing commands and tools
-- Accessing resources
-- Creating and retrieving content
-
-## Features
-
-### Core MCP Capabilities
-- **Smart Navigation** - Tools for exploring your site structure just like in the TYPO3 page tree
-- **Content Intelligence** - AI can read and understand any TYPO3 content, from pages to news articles
-- **Safe Modifications** - All changes go through TYPO3's DataHandler, ensuring data integrity
-- **Enterprise Security** - OAuth 2.1 authentication with user-specific permissions
-
-### Workspace Safety Features
-- **Zero Risk to Live Site** - AI automatically works in a safe workspace, never touching live content
-- **Smart Table Filtering** - Only content that can be safely versioned is exposed to AI
-- **System Protection** - Critical configuration and system tables remain untouchable
-- **Preview Everything** - See AI changes in context before they go live
-- **Full Editorial Control** - Review, modify, or reject AI suggestions before publishing
-
-### Publishing Workflow
-
-1. AI creates/modifies content in workspace
-2. Content appears in TYPO3 Backend → Workspaces module
-3. Editors review and approve changes
-4. Content is published to live site
-5. Workspace is cleared for next round of changes
-
-This approach combines the power of AI automation with human oversight and TYPO3's proven content management workflows.
+While there are a lot of automated tests, and even some [LLM test](Tests/Llm/README.md), TYPO3 instances are widely different and Language Models are also widely different. Feel free to [create issues here on GitHub](https://github.com/logiscape/mcp-sdk-php/issues) or [share experiences in the typo3-core-ai channel](https://typo3.slack.com/archives/C091M0M7BL6). 
 
 ## Installation
 
@@ -87,21 +68,8 @@ There are two ways to connect AI assistants like Claude Desktop to your TYPO3 in
 For secure remote access with proper authentication:
 
 1. Go to **[Username] → MCP Server** in your TYPO3 backend
-2. Copy the OAuth configuration from the "OAuth Client Configuration" section
-3. Add it to your Claude Desktop configuration file
-
-The OAuth setup:
-- Provides secure authentication through TYPO3 backend login
-- Supports multiple simultaneous client connections per user
-- Includes proper token management and revocation
-- Works with any MCP client that supports OAuth 2.1
-
-**OAuth Flow:**
-1. MCP client redirects you to TYPO3 authorization URL
-2. You log in to TYPO3 Backend (if not already logged in)  
-3. You authorize the MCP client access
-4. TYPO3 generates a secure access token
-5. MCP client uses the token for API access
+2. Copy the Server URL (and optionally the Integration Name)
+3. Add the Integration to whatever MCP Client you are using.
 
 ![MCP Server Setup](mcp_setup.png)
 
@@ -120,33 +88,6 @@ This method gives you admin privileges by default. Add this to your mcp config f
       }
    }
 }
-```
-
-#### Next Steps
-
-1. Begin creating content - all changes will be safely queued in workspaces
-
-2. Review and publish changes through TYPO3 Backend → Workspaces module
-
-### CLI OAuth Management
-
-For advanced users and automation, you can manage OAuth tokens via command line:
-
-```bash
-# Generate authorization URL for a user
-vendor/bin/typo3 mcp:oauth url admin --client-name="My MCP Client"
-
-# List active tokens for a user  
-vendor/bin/typo3 mcp:oauth list admin
-
-# Revoke a specific token
-vendor/bin/typo3 mcp:oauth revoke admin --token-id=123
-
-# Revoke all tokens for a user
-vendor/bin/typo3 mcp:oauth revoke admin --all
-
-# Clean up expired tokens and codes
-vendor/bin/typo3 mcp:oauth cleanup
 ```
 
 ## Development
