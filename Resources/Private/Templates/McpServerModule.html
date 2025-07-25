@@ -286,10 +286,14 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
 
                             <div class="alert alert-info mt-3">
                                 <h6><strong>How CLI access works:</strong></h6>
-                                <ul class="mb-0">
+                                <ul class="mb-2">
                                     <li><strong>Direct access:</strong> No OAuth needed</li>
                                     <li><strong>Local only:</strong> Only works when your client has shell access to TYPO3</li>
-                                    <li><strong>Development friendly:</strong> Perfect for local development and testing</li>
+                                </ul>
+                                <h6 class="mt-3"><strong>Important considerations:</strong></h6>
+                                <ul class="mb-0">
+                                    <li><strong>Long-running process:</strong> The CLI server runs continuously and may accumulate memory usage over time. Restart periodically if you notice performance issues.</li>
+                                    <li><strong>Code changes:</strong> Changes to PHP code won't be reflected immediately. You'll need to restart the CLI server to pick up code modifications.</li>
                                 </ul>
                             </div>
                         </div>
