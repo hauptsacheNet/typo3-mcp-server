@@ -50,6 +50,11 @@ class McpEndpoint
             error_log("MCP: Request headers: " . json_encode($headers));
             error_log("MCP: Query params: " . json_encode($queryParams));
             
+            // Check if this is an auth header test request
+            if (isset($queryParams['test']) && $queryParams['test'] === 'auth') {
+                return $this->handleAuthHeaderTest($request);
+            }
+            
             // Authenticate via Bearer token or query parameter
             $token = $this->extractToken($request);
             
@@ -298,6 +303,54 @@ class McpEndpoint
         
         // Also set it on the backend user for consistency
         //$beUser->setLanguageService($languageService);
+    }
+
+    /**
+     * Handle auth header test request
+     */
+    private function handleAuthHeaderTest(ServerRequestInterface $request): ResponseInterface
+    {
+        $headers = [];
+        $receivedAuthHeader = false;
+        
+        // Check all possible ways the Authorization header might arrive
+        $authHeader = $request->getHeaderLine('Authorization');
+        if (!empty($authHeader)) {
+            $headers['authorization'] = $authHeader;
+            $receivedAuthHeader = true;
+        }
+        
+        // Check server params for HTTP_AUTHORIZATION
+        $serverParams = $request->getServerParams();
+        if (isset($serverParams['HTTP_AUTHORIZATION'])) {
+            $headers['http_authorization'] = $serverParams['HTTP_AUTHORIZATION'];
+            $receivedAuthHeader = true;
+        }
+        
+        // Also check for redirect env variable (Apache specific)
+        if (isset($serverParams['REDIRECT_HTTP_AUTHORIZATION'])) {
+            $headers['redirect_http_authorization'] = $serverParams['REDIRECT_HTTP_AUTHORIZATION'];
+            $receivedAuthHeader = true;
+        }
+        
+        $response = GeneralUtility::makeInstance(Response::class)
+            ->withHeader('Content-Type', 'application/json; charset=utf-8')
+            ->withHeader('Access-Control-Allow-Origin', '*')
+            ->withHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+            ->withStatus(200);
+        
+        $responseData = [
+            'test' => 'auth',
+            'headers_received' => $headers,
+            'auth_header_detected' => $receivedAuthHeader,
+            'server_software' => $serverParams['SERVER_SOFTWARE'] ?? 'unknown',
+            'hint' => !$receivedAuthHeader ? 'Authorization header not received. See module page for solutions.' : 'Authorization header received successfully.'
+        ];
+        
+        $body = GeneralUtility::makeInstance(Stream::class, 'php://temp', 'rw');
+        $body->write(json_encode($responseData, JSON_PRETTY_PRINT));
+        
+        return $response->withBody($body);
     }
 
 }

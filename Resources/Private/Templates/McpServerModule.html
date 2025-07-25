@@ -119,6 +119,15 @@
                                         </button>
                                     </div>
                                 </div>
+                                <div class="mt-2">
+                                    <small class="text-muted">
+                                        MCP endpoint status: 
+                                        <span class="endpoint-status" data-endpoint="{baseUrl}/mcp" data-check-auth="true" id="mcp-endpoint-status">
+                                            <span class="status-icon"></span>
+                                            <span class="status-tooltip"></span>
+                                        </span>
+                                    </small>
+                                </div>
                             </div>
 
                             <!-- Technical details (shared across all remote clients) -->
@@ -148,6 +157,27 @@
                                     <li>After authorization, your MCP client gets secure access</li>
                                     <li>All future requests use OAuth tokens automatically</li>
                                 </ol>
+                            </div>
+                            
+                            <!-- Authorization Header Warning -->
+                            <div class="alert alert-warning mt-3" id="auth-header-warning" style="display: none;">
+                                <h6><strong>⚠️ Authorization Header Issue Detected</strong></h6>
+                                <p class="mb-2">The MCP endpoint cannot receive Authorization headers. This is a common issue that prevents OAuth authentication from working properly.</p>
+                                <p class="mb-2"><strong>Common causes and solutions:</strong></p>
+                                <ul class="mb-0">
+                                    <li>
+                                        <strong>Apache configuration:</strong> Add this to your <code>.htaccess</code> file:
+                                        <pre class="mb-1 mt-1" style="background: #f5f5f5; padding: 8px; border-radius: 4px;"><code>RewriteEngine On
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
+                                    </li>
+                                    <li>
+                                        <strong>Site-level authentication:</strong> If your site uses HTTP Basic Auth, it may conflict with OAuth headers. Consider using IP-based restrictions instead.
+                                    </li>
+                                    <li>
+                                        <strong>Proxy/CDN configuration:</strong> Some proxies or CDNs strip Authorization headers. Check your infrastructure settings.
+                                    </li>
+                                </ul>
                             </div>
                         </div>
 

@@ -636,9 +636,14 @@ function checkEndpointStatuses() {
     endpointElements.forEach(element => {
         const endpoint = element.getAttribute('data-endpoint');
         const checkContent = element.getAttribute('data-check-content') === 'true';
+        const checkAuth = element.getAttribute('data-check-auth') === 'true';
         
         if (endpoint) {
-            checkEndpoint(element, endpoint, checkContent);
+            if (checkAuth) {
+                checkMcpEndpointAuth(element, endpoint);
+            } else {
+                checkEndpoint(element, endpoint, checkContent);
+            }
         }
     });
 }
@@ -704,4 +709,67 @@ function setEndpointStatus(element, status, message) {
     if (statusTooltip) {
         statusTooltip.textContent = message;
     }
+}
+
+/**
+ * Check MCP endpoint with Authorization header test
+ */
+function checkMcpEndpointAuth(element, endpoint) {
+    // Set checking state
+    element.classList.add('checking');
+    element.classList.remove('success', 'warning', 'error');
+    
+    // Create a test request with a dummy Bearer token
+    fetch(endpoint + '?test=auth', {
+        method: 'GET',
+        headers: {
+            'Accept': 'application/json',
+            'Authorization': 'Bearer test-header-check-12345'
+        },
+        mode: 'cors',
+        credentials: 'same-origin'
+    })
+    .then(response => {
+        // We expect this to fail with 401 since it's a fake token
+        // But we can check if our test mode returns header info
+        return response.json().then(data => {
+            // Check if the response indicates the header was received
+            if (data.headers_received && data.headers_received.authorization) {
+                setEndpointStatus(element, 'success', 'MCP endpoint is accessible and can receive Authorization headers');
+                // Hide the warning since headers work
+                const warningDiv = document.getElementById('auth-header-warning');
+                if (warningDiv) {
+                    warningDiv.style.display = 'none';
+                }
+            } else {
+                setEndpointStatus(element, 'error', 'MCP endpoint cannot receive Authorization headers - see warning below');
+                // Show the warning
+                const warningDiv = document.getElementById('auth-header-warning');
+                if (warningDiv) {
+                    warningDiv.style.display = 'block';
+                }
+            }
+        }).catch(() => {
+            // If JSON parsing fails, check the status code
+            if (response.status === 401) {
+                // This is expected for a fake token, but we need to know if headers were passed
+                setEndpointStatus(element, 'warning', 'MCP endpoint is reachable but Authorization header status unknown');
+            } else {
+                setEndpointStatus(element, 'error', `MCP endpoint returned ${response.status} ${response.statusText}`);
+            }
+        });
+    })
+    .catch(error => {
+        // Network error or CORS issue
+        if (error.message.includes('CORS') || error.message.includes('blocked')) {
+            setEndpointStatus(element, 'error', 'MCP endpoint may be blocked by CORS policy or security settings');
+        } else {
+            setEndpointStatus(element, 'error', `Network error: ${error.message}`);
+        }
+        // Show the warning on any error
+        const warningDiv = document.getElementById('auth-header-warning');
+        if (warningDiv) {
+            warningDiv.style.display = 'block';
+        }
+    });
 }
