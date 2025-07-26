@@ -67,7 +67,13 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'data' => [
                         'type' => 'object',
-                        'description' => 'Record data (required for "create", "update", and "translate" actions). For translate action, must contain sys_language_uid with target language. Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables.',
+                        'description' => 'Record data with field names as keys and their values - uses the same field syntax as ReadTable output (required for "create", "update", and "translate" actions). Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables.',
+                        'additionalProperties' => true,
+                        'examples' => [
+                            ['title' => 'News Title', 'bodytext' => 'News <b>content</b>', 'datetime' => '2024-01-01 10:00:00'],
+                            ['header' => 'Content Element Header', 'bodytext' => 'Content <b>text</b>', 'CType' => 'text'],
+                            ['sys_language_uid' => 'de', 'title' => 'German translation']
+                        ]
                     ],
                     'position' => [
                         'type' => 'string',
@@ -107,6 +113,18 @@ class WriteTableTool extends AbstractRecordTool
         
         if (empty($table)) {
             return $this->createErrorResult('Table name is required');
+        }
+        
+        // Validate data parameter type
+        if (in_array($action, ['create', 'update', 'translate'], true) && isset($params['data'])) {
+            if (!is_array($params['data'])) {
+                $dataType = gettype($params['data']);
+                return $this->createErrorResult(
+                    "Invalid data parameter: Expected an object/array with field names as keys, but received {$dataType}. " .
+                    "The data parameter must be an object like {\"title\": \"My Title\", \"bodytext\": \"Content\"}, " .
+                    "not a plain string. Each field name should be a key with its corresponding value."
+                );
+            }
         }
         
         /**

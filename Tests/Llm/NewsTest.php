@@ -24,6 +24,7 @@ class NewsTest extends LlmTestCase
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_pages.csv');
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_categories.csv');
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_plugin.csv');
+        $this->importCSVDataSet(__DIR__ . '/Fixtures/news_records.csv');
     }
 
     /**
@@ -48,17 +49,24 @@ class NewsTest extends LlmTestCase
         $this->assertTrue($hasExploration, 
             "Expected LLM to explore and discover news functionality. Tools used: " . implode(', ', $history));
         
-        // Verify content creation - LLM may create either news or content
+        // Verify content creation - should create news record
         $writeCalls = $response->getToolCallsByName('WriteTable');
-        $this->assertGreaterThan(0, count($writeCalls), "Expected WriteTable call");
+        $this->assertGreaterThan(0, count($writeCalls), 
+            "Expected WriteTable call but none found. Tool history: " . implode(' → ', $this->getToolCallHistory()) . 
+            "\nFinal response: " . $response->getContent());
         
         $writeCall = $writeCalls[0];
         $this->assertEquals('create', $writeCall['arguments']['action']);
         
-        // LLM might create news record or regular content
+        // Should create news record, not content element
         $table = $writeCall['arguments']['table'];
-        $this->assertContains($table, ['tx_news_domain_model_news', 'tt_content'], 
-            "Expected either news record or content element creation");
+        $this->assertEquals('tx_news_domain_model_news', $table, 
+            "Expected news record creation when asked for a news article");
+        
+        // Should be created in a reasonable location for news
+        $acceptablePids = [8, 12, 30]; // Blog, Press, or Storage folder
+        $this->assertContains($writeCall['arguments']['pid'], $acceptablePids,
+            "News articles should be created on Blog (8), Press (12), or in the storage folder (30)");
         
         // Execute write and verify
         $writeResult = $this->executeToolCall($writeCall);
@@ -68,16 +76,10 @@ class NewsTest extends LlmTestCase
         // Verify content includes launch information
         $data = $writeCall['arguments']['data'];
         
-        // Collect all text fields based on table type
-        $allContent = '';
-        if ($table === 'tx_news_domain_model_news') {
-            $allContent = ($data['title'] ?? '') . ' ' . 
-                         ($data['teaser'] ?? '') . ' ' . 
-                         ($data['bodytext'] ?? '');
-        } else {
-            $allContent = ($data['header'] ?? '') . ' ' . 
-                         ($data['bodytext'] ?? '');
-        }
+        // Collect all text fields from news record
+        $allContent = ($data['title'] ?? '') . ' ' . 
+                     ($data['teaser'] ?? '') . ' ' . 
+                     ($data['bodytext'] ?? '');
         
         $this->assertNotEmpty($allContent, "Content should not be empty");
         $this->assertMatchesRegularExpression(
@@ -87,7 +89,7 @@ class NewsTest extends LlmTestCase
         );
         
         // Check date handling for news records
-        if ($table === 'tx_news_domain_model_news' && isset($data['datetime'])) {
+        if (isset($data['datetime'])) {
             $datetime = is_numeric($data['datetime']) 
                 ? (int)$data['datetime'] 
                 : strtotime($data['datetime']);
@@ -116,37 +118,36 @@ class NewsTest extends LlmTestCase
         $this->assertTrue($hasExploration, 
             "Expected LLM to explore before creating news. Tools used: " . implode(', ', $history));
         
-        // Find content/news creation
+        // Find news creation
         $writeCalls = $response->getToolCallsByName('WriteTable');
-        $contentWriteCall = null;
+        $newsWriteCall = null;
         
         foreach ($writeCalls as $call) {
-            if (in_array($call['arguments']['table'], ['tx_news_domain_model_news', 'tt_content'])) {
-                $contentWriteCall = $call;
+            if ($call['arguments']['table'] === 'tx_news_domain_model_news') {
+                $newsWriteCall = $call;
                 break;
             }
         }
         
-        $this->assertNotNull($contentWriteCall, "Expected content creation");
+        $this->assertNotNull($newsWriteCall, 
+            "Expected news record creation but none found. Tool history: " . implode(' → ', $this->getToolCallHistory()) . 
+            "\nAll WriteTable calls: " . json_encode(array_map(fn($c) => $c['arguments']['table'] ?? 'unknown', $writeCalls)));
+        $this->assertEquals('create', $newsWriteCall['arguments']['action']);
+        $acceptablePids = [8, 12, 30]; // Blog, Press, or Storage folder
+        $this->assertContains($newsWriteCall['arguments']['pid'], $acceptablePids,
+            "News articles should be created on Blog (8), Press (12), or in the storage folder (30)");
         
         // Execute and verify
-        $writeResult = $this->executeToolCall($contentWriteCall);
+        $writeResult = $this->executeToolCall($newsWriteCall);
         $this->assertFalse($writeResult['isError'] ?? false, 
             'WriteTable failed: ' . $writeResult['content']);
         
         // Verify content mentions product launch
-        $data = $contentWriteCall['arguments']['data'];
-        $table = $contentWriteCall['arguments']['table'];
+        $data = $newsWriteCall['arguments']['data'];
         
-        $allContent = '';
-        if ($table === 'tx_news_domain_model_news') {
-            $allContent = ($data['title'] ?? '') . ' ' . 
-                         ($data['teaser'] ?? '') . ' ' . 
-                         ($data['bodytext'] ?? '');
-        } else {
-            $allContent = ($data['header'] ?? '') . ' ' . 
-                         ($data['bodytext'] ?? '');
-        }
+        $allContent = ($data['title'] ?? '') . ' ' . 
+                     ($data['teaser'] ?? '') . ' ' . 
+                     ($data['bodytext'] ?? '');
         
         $this->assertMatchesRegularExpression(
             '/product|launch|new|announcement|release/i',
@@ -154,27 +155,20 @@ class NewsTest extends LlmTestCase
             "Content should mention product launch"
         );
         
-        // For news records, check if LLM attempted category handling
-        if ($table === 'tx_news_domain_model_news') {
-            // LLM might assign categories or create them
-            $hasCategories = isset($data['categories']) && !empty($data['categories']);
-            $createdCategories = array_filter($writeCalls, function($call) {
-                return $call['arguments']['table'] === 'sys_category';
-            });
-            
-            // Category handling is optional - the LLM was asked to "categorize appropriately"
-            // which it might interpret as:
-            // 1. Assigning existing categories
-            // 2. Creating new categories
-            // 3. Simply creating the news in an appropriate location/section
-            // All are valid interpretations
-            if ($hasCategories || count($createdCategories) > 0) {
-                $this->assertTrue(true, "LLM handled categories by assigning or creating them");
-            } else {
-                // Check if LLM at least categorized by location (pid)
-                $this->assertArrayHasKey('pid', $data, 
-                    "Expected LLM to at least place news in appropriate location");
-            }
+        // Check if LLM attempted category handling
+        $hasCategories = isset($data['categories']) && !empty($data['categories']);
+        $createdCategories = array_filter($writeCalls, function($call) {
+            return $call['arguments']['table'] === 'sys_category';
+        });
+        
+        // Category handling is optional - the LLM was asked to "categorize appropriately"
+        // which it might interpret as:
+        // 1. Assigning existing categories
+        // 2. Creating new categories
+        // 3. Simply creating the news in an appropriate location/section
+        // All are valid interpretations
+        if ($hasCategories || count($createdCategories) > 0) {
+            $this->assertTrue(true, "LLM handled categories by assigning or creating them");
         }
     }
 
@@ -200,52 +194,41 @@ class NewsTest extends LlmTestCase
         $this->assertTrue($hasPageExploration, 
             "Expected LLM to explore to find appropriate location. Tools used: " . implode(', ', $history));
         
-        // Verify content creation
+        // Verify news creation
         $writeCalls = $response->getToolCallsByName('WriteTable');
-        $contentWriteCall = null;
+        $newsWriteCall = null;
         
         foreach ($writeCalls as $call) {
-            if (in_array($call['arguments']['table'], ['tx_news_domain_model_news', 'tt_content'])) {
-                $contentWriteCall = $call;
+            if ($call['arguments']['table'] === 'tx_news_domain_model_news') {
+                $newsWriteCall = $call;
                 break;
             }
         }
         
-        $this->assertNotNull($contentWriteCall, "Expected content creation");
+        $this->assertNotNull($newsWriteCall, 
+            "Expected news record creation but none found. Tool history: " . implode(' → ', $this->getToolCallHistory()) . 
+            "\nAll WriteTable calls: " . json_encode(array_map(fn($c) => $c['arguments']['table'] ?? 'unknown', $writeCalls)));
+        $this->assertEquals('create', $newsWriteCall['arguments']['action']);
+        $acceptablePids = [8, 12, 30]; // Blog, Press, or Storage folder
+        $this->assertContains($newsWriteCall['arguments']['pid'], $acceptablePids,
+            "News articles should be created on Blog (8), Press (12), or in the storage folder (30)");
         
         // Execute and verify
-        $writeResult = $this->executeToolCall($contentWriteCall);
+        $writeResult = $this->executeToolCall($newsWriteCall);
         $this->assertFalse($writeResult['isError'] ?? false, 
             'WriteTable failed: ' . $writeResult['content']);
         
         // Verify content mentions summer sale
-        $data = $contentWriteCall['arguments']['data'];
-        $table = $contentWriteCall['arguments']['table'];
+        $data = $newsWriteCall['arguments']['data'];
         
-        $allContent = '';
-        if ($table === 'tx_news_domain_model_news') {
-            $allContent = ($data['title'] ?? '') . ' ' . 
-                         ($data['teaser'] ?? '') . ' ' . 
-                         ($data['bodytext'] ?? '');
-        } else {
-            $allContent = ($data['header'] ?? '') . ' ' . 
-                         ($data['bodytext'] ?? '');
-        }
+        $allContent = ($data['title'] ?? '') . ' ' . 
+                     ($data['teaser'] ?? '') . ' ' . 
+                     ($data['bodytext'] ?? '');
         
         $this->assertMatchesRegularExpression(
             '/summer|sale|discount|offer|special/i',
             $allContent,
             "Content should mention summer sale"
         );
-        
-        // For news records, verify storage location
-        if ($table === 'tx_news_domain_model_news') {
-            $pid = $data['pid'] ?? null;
-            // LLM might create news in various locations
-            if ($pid !== null) {
-                // If pid is set, verify it's reasonable
-                $this->assertGreaterThan(0, $pid, "News pid should be positive");
-            }
-        }
     }
 }

@@ -162,8 +162,8 @@ class ListTablesTool extends AbstractRecordTool
      */
     protected function getTableDescription(string $table): string
     {
-        // For now, we don't have a good way to get descriptions
-        // This could be enhanced in the future
+        // For now, we don't have a good way to get descriptions from TCA
+        // This could be enhanced in the future if TYPO3 provides table descriptions
         return '';
     }
     

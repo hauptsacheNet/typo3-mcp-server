@@ -200,13 +200,13 @@ class GetPageTreeLanguageTest extends FunctionalTestCase
         
         // Should show German titles where available
         // German translation has nav_title "Über", should use that instead of title
-        $this->assertStringContainsString('[2] Über [TRANSLATED]', $output);
+        $this->assertStringContainsString('[2] Über [Page] [TRANSLATED]', $output);
         
         // Page 2 should be marked as translated
-        $this->assertStringContainsString('Über [TRANSLATED]', $output);
+        $this->assertStringContainsString('Über [Page] [TRANSLATED]', $output);
         
         // Pages without translations should be marked as not translated
-        $this->assertStringContainsString('[6] Contact [NOT TRANSLATED]', $output);
+        $this->assertStringContainsString('[6] Contact [Page] [NOT TRANSLATED]', $output);
     }
     
     /**
@@ -239,10 +239,10 @@ class GetPageTreeLanguageTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         
         // Should show French title for page 2
-        $this->assertStringContainsString('[2] À propos [TRANSLATED]', $output);
+        $this->assertStringContainsString('[2] À propos [Page] [TRANSLATED]', $output);
         
         // Page 3 has no French translation
-        $this->assertStringContainsString('[3] Hidden Page [HIDDEN] [NOT TRANSLATED]', $output);
+        $this->assertStringContainsString('[3] Hidden Page [Page] [HIDDEN] [NOT TRANSLATED]', $output);
     }
 
     /**
@@ -283,7 +283,7 @@ class GetPageTreeLanguageTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         
         // German translation has nav_title "Über", should use that instead of title
-        $this->assertStringContainsString('[2] Über [TRANSLATED]', $output);
+        $this->assertStringContainsString('[2] Über [Page] [TRANSLATED]', $output);
         $this->assertStringNotContainsString('Über uns', $output);
     }
 }

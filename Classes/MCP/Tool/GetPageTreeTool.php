@@ -5,13 +5,12 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool;
 
 use Doctrine\DBAL\ParameterType;
+use Doctrine\DBAL\ArrayParameterType;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
-use TYPO3\CMS\Core\Site\SiteFinder;
-use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\LanguageAspect;
@@ -104,8 +103,23 @@ class GetPageTreeTool extends AbstractRecordTool
         // Get page tree with the specified parameters
         $pageTree = $this->getPageTree($startPage, $depth, $languageUid);
         
+        // Collect all page UIDs from the tree
+        $pageUids = $this->collectPageUids($pageTree);
+        
+        // Get record counts for all pages
+        $recordCounts = $this->getRecordCounts($pageUids);
+        
+        // Get plugin hints for all pages
+        $pluginHints = [];
+        foreach ($pageUids as $uid) {
+            $hint = $this->getPluginStorageHints($uid);
+            if ($hint) {
+                $pluginHints[$uid] = $hint;
+            }
+        }
+        
         // Convert the page tree to a text-based tree with indentation
-        $textTree = $this->renderTextTree($pageTree, 0, $languageUid);
+        $textTree = $this->renderTextTree($pageTree, 0, $languageUid, $recordCounts, $pluginHints);
         
         return new CallToolResult([new TextContent($textTree)]);
     }
@@ -235,9 +249,148 @@ class GetPageTreeTool extends AbstractRecordTool
     
 
     /**
+     * Collect all page UIDs from the tree structure
+     */
+    protected function collectPageUids(array $pageTree): array
+    {
+        $uids = [];
+        
+        foreach ($pageTree as $page) {
+            $uids[] = $page['uid'];
+            
+            if (!empty($page['subpages'])) {
+                $uids = array_merge($uids, $this->collectPageUids($page['subpages']));
+            }
+        }
+        
+        return $uids;
+    }
+    
+    /**
+     * Get record counts for given page UIDs
+     */
+    protected function getRecordCounts(array $pageUids): array
+    {
+        if (empty($pageUids)) {
+            return [];
+        }
+        
+        $recordCounts = [];
+        
+        // Get accessible tables (exclude read-only system tables)
+        $accessibleTables = $this->tableAccessService->getAccessibleTables(false);
+        
+        foreach ($accessibleTables as $table => $accessInfo) {
+            // Skip pages table itself
+            if ($table === 'pages') {
+                continue;
+            }
+            
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable($table);
+            
+            // Only apply DeletedRestriction
+            $queryBuilder->getRestrictions()
+                ->removeAll()
+                ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            
+            // Count records grouped by pid
+            $counts = $queryBuilder
+                ->select('pid')
+                ->addSelectLiteral('COUNT(*) AS count')
+                ->from($table)
+                ->where(
+                    $queryBuilder->expr()->in(
+                        'pid', 
+                        $queryBuilder->createNamedParameter(
+                            $pageUids, 
+                            ArrayParameterType::INTEGER
+                        )
+                    )
+                )
+                ->groupBy('pid')
+                ->executeQuery()
+                ->fetchAllAssociative();
+            
+            // Store counts
+            foreach ($counts as $row) {
+                $pid = (int)$row['pid'];
+                $count = (int)$row['count'];
+                
+                if (!isset($recordCounts[$pid])) {
+                    $recordCounts[$pid] = [];
+                }
+                
+                $recordCounts[$pid][$table] = $count;
+            }
+        }
+        
+        return $recordCounts;
+    }
+
+    /**
+     * Get plugin storage hints for a page
+     */
+    protected function getPluginStorageHints(int $pageId): string
+    {
+        $hints = '';
+        
+        // Query for plugins on this page
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+        
+        $plugins = $queryBuilder
+            ->select('*')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
+                $queryBuilder->expr()->eq('CType', $queryBuilder->createNamedParameter('list'))
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+        
+        foreach ($plugins as $plugin) {
+            // Check for news plugin with startingpoint configuration
+            if (isset($plugin['list_type']) && $plugin['list_type'] === 'news_pi1' && !empty($plugin['pi_flexform'])) {
+                // Simple regex to extract startingpoint value
+                if (preg_match('/<field index="settings\.startingpoint">.*?<value[^>]*>(\d+)<\/value>/s', $plugin['pi_flexform'], $matches)) {
+                    $storagePid = (int)$matches[1];
+                    $hints .= ' [news plugin → pid:' . $storagePid . ']';
+                }
+            }
+        }
+        
+        // Debug: Remove debug for now
+        // The issue seems to be with the condition or regex
+        
+        return $hints;
+    }
+
+    /**
+     * Get human-readable doktype label
+     */
+    protected function getDoktypeLabel(int $doktype): string
+    {
+        return match ($doktype) {
+            PageRepository::DOKTYPE_DEFAULT => 'Page',
+            PageRepository::DOKTYPE_LINK => 'Link',
+            PageRepository::DOKTYPE_SHORTCUT => 'Shortcut',
+            PageRepository::DOKTYPE_BE_USER_SECTION => 'Backend Section',
+            PageRepository::DOKTYPE_MOUNTPOINT => 'Mount Point',
+            PageRepository::DOKTYPE_SPACER => 'Spacer',
+            PageRepository::DOKTYPE_SYSFOLDER => 'System Folder',
+            default => 'Unknown Type'
+        };
+    }
+
+    /**
      * Render the page tree as a text-based tree with indentation
      */
-    protected function renderTextTree(array $pageTree, int $level = 0, ?int $languageUid = null): string
+    protected function renderTextTree(array $pageTree, int $level = 0, ?int $languageUid = null, array $recordCounts = [], array $pluginHints = []): string
     {
         $result = '';
         $indent = str_repeat('  ', $level);
@@ -245,13 +398,22 @@ class GetPageTreeTool extends AbstractRecordTool
         foreach ($pageTree as $page) {
             $title = $page['nav_title'] ?: $page['title'];
             $hiddenMark = $page['hidden'] ? ' [HIDDEN]' : '';
+            $doktypeLabel = $this->getDoktypeLabel($page['doktype']);
             
-            $result .= $indent . '- [' . $page['uid'] . '] ' . $title . $hiddenMark;
+            // Start building the line: [uid] Title [Type]
+            $result .= $indent . '- [' . $page['uid'] . '] ' . $title . ' [' . $doktypeLabel . ']' . $hiddenMark;
             
             // Add translation status if language specified
             if ($languageUid !== null && $languageUid > 0) {
                 if (isset($page['_translated'])) {
                     $result .= $page['_translated'] ? ' [TRANSLATED]' : ' [NOT TRANSLATED]';
+                }
+            }
+
+            // Add record counts if available
+            if (!empty($recordCounts[$page['uid']])) {
+                foreach ($recordCounts[$page['uid']] as $table => $count) {
+                    $result .= ' [' . $table . ': ' . $count . ']';
                 }
             }
 
@@ -265,10 +427,15 @@ class GetPageTreeTool extends AbstractRecordTool
                 $result .= ' (' . $page['subpageCount'] . ' subpages)';
             }
             
+            // Add plugin hints if available
+            if (!empty($pluginHints[$page['uid']])) {
+                $result .= $pluginHints[$page['uid']];
+            }
+            
             $result .= PHP_EOL;
             
             if (!empty($page['subpages'])) {
-                $result .= $this->renderTextTree($page['subpages'], $level + 1, $languageUid);
+                $result .= $this->renderTextTree($page['subpages'], $level + 1, $languageUid, $recordCounts, $pluginHints);
             }
         }
         

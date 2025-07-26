@@ -14,16 +14,30 @@ use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 class GetPageTreeToolTest extends FunctionalTestCase
 {
+    protected array $coreExtensionsToLoad = [
+        'workspaces',
+        'frontend',
+    ];
+    
     protected array $testExtensionsToLoad = [
         'mcp_server',
     ];
+
+    protected bool $importDefaultFixtures = true;
 
     protected function setUp(): void
     {
         parent::setUp();
         
-        // Import page fixtures
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
+        if ($this->importDefaultFixtures) {
+            // Import page fixtures
+            $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
+        }
+        
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
+        
+        // Set up backend user for DataHandler and TableAccessService
+        $this->setUpBackendUser(1);
     }
 
     /**
@@ -166,5 +180,33 @@ class GetPageTreeToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('properties', $schema['inputSchema']);
         $this->assertArrayHasKey('startPage', $schema['inputSchema']['properties']);
         $this->assertArrayHasKey('depth', $schema['inputSchema']['properties']);
+    }
+    
+    /**
+     * Test enhanced output with doktype labels
+     */
+    public function testEnhancedOutputWithDoktypeLabels(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
+        
+        // Import content fixtures to have some records to count
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
+        
+        // Test getting page tree from root
+        $result = $tool->execute([
+            'startPage' => 0,
+            'depth' => 2
+        ]);
+        
+        $content = $result->content[0]->text;
+        
+        // Verify doktype labels are included
+        $this->assertStringContainsString('[1] Home [Page]', $content);
+        $this->assertStringContainsString('[2] About Us [Page]', $content);
+        
+        // Verify record counts are included (page 1 has 3 content elements)
+        $this->assertStringContainsString('[tt_content: 3]', $content);
     }
 }
