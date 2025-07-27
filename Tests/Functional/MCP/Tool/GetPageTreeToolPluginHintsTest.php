@@ -54,8 +54,7 @@ class GetPageTreeToolPluginHintsTest extends FunctionalTestCase
         
         // Verify plugin hint is shown for the Press page (pid 12) which has a news plugin pointing to pid 30
         $this->assertStringContainsString('[12] Press [Page]', $content);
-        // TODO: Fix plugin hint detection - currently not working in test environment
-        // $this->assertStringContainsString('[news plugin → pid:30]', $content);
+        $this->assertStringContainsString('[news plugin → pid:30]', $content);
         
         // Verify system folder is shown with correct doktype
         $this->assertStringContainsString('[20] System [System Folder]', $content);
@@ -86,8 +85,7 @@ class GetPageTreeToolPluginHintsTest extends FunctionalTestCase
         // Verify record counts - the news plugin fixture creates a tt_content record
         $this->assertStringContainsString('[tt_content: 1]', $content);
         
-        // TODO: Fix plugin hint detection - currently not working in test environment
         // Verify plugin hints
-        // $this->assertStringContainsString('[news plugin → pid:30]', $content);
+        $this->assertStringContainsString('[news plugin → pid:30]', $content);
     }
 }

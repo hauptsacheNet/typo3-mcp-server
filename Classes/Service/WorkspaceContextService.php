@@ -169,28 +169,20 @@ class WorkspaceContextService
             $workspaceDescription = 'Automatically created workspace for Model Context Protocol operations';
             
             // Create workspace record data
+            // Only use fields that are guaranteed to exist in TYPO3 core
             $workspaceData = [
                 'pid' => 0, // Workspaces are created at root level
                 'title' => $workspaceTitle,
                 'description' => $workspaceDescription,
                 'adminusers' => $beUser->user['uid'] ?? 0,
                 'members' => '',
-                'reviewers' => '',
-                'publish_access' => 1, // Allow publishing
-                'stagechg_notification' => 0, // No email notifications by default
-                'edit_notification_defaults' => '',
-                'edit_allow_notificaton_settings' => 0,
-                'publish_notification_defaults' => '',
-                'publish_allow_notificaton_settings' => 0,
                 'db_mountpoints' => '', // Inherit from user
                 'file_mountpoints' => '', // Inherit from user
+                'publish_access' => 1, // Allow publishing
+                'stagechg_notification' => 0, // No email notifications by default
                 'freeze' => 0, // Not frozen
                 'live_edit' => 0, // No live edit
-                'vtypes' => 0, // Version types
-                'disable_autocreate' => 0, // Allow auto-creation of versions
-                'swap_modes' => 1, // Allow swapping
                 'publish_time' => 0, // No scheduled publishing
-                'unpublish_time' => 0, // No scheduled unpublishing
             ];
             
             // Use DataHandler to create the workspace

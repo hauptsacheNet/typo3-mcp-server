@@ -7,6 +7,8 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\SearchTool;
 use Hn\McpServer\MCP\ToolRegistry;
 use Mcp\Types\TextContent;
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 class SearchToolTest extends FunctionalTestCase
@@ -370,27 +372,128 @@ class SearchToolTest extends FunctionalTestCase
     }
 
     /**
-     * Test special character handling
+     * Test special character handling and SQL injection protection
      */
     public function testSpecialCharacterSearch(): void
     {
         $tool = new SearchTool();
         
-        // Search with special characters that need escaping
+        // Create test data with special characters
+        $this->createPage(['title' => 'Page with 100% success rate', 'pid' => 0]);
+        $this->createPage(['title' => 'Team_Building Activities', 'pid' => 0]);
+        $this->createPage(['title' => "Page with 'quotes' and \"double quotes\"", 'pid' => 0]);
+        $this->createPage(['title' => 'Special © Characters™ Page', 'pid' => 0]);
+        
+        // Test 1: Search with SQL wildcard characters (should be escaped)
         $result = $tool->execute([
-            'terms' => ['team%']
+            'terms' => ['100%']
+        ]);
+        
+        $this->assertFalse($result->isError, 'Search with % should not cause error');
+        $content = $result->content[0]->text;
+        
+        // Should find exact match, not wildcard
+        $this->assertStringContainsString('100% success', $content);
+        // Should NOT find all records (% not treated as wildcard)
+        $this->assertStringNotContainsString('Team_Building', $content);
+        
+        // Test 2: Search with underscore (SQL single-char wildcard)
+        $result = $tool->execute([
+            'terms' => ['Team_Building']
         ]);
         
         $this->assertFalse($result->isError);
-        // Should handle wildcards properly and not break
+        $content = $result->content[0]->text;
         
-        // Test SQL-like patterns
+        // Should find exact match only
+        $this->assertStringContainsString('Team_Building Activities', $content);
+        // Should NOT find "Team Building" (without underscore) as wildcard match
+        
+        // Test 3: SQL injection attempt with quotes
         $result = $tool->execute([
-            'terms' => ['_eam']
+            'terms' => ["'; DROP TABLE pages; --"]
+        ]);
+        
+        $this->assertFalse($result->isError, 'SQL injection attempt should be safely handled');
+        
+        // Verify table still exists after injection attempt
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        
+        $recordCount = $queryBuilder->count('uid')
+            ->from('pages')
+            ->executeQuery()
+            ->fetchOne();
+        
+        $this->assertGreaterThan(0, $recordCount, 'Pages table should still exist and have records after SQL injection attempt');
+        
+        // Test 4: Search for content with quotes
+        $result = $tool->execute([
+            'terms' => ["'quotes'"]
         ]);
         
         $this->assertFalse($result->isError);
-        // Should escape properly
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString("Page with 'quotes'", $content);
+        
+        // Test 5: Special unicode characters
+        $result = $tool->execute([
+            'terms' => ['©']
+        ]);
+        
+        $this->assertFalse($result->isError);
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString('Special © Characters™', $content);
+        
+        // Test 6: Backslash escaping
+        $result = $tool->execute([
+            'terms' => ['\\test\\']
+        ]);
+        
+        $this->assertFalse($result->isError, 'Backslashes should be handled safely');
+        
+        // Test 7: NULL byte injection
+        $result = $tool->execute([
+            'terms' => ["test\0injection"]
+        ]);
+        
+        $this->assertFalse($result->isError, 'NULL bytes should be handled safely');
+    }
+    
+    /**
+     * Helper method to create a page for testing
+     */
+    private function createPage(array $data): int
+    {
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        
+        $data = array_merge([
+            'uid' => $data['uid'] ?? null,
+            'pid' => $data['pid'] ?? 0,
+            'title' => $data['title'] ?? 'Test Page',
+            'deleted' => 0,
+            'hidden' => $data['hidden'] ?? 0,
+            'doktype' => 1,
+            'slug' => '/test-' . uniqid(),
+            'tstamp' => time(),
+            'crdate' => time()
+        ], $data);
+        
+        if (isset($data['uid'])) {
+            $uid = $data['uid'];
+            unset($data['uid']);
+            $queryBuilder->insert('pages')
+                ->values($data)
+                ->set('uid', $uid)
+                ->executeStatement();
+            return $uid;
+        } else {
+            $queryBuilder->insert('pages')
+                ->values($data)
+                ->executeStatement();
+            return (int)$queryBuilder->getConnection()->lastInsertId();
+        }
     }
 
     /**
@@ -511,6 +614,7 @@ class SearchToolTest extends FunctionalTestCase
         $this->assertStringContainsString('TABLE: Page Content (tt_content)', $content);
         $this->assertStringContainsString('[UID: 105] Contact Form', $content);
     }
+    
 
     /**
      * Test termLogic parameter validation

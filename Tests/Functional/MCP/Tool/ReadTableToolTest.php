@@ -5,31 +5,24 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
+use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
+use Hn\McpServer\Tests\Functional\Fixtures\TestDataBuilder;
+use Hn\McpServer\Tests\Functional\Traits\McpAssertionsTrait;
 use Mcp\Types\TextContent;
-use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
-class ReadTableToolTest extends FunctionalTestCase
+class ReadTableToolTest extends AbstractFunctionalTest
 {
-    protected array $coreExtensionsToLoad = [
-        'workspaces',
-        'frontend',
-    ];
+    use McpAssertionsTrait;
     
-    protected array $testExtensionsToLoad = [
-        'mcp_server',
-    ];
-
+    private ReadTableTool $tool;
+    private TestDataBuilder $data;
+    
     protected function setUp(): void
     {
         parent::setUp();
         
-        // Import enhanced page and content fixtures
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
-        
-        // Set up backend user for DataHandler and TableAccessService
-        $this->setUpBackendUser(1);
+        $this->tool = new ReadTableTool();
+        $this->data = new TestDataBuilder();
     }
 
     /**
@@ -37,22 +30,16 @@ class ReadTableToolTest extends FunctionalTestCase
      */
     public function testReadRecordsByPid(): void
     {
-        $tool = new ReadTableTool();
-        
         // Read content elements from page 1 (Home)
-        $result = $tool->execute([
+        $result = $this->tool->execute([
             'table' => 'tt_content',
             'pid' => 1,
             'includeRelations' => false
         ]);
         
-        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
-        $this->assertCount(1, $result->content);
-        $this->assertInstanceOf(TextContent::class, $result->content[0]);
+        $this->assertSuccessfulToolResult($result);
+        $data = $this->extractJsonFromResult($result);
         
-        // Parse JSON result
-        $data = json_decode($result->content[0]->text, true);
-        $this->assertIsArray($data);
         $this->assertEquals('tt_content', $data['table']);
         $this->assertArrayHasKey('records', $data);
         
@@ -61,9 +48,7 @@ class ReadTableToolTest extends FunctionalTestCase
         
         // Verify record structure
         $firstRecord = $data['records'][0];
-        $this->assertArrayHasKey('uid', $firstRecord);
-        $this->assertArrayHasKey('header', $firstRecord);
-        $this->assertArrayHasKey('CType', $firstRecord);
+        $this->assertHasEssentialFields($firstRecord, ['header', 'CType']);
         
         // Verify specific content - now includes hidden records
         $uids = array_column($data['records'], 'uid');
@@ -77,25 +62,25 @@ class ReadTableToolTest extends FunctionalTestCase
      */
     public function testReadSingleRecordByUid(): void
     {
-        $tool = new ReadTableTool();
-        
-        $result = $tool->execute([
+        $result = $this->tool->execute([
             'table' => 'tt_content',
             'uid' => 100,
             'includeRelations' => false
         ]);
         
-        $this->assertFalse($result->isError);
-        $data = json_decode($result->content[0]->text, true);
+        $this->assertSuccessfulToolResult($result);
+        $data = $this->extractJsonFromResult($result);
         
         // Should have exactly one record
         $this->assertCount(1, $data['records']);
         
-        $record = $data['records'][0];
-        $this->assertEquals(100, $record['uid']);
-        $this->assertEquals('Welcome Header', $record['header']);
-        $this->assertEquals('textmedia', $record['CType']);
-        $this->assertEquals(1, $record['pid']);
+        $expected = [
+            'uid' => 100,
+            'header' => 'Welcome Header',
+            'CType' => 'textmedia',
+            'pid' => 1
+        ];
+        $this->assertRecordEquals($expected, $data['records'][0]);
     }
 
     /**
@@ -103,16 +88,14 @@ class ReadTableToolTest extends FunctionalTestCase
      */
     public function testReadPagesTable(): void
     {
-        $tool = new ReadTableTool();
-        
-        $result = $tool->execute([
+        $result = $this->tool->execute([
             'table' => 'pages',
             'pid' => 0, // Root level pages
             'includeRelations' => false
         ]);
         
-        $this->assertFalse($result->isError);
-        $data = json_decode($result->content[0]->text, true);
+        $this->assertSuccessfulToolResult($result);
+        $data = $this->extractJsonFromResult($result);
         
         $this->assertEquals('pages', $data['table']);
         $this->assertGreaterThan(0, count($data['records']));
@@ -134,23 +117,18 @@ class ReadTableToolTest extends FunctionalTestCase
      */
     public function testReadWithPagination(): void
     {
-        $tool = new ReadTableTool();
-        
         // Test with limit
-        $result = $tool->execute([
+        $result = $this->tool->execute([
             'table' => 'pages',
             'limit' => 2,
             'includeRelations' => false
         ]);
         
-        $this->assertFalse($result->isError);
-        $data = json_decode($result->content[0]->text, true);
+        $this->assertSuccessfulToolResult($result);
+        $data = $this->extractJsonFromResult($result);
         
         $this->assertLessThanOrEqual(2, count($data['records']));
-        $this->assertEquals(2, $data['limit']);
-        $this->assertEquals(0, $data['offset']);
-        $this->assertArrayHasKey('hasMore', $data);
-        $this->assertArrayHasKey('total', $data);
+        $this->assertHasPagination($result, 2, 0);
     }
 
     /**
@@ -158,20 +136,15 @@ class ReadTableToolTest extends FunctionalTestCase
      */
     public function testReadWithOffset(): void
     {
-        $tool = new ReadTableTool();
-        
-        $result = $tool->execute([
+        $result = $this->tool->execute([
             'table' => 'pages',
             'limit' => 1,
             'offset' => 1,
             'includeRelations' => false
         ]);
         
-        $this->assertFalse($result->isError);
-        $data = json_decode($result->content[0]->text, true);
-        
-        $this->assertEquals(1, $data['limit']);
-        $this->assertEquals(1, $data['offset']);
+        $this->assertSuccessfulToolResult($result);
+        $this->assertHasPagination($result, 1, 1);
     }
 
     /**
@@ -179,16 +152,14 @@ class ReadTableToolTest extends FunctionalTestCase
      */
     public function testDateFieldConversion(): void
     {
-        $tool = new ReadTableTool();
-        
-        $result = $tool->execute([
+        $result = $this->tool->execute([
             'table' => 'pages',
             'uid' => 1,
             'includeRelations' => false
         ]);
         
-        $this->assertFalse($result->isError);
-        $data = json_decode($result->content[0]->text, true);
+        $this->assertSuccessfulToolResult($result);
+        $data = $this->extractJsonFromResult($result);
         
         $record = $data['records'][0];
         
@@ -197,12 +168,8 @@ class ReadTableToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('crdate', $record);
         
         // Should be ISO 8601 format strings, not timestamps
-        if ($record['tstamp'] !== null) {
-            $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', (string)$record['tstamp']);
-        }
-        if ($record['crdate'] !== null) {
-            $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', (string)$record['crdate']);
-        }
+        $this->assertDateFormat($record['tstamp'], 'tstamp');
+        $this->assertDateFormat($record['crdate'], 'crdate');
     }
 
     /**
@@ -210,14 +177,11 @@ class ReadTableToolTest extends FunctionalTestCase
      */
     public function testReadFromInvalidTable(): void
     {
-        $tool = new ReadTableTool();
-        
-        $result = $tool->execute([
+        $result = $this->tool->execute([
             'table' => 'non_existent_table'
         ]);
         
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('does not exist in TCA', $result->content[0]->text);
+        $this->assertToolError($result, 'does not exist in TCA');
     }
 
     /**
@@ -225,12 +189,9 @@ class ReadTableToolTest extends FunctionalTestCase
      */
     public function testMissingTableParameter(): void
     {
-        $tool = new ReadTableTool();
+        $result = $this->tool->execute([]);
         
-        $result = $tool->execute([]);
-        
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Table name is required', $result->content[0]->text);
+        $this->assertToolError($result, 'Table name is required');
     }
 
     /**

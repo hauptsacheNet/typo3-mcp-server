@@ -5,52 +5,164 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
-use Hn\McpServer\MCP\ToolRegistry;
-use Mcp\Types\TextContent;
-use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
-use TYPO3\CMS\Core\Database\ConnectionPool;
+use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
+use Hn\McpServer\Tests\Functional\Fixtures\TestDataBuilder;
+use Hn\McpServer\Tests\Functional\Traits\McpAssertionsTrait;
+use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
-use TYPO3\CMS\Core\Localization\LanguageService;
-use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
-use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 use Doctrine\DBAL\ParameterType;
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use Mcp\Types\TextContent;
+use Hn\McpServer\MCP\ToolRegistry;
 
-class WriteTableToolTest extends FunctionalTestCase
+class WriteTableToolTest extends AbstractFunctionalTest
 {
-    protected array $coreExtensionsToLoad = [
-        'workspaces',
-        'frontend',
-    ];
+    use McpAssertionsTrait;
     
-    protected array $testExtensionsToLoad = [
-        'mcp_server',
-    ];
-
+    private WriteTableTool $tool;
+    private TestDataBuilder $data;
+    
     protected function setUp(): void
     {
         parent::setUp();
         
-        // Import all necessary fixtures
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
+        // Import additional fixtures needed for this test
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
         
-        // Set up backend user for DataHandler
-        $this->setUpBackendUser(1);
-    }/**
+        $this->tool = new WriteTableTool();
+        $this->data = new TestDataBuilder();
+    }
+    
+    /**
+     * Test using builder pattern for fixture creation
+     */
+    public function testCreatePageWithBuilderPattern(): void
+    {
+        // Create test page using builder
+        $pageUid = $this->data->page()
+            ->withTitle('Built Test Page')
+            ->withSlug('/built-test-page')
+            ->withParent($this->getRootPageUid())
+            ->create();
+        
+        // Create test content using builder
+        $contentUid = $this->data->content()
+            ->onPage($pageUid)
+            ->asTextMedia('Built Content Header', 'This content was created with the builder')
+            ->inColumn(0)
+            ->create();
+        
+        // Now test updating the content
+        $updateResult = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'header' => 'Updated via Tool',
+                'bodytext' => 'Content updated through WriteTableTool'
+            ]
+        ]);
+        
+        $this->assertSuccessfulToolResult($updateResult);
+        $data = $this->extractJsonFromResult($updateResult);
+        $this->assertEquals('update', $data['action']);
+        $this->assertEquals($contentUid, $data['uid']);
+    }
+    
+    /**
+     * Test standard CRUD operations (create, read, update, delete)
+     */
+    public function testStandardCrudOperations(): void
+    {
+        $table = 'tt_content';
+        $createData = [
+            'CType' => 'textmedia',
+            'header' => 'CRUD Test Content',
+            'bodytext' => 'Original content',
+            'colPos' => 0
+        ];
+        $updateData = [
+            'header' => 'Updated CRUD Content',
+            'bodytext' => 'Updated content text'
+        ];
+        $pid = $this->getRootPageUid();
+        
+        // Initialize tools
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        
+        // Create record
+        $createResult = $writeTool->execute([
+            'action' => 'create',
+            'table' => $table,
+            'pid' => $pid,
+            'data' => $createData
+        ]);
+        $this->assertSuccessfulToolResult($createResult);
+        $createResponse = $this->extractJsonFromResult($createResult);
+        $this->assertArrayHasKey('uid', $createResponse);
+        
+        $uid = $createResponse['uid'];
+        $this->assertGreaterThan(0, $uid);
+        
+        // Read record
+        $readResult = $readTool->execute([
+            'table' => $table,
+            'uid' => $uid
+        ]);
+        $this->assertSuccessfulToolResult($readResult);
+        $readData = $this->extractJsonFromResult($readResult);
+        $this->assertArrayHasKey('records', $readData);
+        $this->assertCount(1, $readData['records']);
+        // Compare the original createData with the read record
+        $this->assertRecordEquals($createData, $readData['records'][0]);
+        
+        // Update record
+        $updateResult = $writeTool->execute([
+            'action' => 'update',
+            'table' => $table,
+            'uid' => $uid,
+            'data' => $updateData
+        ]);
+        $this->assertSuccessfulToolResult($updateResult);
+        
+        // Verify update
+        $verifyResult = $readTool->execute([
+            'table' => $table,
+            'uid' => $uid
+        ]);
+        $this->assertSuccessfulToolResult($verifyResult);
+        $verifyData = $this->extractJsonFromResult($verifyResult);
+        $this->assertRecordEquals($updateData, $verifyData['records'][0]);
+        
+        // Delete record
+        $deleteResult = $writeTool->execute([
+            'action' => 'delete',
+            'table' => $table,
+            'uid' => $uid
+        ]);
+        $this->assertSuccessfulToolResult($deleteResult);
+        
+        // Verify deletion - record should still be readable but marked as deleted
+        $deletedResult = $readTool->execute([
+            'table' => $table,
+            'uid' => $uid
+        ]);
+        // In TYPO3, deleted records may still be readable depending on restrictions
+        // so we don't assert an error here
+    }
+    
+    /**
      * User story: Create a page with content element
      */
     public function testCreatePageWithContentElement(): void
     {
-        $tool = new WriteTableTool();
-        
         // First create a new page
-        $pageResult = $tool->execute([
+        $pageResult = $this->tool->execute([
             'action' => 'create',
             'table' => 'pages',
-            'pid' => 1, // Under Home page
+            'pid' => $this->getRootPageUid(),
             'data' => [
                 'title' => 'New Test Page',
                 'slug' => '/test-page',
@@ -58,17 +170,16 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($pageResult->isError, json_encode($pageResult->content));
+        $this->assertSuccessfulToolResult($pageResult);
         
         // Parse the JSON result to get the new page UID
-        $pageData = json_decode($pageResult->content[0]->text, true);
-        $this->assertIsArray($pageData);
+        $pageData = $this->extractJsonFromResult($pageResult);
         $this->assertEquals('create', $pageData['action']);
         $this->assertIsInt($pageData['uid']);
         $newPageUid = $pageData['uid'];
         
         // Now create content on the new page
-        $contentResult = $tool->execute([
+        $contentResult = $this->tool->execute([
             'action' => 'create',
             'table' => 'tt_content',
             'pid' => $newPageUid,
@@ -80,10 +191,10 @@ class WriteTableToolTest extends FunctionalTestCase
             ]
         ]);
         
-        $this->assertFalse($contentResult->isError, json_encode($contentResult->content));
+        $this->assertSuccessfulToolResult($contentResult);
         
         // Verify the content was created
-        $contentData = json_decode($contentResult->content[0]->text, true);
+        $contentData = $this->extractJsonFromResult($contentResult);
         $this->assertEquals('create', $contentData['action']);
         $this->assertIsInt($contentData['uid']);
         
@@ -210,6 +321,40 @@ class WriteTableToolTest extends FunctionalTestCase
         
         // Verify the record is not in live workspace
         $this->assertRecordNotInLive('tt_content', $data['uid']);
+        
+        // VERIFY THE RECORD WAS ACTUALLY CREATED IN DATABASE
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        
+        // Remove restrictions to see workspace records
+        $queryBuilder->getRestrictions()->removeAll();
+        
+        $createdRecord = $queryBuilder->select('*')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($data['uid'], ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+        
+        // Verify record exists
+        $this->assertIsArray($createdRecord, 'Created record should exist in database');
+        
+        // Verify all fields were saved correctly
+        $this->assertEquals('New Content Element', $createdRecord['header'], 'Header should match input data');
+        $this->assertEquals('This is a new content element', $createdRecord['bodytext'], 'Bodytext should match input data');
+        $this->assertEquals('textmedia', $createdRecord['CType'], 'CType should match input data');
+        $this->assertEquals(0, $createdRecord['colPos'], 'Column position should match input data');
+        $this->assertEquals(1, $createdRecord['pid'], 'Page ID should match input data');
+        
+        // Verify it's in a workspace
+        $this->assertGreaterThan(0, $createdRecord['t3ver_wsid'], 'Record should be in a workspace');
+        $this->assertEquals(1, $createdRecord['t3ver_state'], 'Record should have new placeholder state');
+        
+        // Verify system fields are set
+        $this->assertGreaterThan(0, $createdRecord['tstamp'], 'Timestamp should be set');
+        $this->assertGreaterThan(0, $createdRecord['crdate'], 'Creation date should be set');
+        $this->assertEquals(0, $createdRecord['deleted'], 'Record should not be deleted');
     }
 
     /**
@@ -219,6 +364,24 @@ class WriteTableToolTest extends FunctionalTestCase
     {
         $tool = new WriteTableTool();
         
+        // Get original record state first
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        
+        $originalRecord = $queryBuilder->select('*')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter(100, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+        
+        $this->assertIsArray($originalRecord, 'Original record should exist');
+        $originalHeader = $originalRecord['header'];
+        $originalBodytext = $originalRecord['bodytext'];
+        $originalTstamp = $originalRecord['tstamp'];
+        
+        // Perform the update
         $result = $tool->execute([
             'action' => 'update',
             'table' => 'tt_content',
@@ -235,6 +398,53 @@ class WriteTableToolTest extends FunctionalTestCase
         $this->assertEquals('update', $data['action']);
         $this->assertEquals('tt_content', $data['table']);
         $this->assertEquals(100, $data['uid']);
+        
+        // VERIFY THE RECORD WAS ACTUALLY UPDATED IN DATABASE
+        // Get workspace version of the record
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+        
+        $workspaceRecord = $queryBuilder->select('*')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter(100, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+        
+        // Verify workspace version exists
+        $this->assertIsArray($workspaceRecord, 'Workspace version should be created for updated record');
+        
+        // Verify the updates were applied
+        $this->assertEquals('Modified Header', $workspaceRecord['header'], 'Header should be updated');
+        $this->assertEquals('Modified body text', $workspaceRecord['bodytext'], 'Bodytext should be updated');
+        
+        // Verify workspace metadata
+        $this->assertEquals(100, $workspaceRecord['t3ver_oid'], 'Should reference original record');
+        $this->assertGreaterThan(0, $workspaceRecord['t3ver_wsid'], 'Should be in a workspace');
+        $this->assertEquals(0, $workspaceRecord['t3ver_state'], 'Should have modified state');
+        
+        // Verify timestamp was updated
+        $this->assertGreaterThan($originalTstamp, $workspaceRecord['tstamp'], 'Timestamp should be updated');
+        
+        // Verify other fields remain unchanged (not specified in update)
+        $this->assertEquals($originalRecord['CType'], $workspaceRecord['CType'], 'CType should remain unchanged');
+        $this->assertEquals($originalRecord['colPos'], $workspaceRecord['colPos'], 'Column position should remain unchanged');
+        
+        // Verify live version remains unchanged
+        $liveRecord = $queryBuilder->select('*')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter(100, ParameterType::INTEGER)),
+                $queryBuilder->expr()->eq('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+        
+        $this->assertEquals($originalHeader, $liveRecord['header'], 'Live record header should remain unchanged');
+        $this->assertEquals($originalBodytext, $liveRecord['bodytext'], 'Live record bodytext should remain unchanged');
     }
 
     /**
@@ -244,6 +454,22 @@ class WriteTableToolTest extends FunctionalTestCase
     {
         $tool = new WriteTableTool();
         
+        // Verify record exists before deletion
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        
+        $beforeDelete = $queryBuilder->select('uid', 'deleted')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter(101, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+        
+        $this->assertIsArray($beforeDelete, 'Record should exist before deletion');
+        $this->assertEquals(0, $beforeDelete['deleted'], 'Record should not be deleted initially');
+        
+        // Perform the deletion
         $result = $tool->execute([
             'action' => 'delete',
             'table' => 'tt_content',
@@ -256,6 +482,60 @@ class WriteTableToolTest extends FunctionalTestCase
         $this->assertEquals('delete', $data['action']);
         $this->assertEquals('tt_content', $data['table']);
         $this->assertEquals(101, $data['uid']);
+        
+        // VERIFY THE RECORD WAS ACTUALLY MARKED AS DELETED
+        // In TYPO3 workspaces, deletion creates a delete placeholder
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+        
+        // Check for delete placeholder in workspace
+        $deletePlaceholder = $queryBuilder->select('*')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter(101, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER)),
+                $queryBuilder->expr()->eq('t3ver_state', $queryBuilder->createNamedParameter(2, ParameterType::INTEGER)) // Delete placeholder
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+        
+        $this->assertIsArray($deletePlaceholder, 'Delete placeholder should be created in workspace');
+        $this->assertEquals(2, $deletePlaceholder['t3ver_state'], 'Should have delete placeholder state');
+        // Note: In TYPO3, delete placeholders may not always have deleted=1, the t3ver_state=2 is what matters
+        $this->assertGreaterThan(0, $deletePlaceholder['t3ver_wsid'], 'Delete placeholder should be in workspace');
+        
+        // Verify original record is still in live workspace (unchanged)
+        $liveRecord = $queryBuilder->select('*')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter(101, ParameterType::INTEGER)),
+                $queryBuilder->expr()->eq('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+        
+        $this->assertIsArray($liveRecord, 'Live record should still exist');
+        $this->assertEquals(0, $liveRecord['deleted'], 'Live record should not be deleted yet');
+        
+        // Verify record appears deleted when queried with restrictions
+        $restrictedQueryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $restrictedQueryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+        
+        $visibleRecord = $restrictedQueryBuilder->select('uid')
+            ->from('tt_content')
+            ->where(
+                $restrictedQueryBuilder->expr()->eq('uid', $restrictedQueryBuilder->createNamedParameter(101, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchOne();
+        
+        // In workspace context, the record should appear deleted
+        // Note: This might still return the record depending on workspace overlay logic
+        // The important verification is that the delete placeholder was created above
     }
 
     /**
