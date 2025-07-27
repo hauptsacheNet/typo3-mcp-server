@@ -76,7 +76,8 @@ class SystemErrorTest extends AbstractFunctionalTest
                     str_contains($errorText, 'configuration') || 
                     str_contains($errorText, 'tca') ||
                     str_contains($errorText, 'type') ||
-                    str_contains($errorText, 'array'),
+                    str_contains($errorText, 'array') ||
+                    str_contains($errorText, 'unexpected error occurred'), // New generic error message
                     "Expected configuration error, got: $errorText"
                 );
             } else {

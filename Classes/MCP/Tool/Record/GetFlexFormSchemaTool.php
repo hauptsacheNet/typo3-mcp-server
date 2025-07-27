@@ -54,12 +54,10 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
     }
 
     /**
-     * Execute the tool
+     * Execute the tool logic
      */
-    public function execute(array $params): CallToolResult
+    protected function doExecute(array $params): CallToolResult
     {
-        // Initialize workspace context
-        $this->initializeWorkspaceContext();
         
         // Get parameters
         $table = $params['table'] ?? 'tt_content';
@@ -68,24 +66,20 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
 
         // Validate parameters
         if (empty($identifier)) {
-            return $this->createErrorResult('Identifier parameter is required');
+            throw new \InvalidArgumentException('Identifier parameter is required');
         }
 
         // Validate table access using TableAccessService
-        try {
-            $this->ensureTableAccess($table, 'read');
-        } catch (\InvalidArgumentException $e) {
-            return $this->createErrorResult($e->getMessage());
-        }
+        $this->ensureTableAccess($table, 'read');
 
         // Check if the table and field exist
         if (!isset($GLOBALS['TCA'][$table]['columns'][$field])) {
-            return $this->createErrorResult("Field '$field' not found in table '$table'");
+            throw new \InvalidArgumentException("Field '$field' not found in table '$table'");
         }
 
         // Check if the field is a FlexForm field
         if ($GLOBALS['TCA'][$table]['columns'][$field]['config']['type'] !== 'flex') {
-            return $this->createErrorResult("Field '$field' in table '$table' is not a FlexForm field");
+            throw new \InvalidArgumentException("Field '$field' in table '$table' is not a FlexForm field");
         }
 
         // Get the FlexForm configuration
@@ -123,13 +117,13 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                             $result = $this->formatFlexFormSchema($processedData, $header . $prefix);
                             return $this->createSuccessResult($result);
                         } else {
-                            return $this->createErrorResult("Failed to parse XML schema from file: $file");
+                            throw new \RuntimeException("Failed to parse XML schema from file: $file");
                         }
                     } else {
-                        return $this->createErrorResult("FlexForm file is empty: $file");
+                        throw new \RuntimeException("FlexForm file is empty: $file");
                     }
                 } else {
-                    return $this->createErrorResult("FlexForm file not found: $file");
+                    throw new \RuntimeException("FlexForm file not found: $file");
                 }
             } elseif (is_string($dsValue)) {
                 $prefix = "Schema defined inline as XML\n\n";
@@ -142,7 +136,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                     $result = $this->formatFlexFormSchema($processedData, $header . $prefix);
                     return $this->createSuccessResult($result);
                 } else {
-                    return $this->createErrorResult("Failed to parse inline XML schema");
+                    throw new \RuntimeException("Failed to parse inline XML schema");
                 }
             } elseif (is_array($dsValue)) {
                 // PHP array format - process directly
@@ -156,7 +150,7 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
         }
 
         // If we get here, the identifier was not found
-        return $this->createErrorResult("FlexForm schema not found for identifier: $identifier");
+        throw new \InvalidArgumentException("FlexForm schema not found for identifier: $identifier");
     }
 
     /**

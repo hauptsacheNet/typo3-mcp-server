@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Exception\DatabaseException;
+use Hn\McpServer\Exception\ValidationException;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
@@ -98,14 +100,21 @@ class ReadTableTool extends AbstractRecordTool
     }
     
     /**
-     * Execute the tool
+     * Execute the tool logic
      */
-    public function execute(array $params): CallToolResult
+    protected function doExecute(array $params): CallToolResult
     {
-        // Initialize workspace context
-        $this->initializeWorkspaceContext();
         
+        // Validate table access
         $table = $params['table'] ?? '';
+        if (empty($table)) {
+            throw new ValidationException(['Table name is required']);
+        }
+        
+        $this->ensureTableAccess($table, 'read');
+        
+        // Execute main logic
+            // Extract and validate parameters
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
         $condition = $params['where'] ?? '';
@@ -113,52 +122,45 @@ class ReadTableTool extends AbstractRecordTool
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
         $language = $params['language'] ?? null;
         $includeTranslationSource = $params['includeTranslationSource'] ?? false;
-
-        if (empty($table)) {
-            return $this->createErrorResult('Table name is required');
+        
+        // Validate parameters
+        if ($limit < 1 || $limit > 1000) {
+            throw new ValidationException(['Limit must be between 1 and 1000']);
         }
-
-        // Validate table access using TableAccessService
-        try {
-            $this->ensureTableAccess($table, 'read');
-        } catch (\InvalidArgumentException $e) {
-            return $this->createErrorResult($e->getMessage());
+        if ($offset < 0) {
+            throw new ValidationException(['Offset must be non-negative']);
         }
-
-        try {
-            // Convert language ISO code to UID if provided
-            $languageUid = null;
-            if ($language !== null) {
-                $languageUid = $this->languageService->getUidFromIsoCode($language);
-                if ($languageUid === null) {
-                    return $this->createErrorResult("Unknown language code: {$language}");
-                }
+        
+        // Convert language ISO code to UID if provided
+        $languageUid = null;
+        if ($language !== null) {
+            $languageUid = $this->languageService->getUidFromIsoCode($language);
+            if ($languageUid === null) {
+                throw new ValidationException(["Unknown language code: {$language}"]);
             }
-            
-            // Get records from the table
-            $result = $this->getRecords(
-                $table,
-                $pid,
-                $uid,
-                $condition,
-                $limit,
-                $offset,
-                $languageUid
-            );
-
-            // Include related records
-            $result = $this->includeRelations($result, $table);
-            
-            // Include translation metadata if requested
-            if ($includeTranslationSource && $languageUid !== null && $languageUid > 0) {
-                $result['translationSource'] = $this->getTranslationSourceData($result['records'], $table);
-            }
-
-            // Return the result as JSON
-            return $this->createJsonResult($result);
-        } catch (\Throwable $e) {
-            return $this->createErrorResult('Error reading records: ' . $e->getMessage());
         }
+        
+        // Get records from the table
+        $result = $this->getRecords(
+            $table,
+            $pid,
+            $uid,
+            $condition,
+            $limit,
+            $offset,
+            $languageUid
+        );
+        
+        // Include related records
+        $result = $this->includeRelations($result, $table);
+        
+        // Include translation metadata if requested
+        if ($includeTranslationSource && $languageUid !== null && $languageUid > 0) {
+            $result['translationSource'] = $this->getTranslationSourceData($result['records'], $table);
+        }
+        
+        // Return the result as JSON
+        return $this->createJsonResult($result);
     }
 
     /**
@@ -315,10 +317,18 @@ class ReadTableTool extends AbstractRecordTool
             $countQueryBuilder->andWhere($condition);
         }
         
-        $totalCount = $countQueryBuilder->executeQuery()->fetchOne();
+        try {
+            $totalCount = $countQueryBuilder->executeQuery()->fetchOne();
+        } catch (\Doctrine\DBAL\Exception $e) {
+            throw new DatabaseException('count', $table, $e);
+        }
 
         // Execute the query
-        $records = $queryBuilder->executeQuery()->fetchAllAssociative();
+        try {
+            $records = $queryBuilder->executeQuery()->fetchAllAssociative();
+        } catch (\Doctrine\DBAL\Exception $e) {
+            throw new DatabaseException('select', $table, $e);
+        }
 
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
@@ -512,7 +522,8 @@ class ReadTableTool extends AbstractRecordTool
                 
                 return $result;
             } catch (\Exception $e) {
-                // If parsing fails, return an empty array
+                // Log the error but continue with empty result
+                $this->logException($e, 'parsing flexform XML');
                 return [];
             }
         }

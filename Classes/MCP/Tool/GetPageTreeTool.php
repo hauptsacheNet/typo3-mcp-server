@@ -78,12 +78,10 @@ class GetPageTreeTool extends AbstractRecordTool
     }
 
     /**
-     * Execute the tool
+     * Execute the tool logic
      */
-    public function execute(array $params): CallToolResult
+    protected function doExecute(array $params): CallToolResult
     {
-        // Initialize workspace context
-        $this->initializeWorkspaceContext();
         
         $startPage = (int)($params['startPage'] ?? 0);
         $depth = (int)($params['depth'] ?? 3);
@@ -93,10 +91,7 @@ class GetPageTreeTool extends AbstractRecordTool
         if (isset($params['language'])) {
             $languageUid = $this->languageService->getUidFromIsoCode($params['language']);
             if ($languageUid === null) {
-                return new CallToolResult(
-                    [new TextContent('Unknown language code: ' . $params['language'])],
-                    true // isError
-                );
+                throw new \InvalidArgumentException('Unknown language code: ' . $params['language']);
             }
         }
 

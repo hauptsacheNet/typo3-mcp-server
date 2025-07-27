@@ -96,12 +96,10 @@ class GetPageTool extends AbstractRecordTool
     }
 
     /**
-     * Execute the tool
+     * Execute the tool logic
      */
-    public function execute(array $params): CallToolResult
+    protected function doExecute(array $params): CallToolResult
     {
-        // Initialize workspace context
-        $this->initializeWorkspaceContext();
         
         // Handle language parameter
         $languageId = 0;
@@ -109,10 +107,7 @@ class GetPageTool extends AbstractRecordTool
             // Convert ISO code to language UID
             $languageId = $this->languageService->getUidFromIsoCode($params['language']);
             if ($languageId === null) {
-                return new CallToolResult(
-                    [new TextContent('Unknown language code: ' . $params['language'])],
-                    true // isError
-                );
+                throw new \InvalidArgumentException('Unknown language code: ' . $params['language']);
             }
         } elseif (isset($params['languageId'])) {
             // Backward compatibility with numeric languageId
@@ -127,43 +122,31 @@ class GetPageTool extends AbstractRecordTool
             try {
                 $uid = $this->resolveUrlToPageUid($params['url'], $languageId);
             } catch (\Throwable $e) {
-                return new CallToolResult(
-                    [new TextContent('Could not resolve URL to page: ' . $e->getMessage())],
-                    true // isError
-                );
+                // Re-throw as InvalidArgumentException to preserve the message in error handling
+                throw new \InvalidArgumentException($e->getMessage(), 0, $e);
             }
         }
 
         if ($uid <= 0) {
-            return new CallToolResult(
-                [new TextContent('Invalid page UID or URL. Please provide a valid page ID or URL.')],
-                true // isError
-            );
+            throw new \InvalidArgumentException('Invalid page UID or URL. Please provide a valid page ID or URL.');
         }
 
-        try {
-            // Get page data (with language overlay if applicable)
-            $pageData = $this->getPageData($uid, $languageId);
-            
-            // Get page URL using SiteInformationService
-            $pageUrl = $this->siteInformationService->generatePageUrl((int)$pageData['uid'], $languageId);
-            
-            // Get records on this page (filtered by language if specified)
-            $recordsInfo = $this->getPageRecords($uid, $languageId);
-            
-            // Get available translations for this page
-            $translations = $this->getPageTranslations($uid);
-            
-            // Build a text representation of the page information
-            $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl, $languageId, $translations);
-            
-            return new CallToolResult([new TextContent($result)]);
-        } catch (\Throwable $e) {
-            return new CallToolResult(
-                [new TextContent('Error retrieving page information: ' . $e->getMessage())],
-                true // isError
-            );
-        }
+        // Get page data (with language overlay if applicable)
+        $pageData = $this->getPageData($uid, $languageId);
+        
+        // Get page URL using SiteInformationService
+        $pageUrl = $this->siteInformationService->generatePageUrl((int)$pageData['uid'], $languageId);
+        
+        // Get records on this page (filtered by language if specified)
+        $recordsInfo = $this->getPageRecords($uid, $languageId);
+        
+        // Get available translations for this page
+        $translations = $this->getPageTranslations($uid);
+        
+        // Build a text representation of the page information
+        $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl, $languageId, $translations);
+        
+        return new CallToolResult([new TextContent($result)]);
     }
 
     /**

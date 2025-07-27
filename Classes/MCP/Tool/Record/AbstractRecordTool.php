@@ -5,19 +5,18 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Hn\McpServer\MCP\Tool\AbstractTool;
-use Hn\McpServer\MCP\Tool\ToolInterface;
 use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
-use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * Abstract base class for record-related MCP tools
  */
-abstract class AbstractRecordTool extends AbstractTool implements ToolInterface
+abstract class AbstractRecordTool extends AbstractTool
 {
+    
     protected TableAccessService $tableAccessService;
     protected WorkspaceContextService $workspaceContextService;
     
@@ -28,10 +27,15 @@ abstract class AbstractRecordTool extends AbstractTool implements ToolInterface
     }
     
     /**
-     * Initialize workspace context for the current operation
+     * Initialize workspace context before execution
+     * 
+     * This method is called automatically by AbstractTool::execute()
+     * before doExecute() is invoked.
      */
-    protected function initializeWorkspaceContext(): void
+    protected function initialize(): void
     {
+        parent::initialize();
+        
         if (isset($GLOBALS['BE_USER'])) {
             $this->workspaceContextService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
         }
@@ -46,9 +50,6 @@ abstract class AbstractRecordTool extends AbstractTool implements ToolInterface
      */
     protected function ensureTableAccess(string $table, string $operation = 'read'): void
     {
-        // Ensure workspace context is initialized before checking access
-        $this->initializeWorkspaceContext();
-        
         $this->tableAccessService->validateTableAccess($table, $operation);
     }
     /**
@@ -157,4 +158,5 @@ abstract class AbstractRecordTool extends AbstractTool implements ToolInterface
         // If it's not accessible, it's effectively "hidden" from MCP
         return !$this->tableAccessService->canAccessTable($table);
     }
+    
 }

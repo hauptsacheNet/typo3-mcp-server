@@ -434,7 +434,8 @@ class InvalidDataTest extends AbstractFunctionalTest
             $this->assertTrue(
                 str_contains($errorText, 'Invalid') || 
                 str_contains($errorText, 'Error') ||
-                str_contains($errorText, 'Reference'),
+                str_contains($errorText, 'Reference') ||
+                str_contains($errorText, 'unexpected error occurred'), // New generic error message
                 "Expected error about invalid relations, got: $errorText"
             );
         } else {

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Exception\DatabaseException;
+use Hn\McpServer\Exception\ValidationException;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -182,89 +184,87 @@ class SearchTool extends AbstractRecordTool
             return $recommendation;
             
         } catch (\Throwable $e) {
+            // Log the error but return a helpful message
+            $this->logException($e, 'language detection');
             return "LANGUAGES:\n• Could not detect language configuration\n• Try search terms in your site's primary language\n\n";
         }
     }
 
     /**
-     * Execute the tool
+     * Execute the tool logic
      */
-    public function execute(array $params): CallToolResult
+    protected function doExecute(array $params): CallToolResult
     {
-        // Initialize workspace context
-        $this->initializeWorkspaceContext();
-
+        // Validate all parameters first
+        $this->validateParameters($params);
+        
+        // Extract parameters
         $terms = $params['terms'] ?? [];
         $termLogic = strtoupper($params['termLogic'] ?? 'OR');
         $table = trim($params['table'] ?? '');
         $pageId = isset($params['pageId']) ? (int)$params['pageId'] : null;
         $limit = 50;
-
+        
         // Handle language parameter
         $languageId = null;
         if (isset($params['language'])) {
             $languageId = $this->languageService->getUidFromIsoCode($params['language']);
             if ($languageId === null) {
-                return new CallToolResult(
-                    [new TextContent('Unknown language code: ' . $params['language'])],
-                    true // isError
-                );
+                throw new ValidationException(['Unknown language code: ' . $params['language']]);
             }
         }
-
-        // Validate search parameters
+        
+        // Get normalized search terms
         $searchTerms = $this->validateAndNormalizeSearchTerms($terms);
-        if (is_string($searchTerms)) {
-            // Error message returned
-            return new CallToolResult(
-                [new TextContent($searchTerms)],
-                true // isError
-            );
+        
+        // Get search results
+        $searchResults = $this->performSearch($searchTerms, $termLogic, $table, $pageId, $limit, $languageId);
+        
+        // Format results
+        $formattedResults = $this->formatSearchResults($searchResults, $searchTerms, $termLogic, $languageId);
+        
+        return $this->createSuccessResult($formattedResults);
+    }
+    
+    /**
+     * Validate all parameters
+     */
+    protected function validateParameters(array $params): void
+    {
+        $errors = [];
+        
+        // Validate terms
+        if (!isset($params['terms']) || !is_array($params['terms'])) {
+            $errors[] = 'Parameter "terms" must be an array of strings';
+        } elseif (empty($params['terms'])) {
+            $errors[] = 'At least one search term is required in the "terms" array';
         }
-
+        
         // Validate term logic
-        if (!in_array($termLogic, ['AND', 'OR'])) {
-            return new CallToolResult(
-                [new TextContent('termLogic must be either "AND" or "OR".')],
-                true // isError
-            );
+        if (isset($params['termLogic'])) {
+            $termLogic = strtoupper($params['termLogic']);
+            if (!in_array($termLogic, ['AND', 'OR'])) {
+                $errors[] = 'termLogic must be either "AND" or "OR"';
+            }
         }
-
-        try {
-            // Get search results
-            $searchResults = $this->performSearch($searchTerms, $termLogic, $table, $pageId, $limit, $languageId);
-            
-            // Format results
-            $formattedResults = $this->formatSearchResults($searchResults, $searchTerms, $termLogic, $languageId);
-            
-            return new CallToolResult([new TextContent($formattedResults)]);
-        } catch (\Throwable $e) {
-            return new CallToolResult(
-                [new TextContent('Error performing search: ' . $e->getMessage())],
-                true // isError
-            );
+        
+        if (!empty($errors)) {
+            throw new ValidationException($errors);
         }
     }
 
     /**
      * Validate and normalize search terms
      */
-    protected function validateAndNormalizeSearchTerms(array $terms): array|string
+    protected function validateAndNormalizeSearchTerms(array $terms): array
     {
         $searchTerms = [];
-        
-        // Handle terms array parameter
-        if (!is_array($terms)) {
-            return 'Parameter "terms" must be an array of strings.';
-        }
-        
-        if (empty($terms)) {
-            return 'At least one search term is required in the "terms" array.';
-        }
+        $errors = [];
         
         foreach ($terms as $term) {
             if (!is_string($term)) {
-                return 'All terms must be strings.';
+                $errors[] = 'All terms must be strings';
+                continue;
             }
             $trimmedTerm = trim($term);
             if (!empty($trimmedTerm)) {
@@ -274,17 +274,21 @@ class SearchTool extends AbstractRecordTool
         
         // Validate we have at least one term
         if (empty($searchTerms)) {
-            return 'At least one non-empty search term is required.';
+            $errors[] = 'At least one non-empty search term is required';
         }
         
         // Validate term lengths
         foreach ($searchTerms as $term) {
             if (strlen($term) < 2) {
-                return 'All search terms must be at least 2 characters long. Term "' . $term . '" is too short.';
+                $errors[] = 'All search terms must be at least 2 characters long. Term "' . $term . '" is too short';
             }
             if (strlen($term) > 100) {
-                return 'Search terms cannot exceed 100 characters. Term "' . substr($term, 0, 20) . '..." is too long.';
+                $errors[] = 'Search terms cannot exceed 100 characters. Term "' . substr($term, 0, 20) . '..." is too long';
             }
+        }
+        
+        if (!empty($errors)) {
+            throw new ValidationException($errors);
         }
         
         return $searchTerms;
@@ -467,6 +471,8 @@ class SearchTool extends AbstractRecordTool
             // Enhance with page information
             return $this->enhanceRecordsWithPageInfo($parentRecords, $parentTable);
         } catch (\Throwable $e) {
+            // Log the error but continue without parent records
+            $this->logException($e, 'finding parent records');
             return [];
         }
     }
@@ -481,7 +487,7 @@ class SearchTool extends AbstractRecordTool
             try {
                 $this->ensureTableAccess($specificTable, 'read');
             } catch (\InvalidArgumentException $e) {
-                throw new \InvalidArgumentException('Cannot search table "' . $specificTable . '": ' . $e->getMessage());
+                throw new ValidationException(['Cannot search table "' . $specificTable . '": ' . $e->getMessage()]);
             }
             
             return [$specificTable];
@@ -591,7 +597,8 @@ class SearchTool extends AbstractRecordTool
             
             return $validFields;
         } catch (\Throwable $e) {
-            // If we can't validate, return original fields and let the query fail with proper error
+            // Log validation error but continue with original fields
+            $this->logException($e, 'validating searchable fields');
             return $searchableFields;
         }
     }
@@ -689,8 +696,12 @@ class SearchTool extends AbstractRecordTool
         // Apply limit
         $queryBuilder->setMaxResults($limit);
 
-        // Execute query
-        $records = $queryBuilder->executeQuery()->fetchAllAssociative();
+        // Execute query with error handling
+        try {
+            $records = $queryBuilder->executeQuery()->fetchAllAssociative();
+        } catch (\Doctrine\DBAL\Exception $e) {
+            throw new DatabaseException('search', $table, $e);
+        }
 
         // Return records in expected structure format
         return [

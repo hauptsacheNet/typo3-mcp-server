@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Exception\DatabaseException;
+use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -91,12 +93,10 @@ class WriteTableTool extends AbstractRecordTool
     }
 
     /**
-     * Execute the tool
+     * Execute the tool logic
      */
-    public function execute(array $params): CallToolResult
+    protected function doExecute(array $params): CallToolResult
     {
-        // Initialize workspace context
-        $this->initializeWorkspaceContext();
         
         // Get parameters
         $action = $params['action'] ?? '';
@@ -108,22 +108,22 @@ class WriteTableTool extends AbstractRecordTool
         
         // Validate parameters
         if (empty($action)) {
-            return $this->createErrorResult('Action is required (create, update, translate, or delete)');
+            throw new ValidationException(['Action is required (create, update, translate, or delete)']);
         }
         
         if (empty($table)) {
-            return $this->createErrorResult('Table name is required');
+            throw new ValidationException(['Table name is required']);
         }
         
         // Validate data parameter type
         if (in_array($action, ['create', 'update', 'translate'], true) && isset($params['data'])) {
             if (!is_array($params['data'])) {
                 $dataType = gettype($params['data']);
-                return $this->createErrorResult(
+                throw new ValidationException([
                     "Invalid data parameter: Expected an object/array with field names as keys, but received {$dataType}. " .
                     "The data parameter must be an object like {\"title\": \"My Title\", \"bodytext\": \"Content\"}, " .
                     "not a plain string. Each field name should be a key with its corresponding value."
-                );
+                ]);
             }
         }
         
@@ -144,87 +144,80 @@ class WriteTableTool extends AbstractRecordTool
         if (!empty($data) && isset($data['sys_language_uid']) && is_string($data['sys_language_uid'])) {
             $languageUid = $this->languageService->getUidFromIsoCode($data['sys_language_uid']);
             if ($languageUid === null) {
-                return $this->createErrorResult('Unknown language code: ' . $data['sys_language_uid']);
+                throw new ValidationException(['Unknown language code: ' . $data['sys_language_uid']]);
             }
             $data['sys_language_uid'] = $languageUid;
         }
 
         // Validate table access using TableAccessService
-        try {
-            $this->ensureTableAccess($table, $action === 'delete' ? 'delete' : 'write');
-        } catch (\InvalidArgumentException $e) {
-            return $this->createErrorResult($e->getMessage());
-        }
+        $this->ensureTableAccess($table, $action === 'delete' ? 'delete' : 'write');
         
         // Validate action-specific parameters
         switch ($action) {
             case 'create':
                 if ($pid === null) {
-                    return $this->createErrorResult('Page ID (pid) is required for create action');
+                    throw new ValidationException(['Page ID (pid) is required for create action']);
                 }
                 
                 if (empty($data)) {
-                    return $this->createErrorResult('Data is required for create action');
+                    throw new ValidationException(['Data is required for create action']);
                 }
                 break;
                 
             case 'update':
                 if ($uid === null) {
-                    return $this->createErrorResult('Record UID is required for update action');
+                    throw new ValidationException(['Record UID is required for update action']);
                 }
                 
                 if (empty($data)) {
-                    return $this->createErrorResult('Data is required for update action');
+                    throw new ValidationException(['Data is required for update action']);
                 }
                 break;
                 
             case 'delete':
                 if ($uid === null) {
-                    return $this->createErrorResult('Record UID is required for delete action');
+                    throw new ValidationException(['Record UID is required for delete action']);
                 }
                 break;
                 
             case 'translate':
                 if ($uid === null) {
-                    return $this->createErrorResult('Record UID is required for translate action');
+                    throw new ValidationException(['Record UID is required for translate action']);
                 }
 
                 if (empty($data)) {
-                    return $this->createErrorResult('Data is required for translate action');
+                    throw new ValidationException(['Data is required for translate action']);
                 }
 
                 if (!isset($data['sys_language_uid'])) {
-                    return $this->createErrorResult('sys_language_uid is required in data for translate action');
+                    throw new ValidationException(['sys_language_uid is required in data for translate action']);
                 }
                 break;
 
             default:
-                return $this->createErrorResult('Invalid action: ' . $action);
+                throw new ValidationException(['Invalid action: ' . $action . '. Valid actions are: create, update, translate, delete']);
         }
         
         // Execute the action
-        try {
-            switch ($action) {
-                case 'create':
-                    return $this->createRecord($table, $pid, $data, $position);
-                    
-                case 'update':
-                    return $this->updateRecord($table, $uid, $data);
-                    
-                case 'delete':
-                    return $this->deleteRecord($table, $uid);
+        switch ($action) {
+            case 'create':
+                return $this->createRecord($table, $pid, $data, $position);
+                
+            case 'update':
+                return $this->updateRecord($table, $uid, $data);
+                
+            case 'delete':
+                return $this->deleteRecord($table, $uid);
 
-                case 'translate':
-                    // The language UID has already been converted from ISO code if needed
-                    $targetLanguageUid = (int)$data['sys_language_uid'];
-                    return $this->translateRecord($table, $uid, $targetLanguageUid);
-            }
-        } catch (\Throwable $e) {
-            return $this->createErrorResult('Error executing action: ' . $e->getMessage());
+            case 'translate':
+                // The language UID has already been converted from ISO code if needed
+                $targetLanguageUid = (int)$data['sys_language_uid'];
+                return $this->translateRecord($table, $uid, $targetLanguageUid);
+                
+            default:
+                // This should never happen due to earlier validation
+                throw new \LogicException('Invalid action: ' . $action);
         }
-        
-        // This should never happen
-        return $this->createErrorResult('Unknown error');
     }
     
     /**
@@ -689,7 +682,8 @@ class WriteTableTool extends AbstractRecordTool
                             $dateTime = new \DateTime($value);
                             $data[$fieldName] = $dateTime->getTimestamp();
                         } catch (\Exception $e) {
-                            // Let DataHandler handle the invalid date
+                            // Log the error but let DataHandler handle the invalid date
+                            $this->logException($e, 'parsing date value');
                         }
                     }
                 }

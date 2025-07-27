@@ -295,7 +295,7 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertInstanceOf(TextContent::class, $result->content[0]);
         
         $errorMessage = $result->content[0]->text;
-        $this->assertStringContainsString('Error retrieving page information', $errorMessage);
+        $this->assertStringContainsString('Operation failed: GetPage', $errorMessage);
     }
 
     /**

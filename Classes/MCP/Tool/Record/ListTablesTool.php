@@ -33,28 +33,22 @@ class ListTablesTool extends AbstractRecordTool
     }
 
     /**
-     * Execute the tool
+     * Execute the tool logic
      */
-    public function execute(array $params): CallToolResult
+    protected function doExecute(array $params): CallToolResult
     {
-        // Initialize workspace context
-        $this->initializeWorkspaceContext();
         
-        try {
-            // Get all accessible tables from TableAccessService (include all, regardless of read-only status)
-            $tables = $this->tableAccessService->getAccessibleTables(true);
-            
-            // Convert to the expected format
-            $formattedTables = $this->formatAccessibleTables($tables);
-            
-            // Group tables by extension
-            $groupedTables = $this->groupTablesByExtension($formattedTables);
-            
-            // Format the result
-            return $this->createSuccessResult($this->formatTablesAsText($groupedTables));
-        } catch (\Throwable $e) {
-            return $this->createErrorResult('Error listing tables: ' . $e->getMessage());
-        }
+        // Get all accessible tables from TableAccessService (include all, regardless of read-only status)
+        $tables = $this->tableAccessService->getAccessibleTables(true);
+        
+        // Convert to the expected format
+        $formattedTables = $this->formatAccessibleTables($tables);
+        
+        // Group tables by extension
+        $groupedTables = $this->groupTablesByExtension($formattedTables);
+        
+        // Format the result
+        return $this->createSuccessResult($this->formatTablesAsText($groupedTables));
     }
     
     /**

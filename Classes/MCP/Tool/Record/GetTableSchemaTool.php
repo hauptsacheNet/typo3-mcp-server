@@ -44,31 +44,23 @@ class GetTableSchemaTool extends AbstractRecordTool
     }
 
     /**
-     * Execute the tool
+     * Execute the tool logic
      */
-    public function execute(array $params): CallToolResult
+    protected function doExecute(array $params): CallToolResult
     {
         $table = $params['table'] ?? '';
         
         if (empty($table)) {
-            return $this->createErrorResult('Table parameter is required');
+            throw new \InvalidArgumentException('Table parameter is required');
         }
         
         // Validate table access using TableAccessService
-        try {
-            $this->ensureTableAccess($table, 'read');
-        } catch (\InvalidArgumentException $e) {
-            return $this->createErrorResult($e->getMessage());
-        }
+        $this->ensureTableAccess($table, 'read');
         
-        try {
-            $filterType = $params['type'] ?? '';
-            
-            $result = $this->generateTableSchema($table, $filterType);
-            return $this->createSuccessResult($result);
-        } catch (\Throwable $e) {
-            return $this->createErrorResult('Error getting table schema: ' . $e->getMessage());
-        }
+        $filterType = $params['type'] ?? '';
+        
+        $result = $this->generateTableSchema($table, $filterType);
+        return $this->createSuccessResult($result);
     }
     
     /**
