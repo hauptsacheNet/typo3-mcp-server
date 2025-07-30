@@ -65,9 +65,15 @@ class ContentElementTest extends LlmTestCase
         $this->assertFalse($writeResult['isError'] ?? false, 
             'WriteTable failed: ' . $writeResult['content']);
         
-        // Verify content includes office hours info
+        // Since we removed data from the response, we need to verify the content was created/updated
+        // by checking the tool call arguments instead
         $writeData = json_decode($writeResult['content'], true);
-        $bodytext = $writeData['data']['bodytext'] ?? '';
+        $this->assertEquals($writeCall['action'], $writeData['action']);
+        $this->assertEquals('tt_content', $writeData['table']);
+        $this->assertArrayHasKey('uid', $writeData);
+        
+        // Check the input data that was sent (from writeCall, not response)
+        $bodytext = $writeCall['data']['bodytext'] ?? '';
         
         // Check for day mentions
         $this->assertStringContainsString('Monday', $bodytext);

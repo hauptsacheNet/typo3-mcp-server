@@ -225,7 +225,6 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $data = json_decode($result->content[0]->text, true);
         $this->assertEquals('update', $data['action']);
         $this->assertEquals(100, $data['uid']);
-        $this->assertEquals('Updated Welcome Header', $data['data']['header']);
     }
 
     /**

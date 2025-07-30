@@ -386,7 +386,6 @@ class WriteTableTool extends AbstractRecordTool
                     'action' => 'create',
                     'table' => $table,
                     'uid' => $liveUid,
-                    'data' => $data,
                     'warning' => 'Record created but positioning failed: ' . implode(', ', $moveDataHandler->errorLog)
                 ]);
             }
@@ -400,7 +399,6 @@ class WriteTableTool extends AbstractRecordTool
             'action' => 'create',
             'table' => $table,
             'uid' => $liveUid,
-            'data' => $data,
         ]);
     }
     
@@ -507,7 +505,6 @@ class WriteTableTool extends AbstractRecordTool
             'action' => 'update',
             'table' => $table,
             'uid' => $uid, // Return the live UID that was passed in
-            'data' => $data,
         ]);
     }
     

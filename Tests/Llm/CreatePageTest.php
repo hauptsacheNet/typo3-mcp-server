@@ -59,7 +59,8 @@ class CreatePageTest extends LlmTestCase
             $writeResultData = json_decode($writeResult['content'], true);
             $this->assertEquals('create', $writeResultData['action']);
             $this->assertEquals('pages', $writeResultData['table']);
-            $this->assertEquals('Test Page', $writeResultData['data']['title']);
+            $this->assertArrayHasKey('uid', $writeResultData);
+            $this->assertIsInt($writeResultData['uid']);
         }
     }
 
@@ -126,7 +127,7 @@ class CreatePageTest extends LlmTestCase
             $this->assertEquals('create', $writeResultData['action']);
             $this->assertEquals('pages', $writeResultData['table']);
             $this->assertArrayHasKey('uid', $writeResultData);
-            $this->assertEquals('New Service', $writeResultData['data']['title']);
+            $this->assertIsInt($writeResultData['uid']);
             
             // And verify LLM acknowledges the creation
             $this->assertNotEmpty($finalContent);
