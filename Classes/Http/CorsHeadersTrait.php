@@ -32,37 +32,13 @@ trait CorsHeadersTrait
      */
     private function getAllowedOrigin(): string
     {
-        // Get the origin from the current request if available
         $request = $GLOBALS['TYPO3_REQUEST'] ?? null;
         if ($request && $request->hasHeader('Origin')) {
-            $origin = $request->getHeaderLine('Origin');
-            
-            // Allow common development origins
-            if (in_array($origin, [
-                'http://localhost:6274',  // MCP Inspector
-                'http://localhost:3000',  // Common dev port
-                'http://localhost:8080',  // Common dev port
-                'http://127.0.0.1:6274',  // Alternative localhost
-            ])) {
-                return $origin;
-            }
+            return $request->getHeaderLine('Origin');
         }
-        
-        // Fallback to same origin
-        if ($request) {
-            $scheme = $request->getUri()->getScheme();
-            $host = $request->getUri()->getHost();
-            $port = $request->getUri()->getPort();
-            
-            $baseUrl = $scheme . '://' . $host;
-            if ($port && !in_array($port, [80, 443])) {
-                $baseUrl .= ':' . $port;
-            }
-            return $baseUrl;
-        }
-        
-        // Ultimate fallback
-        return 'http://localhost:5000';
+
+        // Fallback for non-CORS requests
+        return '*';
     }
 
     /**
