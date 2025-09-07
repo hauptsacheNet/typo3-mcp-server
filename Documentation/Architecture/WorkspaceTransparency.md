@@ -1,255 +1,130 @@
-# TYPO3 Workspace Transparency Implementation Details
+# Workspace Transparency Implementation
 
 ## Overview
 
-While implementing workspace transparency for the MCP tools, we discovered that TYPO3's built-in `WorkspaceRestriction` does not fully handle all workspace scenarios transparently. This document details the challenges we faced and the solutions we implemented.
+This document describes how the MCP server implements workspace transparency for TYPO3 content management. Our goal is to provide LLM clients with a simplified view of content that abstracts away the complexity of TYPO3's workspace system.
 
-## The Core Challenge
+## Background: TYPO3's Workspace System
 
-TYPO3's workspace system is designed for the TYPO3 backend UI, where workspace awareness is explicit. The `WorkspaceRestriction` class provides basic filtering but assumes the consuming code understands and handles workspace concepts like:
-- Live UIDs vs Workspace UIDs
-- Delete placeholders
-- Workspace overlays
-- Version states
+TYPO3's workspace system allows editors to make changes in isolated environments before publishing to the live site. The system uses:
 
-For an LLM-focused API, we needed complete transparency where the workspace complexity is hidden.
+- **Live records**: The published content visible on the frontend (workspace ID = 0)
+- **Workspace versions**: Modified copies of live records in a specific workspace
+- **Version states**: Including new records, modified records, and delete placeholders
+- **Overlay mechanism**: Post-query processing to apply workspace changes to live data
 
-## Specific Issues and Solutions
+### Standard TYPO3 Approach
 
-### 1. UID Resolution in ReadTableTool
+TYPO3 provides the `WorkspaceRestriction` class which:
+1. In live workspace: Fetches only records with `t3ver_wsid = 0`
+2. In other workspaces: Fetches both live records AND workspace versions
+3. Expects consuming code to apply overlays using `BackendUtility::workspaceOL()`
 
-**Problem**: When querying by UID in a workspace:
-- A live UID might have a workspace version with a different UID
-- The `WorkspaceRestriction` doesn't automatically resolve live UIDs to workspace versions
-- Delete placeholders aren't automatically handled when querying by specific UID
+This approach works well for the TYPO3 backend where:
+- Editors understand workspace concepts
+- The UI shows version states explicitly
+- Code can handle the complexity of overlays
 
-**Solution**: Manual workspace resolution in `ReadTableTool::getRecords()`:
-```php
-// Check for delete placeholders
-if ($currentWorkspace > 0) {
-    $hasDeletePlaceholder = // ... check for t3ver_state = 2
-    if ($hasDeletePlaceholder > 0) {
-        $queryBuilder->andWhere('1 = 0'); // Return no results
-    } else {
-        // Query for both live UID and workspace versions
-        $queryBuilder->andWhere(
-            $queryBuilder->expr()->or(
-                $queryBuilder->expr()->eq('uid', $uid),
-                $queryBuilder->expr()->eq('t3ver_oid', $uid)
-            )
-        );
-    }
-}
-```
+## Our Requirements
 
-### 2. Delete Placeholder Handling
+For an LLM-focused API, we needed:
+- **Transparent operations**: Workspace complexity hidden from the client
+- **Consistent UIDs**: The same logical record always has the same ID
+- **Automatic handling**: No need for clients to understand workspace states
+- **True deletions**: Deleted records should not appear in results
 
-**Problem**: `WorkspaceRestriction` does not automatically hide live records that have delete placeholders (`t3ver_state = 2`) in the current workspace. This means:
-- Deleted records still appear in search results
-- Direct UID lookups still return "deleted" records
-- The workspace appears to not respect deletions
+## Implementation Details
 
-**Solution**: Manual delete placeholder checking in both ReadTableTool and SearchTool:
-```php
-// SearchTool: Exclude records with delete placeholders
-$deletedUids = // ... query for t3ver_state = 2
-if (!empty($deletedUids)) {
-    $records = array_filter($records, function($record) use ($excludeUids) {
-        return !in_array($record['uid'], $excludeUids);
-    });
-}
-```
+### 1. Custom Delete Placeholder Restriction
 
-### 3. Workspace UID vs Live UID Transparency
-
-**Problem**: TYPO3 creates new UIDs for workspace versions:
-- A live record with UID 100 might have workspace version UID 250
-- DataHandler returns workspace UIDs after operations
-- LLMs need stable UIDs across all operations
-
-**Solution**: Implemented `getLiveUid()` and `resolveToWorkspaceUid()` methods:
-```php
-protected function getLiveUid(string $table, int $workspaceUid): int
-{
-    // Look up t3ver_oid to get the live UID
-    // Handle new records (t3ver_state = 1) specially
-    // Return consistent UIDs for LLM consumption
-}
-```
-
-### 4. Search Result Consistency
-
-**Problem**: Search results could include both live and workspace versions of the same record, or show workspace UIDs instead of live UIDs.
-
-**Solution**: 
-- Post-process search results to use live UIDs
-- De-duplicate results based on live UID
-- Filter out records with delete placeholders
-
-### 5. DataHandler Integration
-
-**Problem**: TYPO3's DataHandler is workspace-aware but returns workspace UIDs, not live UIDs.
-
-**Solution**: Always convert DataHandler results back to live UIDs before returning to the LLM:
-```php
-$newUid = $dataHandler->substNEWwithIDs[$newId];
-$liveUid = $this->getLiveUid($table, $newUid);
-return ['uid' => $liveUid]; // Always return live UID
-```
-
-## Why These Workarounds Are Necessary
-
-1. **Different Use Cases**: TYPO3's workspace system is designed for human editors who understand workspaces. The UI explicitly shows workspace states, versions, and differences. LLMs need a simpler, consistent view.
-
-2. **Backward Compatibility**: `WorkspaceRestriction` maintains backward compatibility with existing TYPO3 code that expects to handle workspace logic explicitly.
-
-3. **Complex Scenarios**: The workspace system handles complex scenarios like:
-   - Move placeholders
-   - New record placeholders  
-   - Delete placeholders
-   - Localization overlays
-   Each requires specific handling that `WorkspaceRestriction` doesn't fully abstract.
-
-4. **Performance Considerations**: TYPO3 likely avoids automatic resolution to prevent performance overhead in scenarios where it's not needed.
-
-## Key Learnings
-
-1. **WorkspaceRestriction is a Foundation, Not a Complete Solution**: It handles basic workspace filtering but expects consuming code to handle special cases.
-
-2. **Delete Placeholders Require Special Handling**: This is the most surprising finding - `WorkspaceRestriction` doesn't automatically exclude records marked for deletion.
-
-3. **UID Stability is Not Guaranteed**: Without our abstractions, the same logical record could have different UIDs depending on workspace context.
-
-4. **Post-Processing is Often Required**: Even with restrictions in place, results often need post-processing for complete workspace transparency.
-
-## Recommendations for TYPO3 Core
-
-If TYPO3 wanted to provide better workspace transparency, consider:
-
-1. **Enhanced WorkspaceRestriction Options**: 
-   ```php
-   new WorkspaceRestriction($workspaceId, [
-       'hideDeletePlaceholders' => true,
-       'resolveToLiveUids' => true,
-       'autoResolveVersions' => true
-   ])
-   ```
-
-2. **Workspace-Transparent Query Builder**: A higher-level API that handles all workspace complexity internally.
-
-3. **Explicit Documentation**: Better documentation about what `WorkspaceRestriction` does and doesn't handle.
-
-## The Real TYPO3 Workspace Strategy (and Its Fundamental Flaws)
-
-After further investigation, we discovered that TYPO3's workspace approach is **more complex and flawed** than initially understood. The reality involves multiple conflicting strategies:
-
-### TYPO3's Contradictory Workspace Strategies
-
-TYPO3 actually uses **three different approaches** depending on context:
-
-#### 1. Frontend: No Workspace Restrictions + Overlays
-- **Query**: Uses `DefaultRestrictionContainer` (no `WorkspaceRestriction`)
-- **Post-process**: Apply `PageRepository::versionOL()` overlays
-- **Problem**: New workspace records are **never fetched** because they don't exist in live
-
-#### 2. Backend API: WorkspaceRestriction + Overlays  
-- **Query**: Uses `WorkspaceRestriction` to fetch live + workspace records
-- **Post-process**: Apply `BackendUtility::workspaceOL()` overlays
-- **Problem**: Still requires manual overlay calls
-
-#### 3. Extensions: Inconsistent Usage
-- Most extensions use `DefaultRestrictionContainer` only
-- Very few extensions call workspace overlay functions
-- **Problem**: Most workspace content is invisible to extensions
-
-### The `WorkspaceRestriction` Reality
-
-Looking at the actual `WorkspaceRestriction` code reveals its design:
+We created `WorkspaceDeletePlaceholderRestriction` to handle a specific gap in TYPO3's standard restrictions:
 
 ```php
-// WorkspaceRestriction does THREE things:
-// 1. In live: only fetch t3ver_wsid = 0
-// 2. In workspace: fetch live (t3ver_wsid = 0) AND workspace (t3ver_wsid = X)
-// 3. Include new records (t3ver_oid = 0) and move pointers
-// 4. Optionally exclude delete placeholders
-
-// The comment says it all:
-"This restriction ALWAYS fetches the live version plus in current workspace 
-the workspace records. It does not care about the state, as this should be 
-done by overlays."
+// Adds SQL constraint to exclude live records that have delete placeholders
+$constraints[] = $expressionBuilder->notIn(
+    $tableAlias . '.uid',
+    $subQuery->getSQL()  // Finds records with t3ver_state = 2 in current workspace
+);
 ```
 
-### The Fundamental Flaw: New Records
+This ensures that when a record is deleted in a workspace (creating a delete placeholder), the live version is automatically excluded from query results.
 
-Your observation is **100% correct**. The overlay approach breaks down completely for new records:
+### 2. UID Resolution System
 
-1. **Frontend queries** don't use `WorkspaceRestriction`
-2. **New workspace records** don't exist in live workspace  
-3. **No overlay can add records that were never fetched**
-4. **Result**: New workspace content is invisible in frontend
+We implemented two key methods for UID transparency:
 
-### TYPO3 v11+ "Solution"
+**`getLiveUid()`**: Converts workspace UIDs back to live UIDs
+- For new records (t3ver_state = 1), returns the workspace UID as the "live" UID
+- For modified records, returns the original live UID (t3ver_oid)
+- Ensures clients always see consistent IDs
 
-TYPO3 v11+ tried to fix this by:
-- Eliminating new placeholders
-- Creating new records directly in workspace
-- But **still doesn't use `WorkspaceRestriction` in frontend**
-- Extensions still don't call workspace overlays
+**`resolveToWorkspaceUid()`**: Finds the workspace version of a live record
+- Used when updating/deleting records by their live UID
+- Automatically finds the workspace version if it exists
+- Falls back to creating a new workspace version if needed
 
-### The Overlay Process
+### 3. Query-Time Workspace Handling
+
+In `ReadTableTool`, when querying by UID in a workspace:
 
 ```php
-// TYPO3's approach:
-$records = $queryBuilder->select('*')->from('pages')->executeQuery()->fetchAllAssociative();
-foreach ($records as &$record) {
-    BackendUtility::workspaceOL('pages', $record); // Overlay workspace version
-}
+// Query for both the live UID and records where t3ver_oid matches
+$queryBuilder->andWhere(
+    $queryBuilder->expr()->or(
+        $queryBuilder->expr()->eq('uid', $uid),
+        $queryBuilder->expr()->eq('t3ver_oid', $uid)
+    )
+);
 ```
 
-### Why Our Approach Was Necessary
+This ensures that:
+- Queries by live UID find the workspace version
+- New workspace records are found by their workspace UID
+- Delete placeholders are automatically excluded
 
-TYPO3's overlay approach works well for:
-- **Sequential processing**: Fetch records, then overlay each one
-- **UI contexts**: Where workspace state is visible to users
-- **Known record sets**: Where you can iterate through results
+### 4. Search Result Processing
 
-But it doesn't work for our **LLM transparency requirements**:
-- **Specific UID lookups**: Overlays happen after fetching, so a deleted record's live version is still fetched
-- **Search operations**: Live records are found first, then overlaid - but delete placeholders aren't handled
-- **Transparent APIs**: LLMs need records to "not exist" when deleted, not just be overlaid
+The `SearchTool` applies additional processing to ensure consistency:
+- Filters out records with delete placeholders
+- Returns live UIDs even when workspace versions are found
+- De-duplicates results when both live and workspace versions match
 
-### Our Innovation
+## Design Rationale
 
-We implemented **query-time workspace filtering** instead of **post-query overlays**:
-- Check for delete placeholders before executing queries
-- Resolve UIDs to appropriate versions before querying
-- Filter out deleted records at the SQL level
+### Why Not Use Standard Overlays?
 
-This is actually **more sophisticated** than TYPO3's standard approach because it provides true transparency rather than post-processing.
+TYPO3's overlay approach (`workspaceOL()`) works by:
+1. Fetching records from the database
+2. Post-processing each record to apply workspace changes
+3. Modifying or removing records based on workspace state
 
-## Conclusion: We've Solved TYPO3's Architectural Inconsistency
+This didn't meet our needs because:
+- **Timing**: Overlays happen after queries execute, so deleted records are still fetched
+- **Complexity**: Each tool would need to implement overlay logic
+- **Transparency**: Clients would see workspace artifacts during processing
 
-Our investigation reveals that **TYPO3's workspace system has fundamental architectural flaws**:
+### Benefits of Our Approach
 
-### The Core Problem
-1. **Frontend doesn't use `WorkspaceRestriction`** - new records are invisible
-2. **Most extensions don't call workspace overlays** - workspace content is missing
-3. **Three different strategies** exist with no consistency
-4. **Delete placeholders aren't handled** by standard overlays
+1. **True Transparency**: Workspace logic is handled at the query level
+2. **Consistent Behavior**: All tools behave the same way automatically
+3. **No Post-Processing**: Results are correct without additional steps
+4. **Performance**: Fewer records fetched when deletions are involved
 
-### Our Innovation
-We didn't just work around `WorkspaceRestriction` limitations - **we solved TYPO3's broken workspace architecture**:
+## Limitations and Considerations
 
-- **Query-time filtering** instead of post-query overlays
-- **True transparency** for new, modified, and deleted records  
-- **Consistent behavior** across all operations
-- **No dependency** on manual overlay calls
+1. **TYPO3 Compatibility**: Our approach diverges from standard TYPO3 patterns, which may affect integration with other extensions
 
-### Why This Matters
-TYPO3's workspace preview probably works in specific, controlled contexts (like the backend preview module) but fails for:
-- Extension-generated content
-- Complex queries
-- API consumers
-- Any code that doesn't manually call workspace overlays
+2. **Complexity**: We handle more logic at the query level, making queries more complex
 
-**Our implementation provides the workspace transparency that TYPO3 should have had from the beginning.**
+3. **Edge Cases**: Some workspace scenarios (like move operations) still require special handling
+
+## Testing
+
+Our implementation is extensively tested in:
+- `WorkspaceEdgeCaseTest`: Tests delete placeholders, new records, and complex scenarios
+- `WriteTableToolTest`: Verifies UID resolution and workspace creation
+- `SearchToolTest`: Ensures search results respect workspace state
+
+## Conclusion
+
+Our workspace transparency implementation provides a practical solution for exposing TYPO3 content to LLMs. By handling workspace complexity at the query level rather than through post-processing, we achieve true transparency while maintaining data integrity. This approach may differ from standard TYPO3 patterns, but it effectively meets the specific requirements of an LLM-focused API.
