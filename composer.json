@@ -39,6 +39,15 @@
         }
     },
     "scripts": {
+        "setup": [
+            "bash Build/setup-typo3.sh"
+        ],
+        "post-install-cmd": [
+            "@setup"
+        ],
+        "post-update-cmd": [
+            "@setup"
+        ],
         "test": [
             "@test:functional"
         ],

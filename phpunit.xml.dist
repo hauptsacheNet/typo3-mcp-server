@@ -15,11 +15,13 @@
          beStrictAboutOutputDuringTests="false"
          beStrictAboutTestsThatDoNotTestAnything="false"
          beStrictAboutChangesToGlobalState="false"
+         failOnWarning="false"
          executionOrder="default"
 >
     <testsuites>
         <testsuite name="Functional Tests">
             <directory suffix="Test.php">Tests/Functional/</directory>
+            <exclude>Tests/Functional/AbstractFunctionalTest.php</exclude>
         </testsuite>
     </testsuites>
     <php>
