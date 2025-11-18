@@ -41,72 +41,9 @@
                             <p class="text-muted mb-3">
                                 Connect MCP clients to this TYPO3 instance over the internet using OAuth authentication. This is the recommended method for most use cases.
                             </p>
-                            
-                            <!-- Nested tabs for different clients -->
-                            <ul class="nav nav-pills mb-3" id="remoteClientTabs" role="tablist">
-                                <li class="nav-item" role="presentation">
-                                    <a class="nav-link active" id="claude-desktop-pill" data-toggle="pill" data-bs-toggle="pill" href="#claude-desktop" role="tab" aria-controls="claude-desktop" aria-selected="true">
-                                        Claude Desktop
-                                    </a>
-                                </li>
-                                <li class="nav-item" role="presentation">
-                                    <a class="nav-link" id="other-clients-pill" data-toggle="pill" data-bs-toggle="pill" href="#other-clients" role="tab" aria-controls="other-clients" aria-selected="false">
-                                        Other MCP Clients
-                                    </a>
-                                </li>
-                            </ul>
 
-                            <div class="tab-content" id="remoteClientTabsContent">
-                                
-                                <!-- Claude Desktop Instructions -->
-                                <div class="tab-pane fade show active" id="claude-desktop" role="tabpanel" aria-labelledby="claude-desktop-pill">
-                                    <h5>🚀 Claude Desktop Integration</h5>
-                                    <p class="mb-2">To connect Claude Desktop to this TYPO3 instance:</p>
-                                    <ol class="mb-3">
-                                        <li>Copy the Integration Name and Server URL below</li>
-                                        <li>In Claude Desktop, go to <strong>Settings → Integrations</strong></li>
-                                        <li>Click <strong>"Add Integration"</strong></li>
-                                        <li>Enter the <strong>Integration Name</strong></li>
-                                        <li>Paste the <strong>Server URL</strong></li>
-                                        <li>Claude Desktop will automatically handle OAuth authentication</li>
-                                    </ol>
-                                    <p class="mb-0"><strong>Simple setup!</strong> Just copy both fields - Claude Desktop handles the rest automatically.</p>
-                                </div>
-
-                                <!-- Other MCP Clients Instructions -->
-                                <div class="tab-pane fade" id="other-clients" role="tabpanel" aria-labelledby="other-clients-pill">
-                                    <h5>🔧 Generic MCP Client Setup</h5>
-                                    <p class="mb-2">For MCP clients that support OAuth and remote connections:</p>
-                                    <ol class="mb-3">
-                                        <li>Copy the Integration Name and Server URL below</li>
-                                        <li>Configure your client with the integration name (optional but recommended)</li>
-                                        <li>Use the Server URL for connection</li>
-                                        <li>Your client should automatically discover OAuth endpoints</li>
-                                        <li>During authentication, you'll be redirected to this TYPO3 backend</li>
-                                        <li>After authorization, your client will receive secure access tokens</li>
-                                    </ol>
-                                    <p class="mb-0"><strong>Note:</strong> Your MCP client must support OAuth 2.0 and automatic endpoint discovery.</p>
-                                </div>
-                            </div>
-
-                            <!-- Shared Integration Name -->
-                            <div class="my-3">
-                                <label for="integration-name" class="form-label"><strong>Integration Name</strong> <small class="text-muted">(recommended)</small></label>
-                                <div class="input-group">
-                                    <input type="text" class="form-control form-control-lg" value="{siteName}" readonly id="integration-name" style="font-family: monospace; font-weight: bold;">
-                                    <div class="input-group-append">
-                                        <button class="btn btn-outline-secondary btn-lg copy-button" type="button" data-copy-target="integration-name">
-                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                                <span class="icon-markup">📋</span>
-                                            </span>
-                                            Copy Name
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Shared Server URL -->
-                            <div class="my-3">
+                            <!-- Shared MCP Endpoint URL -->
+                            <div class="mb-3">
                                 <label for="remote-server-url" class="form-label"><strong>Server URL</strong></label>
                                 <div class="input-group">
                                     <input type="text" class="form-control form-control-lg" value="{baseUrl}/mcp" readonly id="remote-server-url" style="font-family: monospace; font-weight: bold;">
@@ -121,8 +58,20 @@
                                 </div>
                                 <div class="mt-2">
                                     <small class="text-muted">
-                                        MCP endpoint status: 
+                                        MCP endpoint status:
                                         <span class="endpoint-status" data-endpoint="{baseUrl}/mcp" data-check-auth="true" id="mcp-endpoint-status">
+                                            <span class="status-icon"></span>
+                                            <span class="status-tooltip"></span>
+                                        </span>
+                                        <br>
+                                        <code class="small">{baseUrl}/.well-known/oauth-authorization-server</code>
+                                        <span class="endpoint-status" data-endpoint="{baseUrl}/.well-known/oauth-authorization-server" data-check-content="true">
+                                            <span class="status-icon"></span>
+                                            <span class="status-tooltip"></span>
+                                        </span>
+                                        <br>
+                                        <code class="small">{baseUrl}/.well-known/oauth-protected-resource</code>
+                                        <span class="endpoint-status" data-endpoint="{baseUrl}/.well-known/oauth-protected-resource" data-check-content="true">
                                             <span class="status-icon"></span>
                                             <span class="status-tooltip"></span>
                                         </span>
@@ -130,37 +79,8 @@
                                 </div>
                             </div>
 
-                            <!-- Technical details (shared across all remote clients) -->
-                            <div class="alert alert-info mt-3">
-                                <h6><strong>How it works:</strong></h6>
-                                <ol class="mb-0">
-                                    <li>
-                                        MCP clients discover OAuth endpoints automatically
-                                        <ul class="my-0">
-                                            <li>
-                                                <code>{baseUrl}/.well-known/oauth-authorization-server</code>
-                                                <span class="endpoint-status" data-endpoint="{baseUrl}/.well-known/oauth-authorization-server" data-check-content="true">
-                                                    <span class="status-icon"></span>
-                                                    <span class="status-tooltip"></span>
-                                                </span>
-                                            </li>
-                                            <li>
-                                                <code>{baseUrl}/.well-known/oauth-protected-resource</code>
-                                                <span class="endpoint-status" data-endpoint="{baseUrl}/.well-known/oauth-protected-resource" data-check-content="true">
-                                                    <span class="status-icon"></span>
-                                                    <span class="status-tooltip"></span>
-                                                </span>
-                                            </li>
-                                        </ul>
-                                    </li>
-                                    <li>You'll be redirected to this TYPO3 backend for authentication</li>
-                                    <li>After authorization, your MCP client gets secure access</li>
-                                    <li>All future requests use OAuth tokens automatically</li>
-                                </ol>
-                            </div>
-                            
                             <!-- Authorization Header Warning -->
-                            <div class="alert alert-warning mt-3" id="auth-header-warning" style="display: none;">
+                            <div class="alert alert-warning mt-3 mb-3" id="auth-header-warning" style="display: none;">
                                 <h6><strong>⚠️ Authorization Header Issue Detected</strong></h6>
                                 <p class="mb-2">The MCP endpoint cannot receive Authorization headers. This is a common issue that prevents OAuth authentication from working properly.</p>
                                 <p class="mb-2"><strong>Common causes and solutions:</strong></p>
@@ -179,6 +99,189 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                     </li>
                                 </ul>
                             </div>
+
+                            <!-- Nested tabs for different clients -->
+                            <ul class="nav nav-pills mb-3" id="remoteClientTabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <a class="nav-link active" id="claude-desktop-pill" data-toggle="pill" data-bs-toggle="pill" href="#claude-desktop" role="tab" aria-controls="claude-desktop" aria-selected="true">
+                                        Claude Desktop
+                                    </a>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <a class="nav-link" id="n8n-pill" data-toggle="pill" data-bs-toggle="pill" href="#n8n" role="tab" aria-controls="n8n" aria-selected="false">
+                                        n8n
+                                    </a>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <a class="nav-link" id="manus-pill" data-toggle="pill" data-bs-toggle="pill" href="#manus" role="tab" aria-controls="manus" aria-selected="false">
+                                        manus
+                                    </a>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <a class="nav-link" id="other-clients-pill" data-toggle="pill" data-bs-toggle="pill" href="#other-clients" role="tab" aria-controls="other-clients" aria-selected="false">
+                                        Other MCP Clients
+                                    </a>
+                                </li>
+                            </ul>
+
+                            <div class="tab-content" id="remoteClientTabsContent">
+
+                                <!-- Claude Desktop Instructions -->
+                                <div class="tab-pane fade show active" id="claude-desktop" role="tabpanel" aria-labelledby="claude-desktop-pill">
+                                    <h5>🚀 Claude Desktop Integration</h5>
+                                    <p>To connect Claude Desktop to this TYPO3 instance:</p>
+                                    <ol>
+                                        <li>In Claude Desktop, go to <strong>Settings → Integrations</strong></li>
+                                        <li>Click <strong>"Add Integration"</strong></li>
+                                        <li>Enter Integration Name: <code>{siteName}</code></li>
+                                        <li>Paste the Server URL: <code>{baseUrl}/mcp</code></li>
+                                        <li>Claude Desktop will automatically handle OAuth authentication</li>
+                                    </ol>
+                                </div>
+
+                                <!-- n8n Integration -->
+                                <div class="tab-pane fade" id="n8n" role="tabpanel" aria-labelledby="n8n-pill">
+                                    <h5>🔄 n8n Integration</h5>
+
+                                    <f:if condition="{n8nTokenInfo.hasToken}">
+                                        <f:then>
+                                            <!-- Token exists - show token field -->
+                                            <div class="alert alert-success mb-3">
+                                                <h6><strong>✓ n8n token active</strong></h6>
+                                                <div class="mt-2">
+                                                    <label for="n8n-token" class="form-label mb-1"><strong>Bearer Token</strong></label>
+                                                    <div class="input-group">
+                                                        <input type="text" class="form-control" value="{n8nTokenInfo.token}" readonly id="n8n-token" style="font-family: monospace; max-width: 40ch;">
+                                                        <div class="input-group-append">
+                                                            <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="n8n-token">
+                                                                <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                                                    <span class="icon-markup">📋</span>
+                                                                </span>
+                                                                Copy Token
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <p>To configure your n8n MCP Client node:</p>
+                                            <ol>
+                                                <li>In n8n, add an <strong>MCP Client</strong> node to your workflow</li>
+                                                <li>Set <strong>Endpoint</strong> to: <code>{baseUrl}/mcp</code></li>
+                                                <li>Set <strong>Server Transport</strong> to: <code>HTTP Streamable</code></li>
+                                                <li>Set <strong>Authentication</strong> to: <code>Bearer Auth</code></li>
+                                                <li>Create a new credential and paste the token above</li>
+                                                <li>Select which tools to include or choose "All"</li>
+                                            </ol>
+                                        </f:then>
+                                        <f:else>
+                                            <!-- No token - show create button -->
+                                            <div class="alert alert-info mb-3">
+                                                <h6><strong>No n8n token found</strong></h6>
+                                                <p class="mb-2">Create an n8n token to connect n8n workflows to this TYPO3 instance.</p>
+
+                                                <button id="create-n8n-token-btn" class="btn btn-primary">
+                                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
+                                                        <span class="icon-markup">➕</span>
+                                                    </span>
+                                                    Create n8n Token
+                                                </button>
+                                            </div>
+
+                                            <p>After creating a token, you can configure your n8n MCP Client node:</p>
+                                            <ol>
+                                                <li>In n8n, add an <strong>MCP Client</strong> node to your workflow</li>
+                                                <li>Set <strong>Endpoint</strong> to: <code>{baseUrl}/mcp</code></li>
+                                                <li>Set <strong>Server Transport</strong> to: <code>HTTP Streamable</code></li>
+                                                <li>Set <strong>Authentication</strong> to: <code>Bearer Auth</code></li>
+                                                <li>Create a new credential and paste your token</li>
+                                                <li>Select which tools to include or choose "All"</li>
+                                            </ol>
+                                        </f:else>
+                                    </f:if>
+                                </div>
+
+                                <!-- manus Integration -->
+                                <div class="tab-pane fade" id="manus" role="tabpanel" aria-labelledby="manus-pill">
+                                    <h5>🤖 manus Integration</h5>
+
+                                    <f:if condition="{manusTokenInfo.hasToken}">
+                                        <f:then>
+                                            <!-- Token exists - show token field -->
+                                            <div class="alert alert-success mb-3">
+                                                <h6><strong>✓ manus token active</strong></h6>
+                                                <div class="mt-2">
+                                                    <label for="manus-token" class="form-label mb-1"><strong>Bearer Token</strong></label>
+                                                    <div class="input-group">
+                                                        <input type="text" class="form-control" value="{manusTokenInfo.token}" readonly id="manus-token" style="font-family: monospace; max-width: 40ch;">
+                                                        <div class="input-group-append">
+                                                            <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="manus-token">
+                                                                <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                                                    <span class="icon-markup">📋</span>
+                                                                </span>
+                                                                Copy Token
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <p>To configure your manus MCP connection:</p>
+                                            <ol>
+                                                <li>In manus, go to Connectors settings and add a connector</li>
+                                                <li>Set <strong>Server Name</strong> to: <code>{siteName}</code></li>
+                                                <li>Set <strong>Transport</strong> to: <code>HTTP</code></li>
+                                                <li>Set <strong>Server URL</strong> to: <code>{baseUrl}/mcp</code></li>
+                                                <li>Add a custom header <code>Authorization</code> with the value <code style="max-width: 20ch;overflow: hidden;display: inline-block;white-space: nowrap;vertical-align: sub;text-overflow: ellipsis;">Bearer {manusTokenInfo.token}</code></li>
+                                                <li>Save your MCP configuration</li>
+                                            </ol>
+                                        </f:then>
+                                        <f:else>
+                                            <!-- No token - show create button -->
+                                            <div class="alert alert-info mb-3">
+                                                <h6><strong>No manus token found</strong></h6>
+                                                <p class="mb-2">Create a manus token to connect manus agents to this TYPO3 instance.</p>
+
+                                                <button id="create-manus-token-btn" class="btn btn-primary">
+                                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
+                                                        <span class="icon-markup">➕</span>
+                                                    </span>
+                                                    Create manus Token
+                                                </button>
+                                            </div>
+
+                                            <p>After creating a token, you can configure your manus MCP connection:</p>
+                                            <ol>
+                                                <li>In manus, go to Connectors settings and add a connector</li>
+                                                <li>Set <strong>Server Name</strong> to: <code>{siteName}</code></li>
+                                                <li>Set <strong>Transport</strong> to: <code>HTTP</code></li>
+                                                <li>Set <strong>Server URL</strong> to: <code>{baseUrl}/mcp</code></li>
+                                                <li>Add a custom header:
+                                                    <ul class="mt-1 mb-1">
+                                                        <li>Header name: <code>Authorization</code></li>
+                                                        <li>Header value: <code>Bearer YOUR_TOKEN</code></li>
+                                                    </ul>
+                                                </li>
+                                                <li>Save your MCP configuration</li>
+                                            </ol>
+                                        </f:else>
+                                    </f:if>
+                                </div>
+
+                                <!-- Other MCP Clients Instructions -->
+                                <div class="tab-pane fade" id="other-clients" role="tabpanel" aria-labelledby="other-clients-pill">
+                                    <h5>🔧 Generic MCP Client Setup</h5>
+                                    <p>For MCP clients that support OAuth and remote connections:</p>
+                                    <ol>
+                                        <li>Configure your client with server URL: <code>{baseUrl}/mcp</code></li>
+                                        <li>Optionally set integration name: <code>{siteName}</code></li>
+                                        <li>Your client should automatically discover OAuth endpoints</li>
+                                        <li>During authentication, you'll be redirected to this TYPO3 backend</li>
+                                        <li>After authorization, your client will receive secure access tokens</li>
+                                    </ol>
+                                    <p class="small text-muted"><strong>Note:</strong> Your MCP client must support OAuth 2.0 and automatic endpoint discovery.</p>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Local Setup (mcp-remote) Tab -->
@@ -196,7 +299,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                     </div>
 
                                     <div class="input-group mb-3">
-                                        <input type="text" class="form-control" value="{mcpRemoteUrl.tokenUrl}" readonly id="mcp-remote-url" style="font-family: monospace;">
+                                        <input type="text" class="form-control" value="{mcpRemoteUrl.tokenUrl}" readonly id="mcp-remote-url" style="font-family: monospace; max-width: 80ch;">
                                         <div class="input-group-append">
                                             <button class="btn btn-outline-primary copy-button" type="button" data-copy-target="mcp-remote-url">
                                                 <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
@@ -210,7 +313,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                     <!-- mcp-remote Configuration Example -->
                                     <div class="mt-3">
                                         <h6><strong>Example mcp-remote configuration:</strong></h6>
-                                        <textarea class="form-control mb-2" rows="9" readonly id="mcp-remote-config" style="font-family: monospace; font-size: 12px;"><f:format.raw>{
+                                        <textarea class="form-control mb-2" rows="9" readonly id="mcp-remote-config" style="font-family: monospace; font-size: 12px; white-space: pre"><f:format.raw>{
   "mcpServers": {
     "</f:format.raw>{siteName}<f:format.raw>": {
       "command": "npx",

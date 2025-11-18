@@ -402,7 +402,19 @@ document.addEventListener('DOMContentLoaded', function() {
     if (createMcpRemoteTokenBtn) {
         createMcpRemoteTokenBtn.addEventListener('click', createMcpRemoteToken);
     }
-    
+
+    // Add event listener for create n8n token
+    const createN8nTokenBtn = document.getElementById('create-n8n-token-btn');
+    if (createN8nTokenBtn) {
+        createN8nTokenBtn.addEventListener('click', createN8nToken);
+    }
+
+    // Add event listener for create manus token
+    const createManusTokenBtn = document.getElementById('create-manus-token-btn');
+    if (createManusTokenBtn) {
+        createManusTokenBtn.addEventListener('click', createManusToken);
+    }
+
     // Add event delegation for token revocation buttons (dynamically created)
     document.addEventListener('click', function(e) {
         if (e.target.classList.contains('revoke-token-btn') || e.target.closest('.revoke-token-btn')) {
@@ -590,12 +602,12 @@ function updateTokensTable(tokens) {
  */
 function createMcpRemoteToken() {
     showLoading();
-    
+
     const button = document.getElementById('create-mcp-remote-token-btn');
     if (button) {
         button.disabled = true;
     }
-    
+
     fetch(TYPO3.settings.ajaxUrls.mcp_server_create_token, {
         method: 'POST',
         headers: {
@@ -613,6 +625,96 @@ function createMcpRemoteToken() {
             }, 2000);
         } else {
             showErrorMessage(data.message || 'Failed to create mcp-remote token');
+            if (button) {
+                button.disabled = false;
+            }
+        }
+    })
+    .catch(error => {
+        showLoading(false);
+        showErrorMessage('Error creating token: ' + error.message);
+        if (button) {
+            button.disabled = false;
+        }
+    });
+}
+
+/**
+ * Create n8n token
+ */
+function createN8nToken() {
+    showLoading();
+
+    const button = document.getElementById('create-n8n-token-btn');
+    if (button) {
+        button.disabled = true;
+    }
+
+    fetch(TYPO3.settings.ajaxUrls.mcp_server_create_token, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            clientType: 'n8n token'
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        showLoading(false);
+        if (data.success) {
+            showSuccessMessage('n8n token created successfully! Refreshing page to show the token.');
+            // Reload page after 2 seconds to show updated token status
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            showErrorMessage(data.message || 'Failed to create n8n token');
+            if (button) {
+                button.disabled = false;
+            }
+        }
+    })
+    .catch(error => {
+        showLoading(false);
+        showErrorMessage('Error creating token: ' + error.message);
+        if (button) {
+            button.disabled = false;
+        }
+    });
+}
+
+/**
+ * Create manus token
+ */
+function createManusToken() {
+    showLoading();
+
+    const button = document.getElementById('create-manus-token-btn');
+    if (button) {
+        button.disabled = true;
+    }
+
+    fetch(TYPO3.settings.ajaxUrls.mcp_server_create_token, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            clientType: 'manus token'
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        showLoading(false);
+        if (data.success) {
+            showSuccessMessage('manus token created successfully! Refreshing page to show the token.');
+            // Reload page after 2 seconds to show updated token status
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            showErrorMessage(data.message || 'Failed to create manus token');
             if (button) {
                 button.disabled = false;
             }
