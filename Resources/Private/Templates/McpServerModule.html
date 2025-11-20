@@ -118,6 +118,11 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                     </a>
                                 </li>
                                 <li class="nav-item" role="presentation">
+                                    <a class="nav-link" id="mcp-inspector-pill" data-toggle="pill" data-bs-toggle="pill" href="#mcp-inspector" role="tab" aria-controls="mcp-inspector" aria-selected="false">
+                                        MCP Inspector
+                                    </a>
+                                </li>
+                                <li class="nav-item" role="presentation">
                                     <a class="nav-link" id="other-clients-pill" data-toggle="pill" data-bs-toggle="pill" href="#other-clients" role="tab" aria-controls="other-clients" aria-selected="false">
                                         Other MCP Clients
                                     </a>
@@ -145,7 +150,6 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
 
                                     <f:if condition="{n8nTokenInfo.hasToken}">
                                         <f:then>
-                                            <!-- Token exists - show token field -->
                                             <div class="alert alert-success mb-3">
                                                 <h6><strong>✓ n8n token active</strong></h6>
                                                 <div class="mt-2">
@@ -163,19 +167,8 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                                     </div>
                                                 </div>
                                             </div>
-
-                                            <p>To configure your n8n MCP Client node:</p>
-                                            <ol>
-                                                <li>In n8n, add an <strong>MCP Client</strong> node to your workflow</li>
-                                                <li>Set <strong>Endpoint</strong> to: <code>{baseUrl}/mcp</code></li>
-                                                <li>Set <strong>Server Transport</strong> to: <code>HTTP Streamable</code></li>
-                                                <li>Set <strong>Authentication</strong> to: <code>Bearer Auth</code></li>
-                                                <li>Create a new credential and paste the token above</li>
-                                                <li>Select which tools to include or choose "All"</li>
-                                            </ol>
                                         </f:then>
                                         <f:else>
-                                            <!-- No token - show create button -->
                                             <div class="alert alert-info mb-3">
                                                 <h6><strong>No n8n token found</strong></h6>
                                                 <p class="mb-2">Create an n8n token to connect n8n workflows to this TYPO3 instance.</p>
@@ -187,18 +180,18 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                                     Create n8n Token
                                                 </button>
                                             </div>
-
-                                            <p>After creating a token, you can configure your n8n MCP Client node:</p>
-                                            <ol>
-                                                <li>In n8n, add an <strong>MCP Client</strong> node to your workflow</li>
-                                                <li>Set <strong>Endpoint</strong> to: <code>{baseUrl}/mcp</code></li>
-                                                <li>Set <strong>Server Transport</strong> to: <code>HTTP Streamable</code></li>
-                                                <li>Set <strong>Authentication</strong> to: <code>Bearer Auth</code></li>
-                                                <li>Create a new credential and paste your token</li>
-                                                <li>Select which tools to include or choose "All"</li>
-                                            </ol>
                                         </f:else>
                                     </f:if>
+
+                                    <p>To configure your n8n MCP Client node:</p>
+                                    <ol>
+                                        <li>In n8n, add an <strong>MCP Client</strong> node to your workflow</li>
+                                        <li>Set <strong>Endpoint</strong> to: <code>{baseUrl}/mcp</code></li>
+                                        <li>Set <strong>Server Transport</strong> to: <code>HTTP Streamable</code></li>
+                                        <li>Set <strong>Authentication</strong> to: <code>Bearer Auth</code></li>
+                                        <li>Create a new credential and paste <f:if condition="{n8nTokenInfo.hasToken}"><f:then>the token above</f:then><f:else>your token</f:else></f:if></li>
+                                        <li>Select which tools to include or choose "All"</li>
+                                    </ol>
                                 </div>
 
                                 <!-- manus Integration -->
@@ -207,7 +200,6 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
 
                                     <f:if condition="{manusTokenInfo.hasToken}">
                                         <f:then>
-                                            <!-- Token exists - show token field -->
                                             <div class="alert alert-success mb-3">
                                                 <h6><strong>✓ manus token active</strong></h6>
                                                 <div class="mt-2">
@@ -225,19 +217,8 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                                     </div>
                                                 </div>
                                             </div>
-
-                                            <p>To configure your manus MCP connection:</p>
-                                            <ol>
-                                                <li>In manus, go to Connectors settings and add a connector</li>
-                                                <li>Set <strong>Server Name</strong> to: <code>{siteName}</code></li>
-                                                <li>Set <strong>Transport</strong> to: <code>HTTP</code></li>
-                                                <li>Set <strong>Server URL</strong> to: <code>{baseUrl}/mcp</code></li>
-                                                <li>Add a custom header <code>Authorization</code> with the value <code style="max-width: 20ch;overflow: hidden;display: inline-block;white-space: nowrap;vertical-align: sub;text-overflow: ellipsis;">Bearer {manusTokenInfo.token}</code></li>
-                                                <li>Save your MCP configuration</li>
-                                            </ol>
                                         </f:then>
                                         <f:else>
-                                            <!-- No token - show create button -->
                                             <div class="alert alert-info mb-3">
                                                 <h6><strong>No manus token found</strong></h6>
                                                 <p class="mb-2">Create a manus token to connect manus agents to this TYPO3 instance.</p>
@@ -249,23 +230,48 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                                     Create manus Token
                                                 </button>
                                             </div>
-
-                                            <p>After creating a token, you can configure your manus MCP connection:</p>
-                                            <ol>
-                                                <li>In manus, go to Connectors settings and add a connector</li>
-                                                <li>Set <strong>Server Name</strong> to: <code>{siteName}</code></li>
-                                                <li>Set <strong>Transport</strong> to: <code>HTTP</code></li>
-                                                <li>Set <strong>Server URL</strong> to: <code>{baseUrl}/mcp</code></li>
-                                                <li>Add a custom header:
-                                                    <ul class="mt-1 mb-1">
-                                                        <li>Header name: <code>Authorization</code></li>
-                                                        <li>Header value: <code>Bearer YOUR_TOKEN</code></li>
-                                                    </ul>
-                                                </li>
-                                                <li>Save your MCP configuration</li>
-                                            </ol>
                                         </f:else>
                                     </f:if>
+
+                                    <p>To configure your manus MCP connection:</p>
+                                    <ol>
+                                        <li>In manus, go to Connectors settings and add a connector</li>
+                                        <li>Set <strong>Server Name</strong> to: <code>{siteName}</code></li>
+                                        <li>Set <strong>Transport</strong> to: <code>HTTP</code></li>
+                                        <li>Set <strong>Server URL</strong> to: <code>{baseUrl}/mcp</code></li>
+                                        <li>Add a custom header <code>Authorization</code> with the value <f:if condition="{manusTokenInfo.hasToken}"><f:then><code style="max-width: 20ch;overflow: hidden;display: inline-block;white-space: nowrap;vertical-align: sub;text-overflow: ellipsis;">Bearer {manusTokenInfo.token}</code></f:then><f:else><code>Bearer YOUR_TOKEN</code></f:else></f:if></li>
+                                        <li>Save your MCP configuration</li>
+                                    </ol>
+                                </div>
+
+                                <!-- MCP Inspector -->
+                                <div class="tab-pane fade" id="mcp-inspector" role="tabpanel" aria-labelledby="mcp-inspector-pill">
+                                    <h5>🔍 MCP Inspector</h5>
+                                    <p>Debug and test tools using the official MCP Inspector CLI:</p>
+
+                                    <div class="mb-3">
+                                        <label for="inspector-command" class="form-label"><strong>Run this command in your terminal:</strong></label>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control" value="npx @modelcontextprotocol/inspector --transport http --server-url {baseUrl}/mcp" readonly id="inspector-command" style="font-family: monospace;">
+                                            <div class="input-group-append">
+                                                <button class="btn btn-outline-secondary copy-button" type="button" data-copy-target="inspector-command">
+                                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                                        <span class="icon-markup">📋</span>
+                                                    </span>
+                                                    Copy
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <p class="mt-3"><strong>What happens next:</strong></p>
+                                    <ol>
+                                        <li>The Inspector UI opens in your browser</li>
+                                        <li>All parameters are pre-configured. It's enough to click Connect.</li>
+                                        <li>After authorization, you can test all available tools</li>
+                                    </ol>
+
+                                    <p class="small text-muted"><strong>Note:</strong> Requires Node.js to be installed on your system.</p>
                                 </div>
 
                                 <!-- Other MCP Clients Instructions -->
