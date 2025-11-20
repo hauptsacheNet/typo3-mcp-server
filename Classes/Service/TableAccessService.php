@@ -302,7 +302,7 @@ class TableAccessService implements SingletonInterface
         
         // Apply field-level access restrictions
         foreach ($fields as $fieldName => $fieldConfig) {
-            if (!$this->canAccessField($table, $fieldName)) {
+            if (!$this->canAccessField($table, $fieldName, $type)) {
                 unset($fields[$fieldName]);
             }
         }
@@ -588,11 +588,16 @@ class TableAccessService implements SingletonInterface
     
     /**
      * Check if a specific field can be accessed
+     *
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @param string $type Record type (optional, for type-specific TSconfig)
+     * @return bool
      */
-    protected function canAccessField(string $table, string $fieldName): bool
+    protected function canAccessField(string $table, string $fieldName, string $type = ''): bool
     {
         $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
-        
+
         // Check exclude fields
         if (!empty($fieldConfig['exclude'])) {
             $backendUser = $this->getBackendUser();
@@ -600,7 +605,24 @@ class TableAccessService implements SingletonInterface
                 return false;
             }
         }
-        
+
+        // Check TSconfig field visibility (applies to all users including admins)
+        $TSconfig = BackendUtility::getPagesTSconfig(0);
+
+        // Check if field is globally disabled via TCEFORM.[table].[field].disabled
+        $fieldDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['disabled'] ?? '';
+        if ($fieldDisabled === '1' || $fieldDisabled === 1 || $fieldDisabled === true) {
+            return false;
+        }
+
+        // Check if field is disabled for specific type via TCEFORM.[table].[field].types.[type].disabled
+        if (!empty($type)) {
+            $typeDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['types.'][$type . '.']['disabled'] ?? '';
+            if ($typeDisabled === '1' || $typeDisabled === 1 || $typeDisabled === true) {
+                return false;
+            }
+        }
+
         return true;
     }
     
