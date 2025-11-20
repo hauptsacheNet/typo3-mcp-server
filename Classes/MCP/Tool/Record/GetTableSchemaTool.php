@@ -20,6 +20,11 @@ class GetTableSchemaTool extends AbstractRecordTool
      */
     public function getSchema(): array
     {
+        // Get all accessible tables for enum
+        $accessibleTables = $this->tableAccessService->getAccessibleTables(true);
+        $tableNames = array_keys($accessibleTables);
+        sort($tableNames);
+
         return [
             'description' => 'Get detailed schema information for a specific table type, including fields, relations, and validation',
             'inputSchema' => [
@@ -27,7 +32,8 @@ class GetTableSchemaTool extends AbstractRecordTool
                 'properties' => [
                     'table' => [
                         'type' => 'string',
-                        'description' => 'The table to get schema information for (e.g., "tt_content", "pages")',
+                        'description' => 'The table to get schema information for',
+                        'enum' => $tableNames,
                     ],
                     'type' => [
                         'type' => 'string',
