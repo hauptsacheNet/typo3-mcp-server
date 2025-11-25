@@ -7,6 +7,8 @@ namespace Hn\McpServer\MCP\Tool\Record;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Backend\Form\FormDataCompiler;
+use TYPO3\CMS\Backend\Form\FormDataGroup\TcaDatabaseRecord;
 use Hn\McpServer\Utility\TcaFormattingUtility;
 use Hn\McpServer\Service\TableAccessService;
 
@@ -406,25 +408,84 @@ class GetTableSchemaTool extends AbstractRecordTool
     
     /**
      * Get types that are removed by TSconfig
-     * This uses the same logic as TcaSelectItems to determine which types are restricted
+     * Uses TYPO3's FormDataCompiler API to properly handle all TSconfig filtering
+     * (removeItems, keepItems, addItems, itemsProcFunc, etc.)
      */
     protected function getRemovedTypesByTSconfig(string $table, string $typeField): array
     {
         if (empty($table) || empty($typeField)) {
             return [];
         }
-        
+
+        // Get original items from TCA
+        $originalItems = $GLOBALS['TCA'][$table]['columns'][$typeField]['config']['items'] ?? [];
+        $originalTypes = [];
+
+        foreach ($originalItems as $item) {
+            if (is_array($item)) {
+                // Handle both old and new TCA item formats
+                $value = $item['value'] ?? $item[1] ?? '';
+                if (!empty($value) && $value !== '--div--') {
+                    $originalTypes[] = $value;
+                }
+            }
+        }
+
+        // Use FormDataCompiler to get processed items with TSconfig applied
+        try {
+            $formDataCompiler = GeneralUtility::makeInstance(FormDataCompiler::class);
+            $formDataGroup = GeneralUtility::makeInstance(TcaDatabaseRecord::class);
+
+            $formDataCompilerInput = [
+                'tableName' => $table,
+                'vanillaUid' => 0,
+                'command' => 'new',
+                'databaseRow' => [],
+                'pageTsConfig' => BackendUtility::getPagesTSconfig(0),
+            ];
+
+            $result = $formDataCompiler->compile($formDataCompilerInput, $formDataGroup);
+
+            // Get processed items
+            $processedItems = $result['processedTca']['columns'][$typeField]['config']['items'] ?? [];
+            $processedTypes = [];
+
+            foreach ($processedItems as $item) {
+                if (is_array($item)) {
+                    // Handle both old and new TCA item formats
+                    $value = $item['value'] ?? $item[1] ?? '';
+                    if (!empty($value) && $value !== '--div--') {
+                        $processedTypes[] = $value;
+                    }
+                }
+            }
+
+            // Calculate removed types (items that were in original but not in processed)
+            return array_diff($originalTypes, $processedTypes);
+
+        } catch (\Throwable $e) {
+            // Fallback to manual TSconfig parsing if FormDataCompiler fails
+            // This might happen in certain contexts or edge cases
+            return $this->getRemovedTypesByTSconfigFallback($table, $typeField);
+        }
+    }
+
+    /**
+     * Fallback method for TSconfig parsing when FormDataCompiler cannot be used
+     */
+    protected function getRemovedTypesByTSconfigFallback(string $table, string $typeField): array
+    {
         $removedTypes = [];
-        
+
         // Get TSconfig for the current page
         $TSconfig = BackendUtility::getPagesTSconfig(0);
-        
+
         // Check TCEFORM.[table].[field].removeItems
         $fieldTSconfig = $TSconfig['TCEFORM.'][$table . '.'][$typeField . '.']['removeItems'] ?? '';
         if (!empty($fieldTSconfig)) {
             $removedTypes = GeneralUtility::trimExplode(',', $fieldTSconfig, true);
         }
-        
+
         // For tt_content, also check TCEMAIN.table.tt_content.disableCTypes
         if ($table === 'tt_content' && $typeField === 'CType') {
             $disableCTypes = $TSconfig['TCEMAIN.']['table.']['tt_content.']['disableCTypes'] ?? '';
@@ -433,7 +494,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                 $removedTypes = array_merge($removedTypes, $disabledTypes);
             }
         }
-        
+
         return $removedTypes;
     }
 
