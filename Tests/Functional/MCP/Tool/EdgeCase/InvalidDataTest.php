@@ -416,25 +416,25 @@ class InvalidDataTest extends AbstractFunctionalTest
      */
     public function testInvalidRelationUids(): void
     {
-        // Try to set invalid UIDs for relations
+        // Try to set invalid UIDs for category relations
         $result = $this->writeTool->execute([
             'action' => 'create',
             'table' => 'pages',
             'pid' => 0,
             'data' => [
                 'title' => 'Test Page',
-                'media' => [-1, 0, 999999] // Invalid UIDs for sys_file_reference
+                'categories' => [-1, 0, 999999] // Invalid UIDs for sys_category
             ]
         ]);
-        
+
         // The tool should validate these
         if ($result->isError) {
             // Check for relevant error message
             $errorText = $result->content[0]->text;
             $this->assertTrue(
-                str_contains($errorText, 'Invalid') || 
+                str_contains($errorText, 'Invalid') ||
                 str_contains($errorText, 'Error') ||
-                str_contains($errorText, 'Reference') ||
+                str_contains($errorText, 'category') ||
                 str_contains($errorText, 'unexpected error occurred'), // New generic error message
                 "Expected error about invalid relations, got: $errorText"
             );

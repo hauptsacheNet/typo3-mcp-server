@@ -447,6 +447,7 @@ class TableAccessService implements SingletonInterface
             'cache_hash', // Cache tables - managed by system
             'sys_be_shortcuts', // User shortcuts - user-specific
             'sys_news', // System news - admin-only
+            'sys_file_reference', // FAL reference table - file handling not supported yet
         ];
         
         if (in_array($table, $restrictedTables)) {
@@ -594,9 +595,27 @@ class TableAccessService implements SingletonInterface
      * @param string $type Record type (optional, for type-specific TSconfig)
      * @return bool
      */
-    protected function canAccessField(string $table, string $fieldName, string $type = ''): bool
+    public function canAccessField(string $table, string $fieldName, string $type = ''): bool
     {
         $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
+
+        // Block file fields - file handling not supported yet
+        $fieldType = $fieldConfig['config']['type'] ?? '';
+        if ($fieldType === 'file') {
+            return false;
+        }
+
+        // Block inline relations where foreign table isn't writable
+        // This automatically filters out relations to:
+        // - Tables without workspace support
+        // - Read-only tables (sys_file, sys_file_metadata, etc.)
+        // - Tables with no user access
+        if ($fieldType === 'inline') {
+            $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
+            if ($foreignTable && !$this->canAccessTable($foreignTable)) {
+                return false;
+            }
+        }
 
         // Check exclude fields
         if (!empty($fieldConfig['exclude'])) {

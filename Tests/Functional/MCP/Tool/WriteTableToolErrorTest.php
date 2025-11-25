@@ -255,41 +255,41 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     public function testFieldNotAvailableForRecordType(): void
     {
         // Try to set a field that's not available for the given CType
+        // The 'table_caption' field is only available for CType='table', not for 'text'
         $result = $this->tool->execute([
             'action' => 'create',
             'table' => 'tt_content',
             'pid' => 1,
             'data' => [
                 'CType' => 'text', // Text content type
-                'image' => '1', // Image field not available for text CType
+                'table_caption' => 'Some caption', // Table field not available for text CType
                 'header' => 'Test Content'
             ]
         ]);
-        
+
         $this->assertTrue($result->isError);
         $this->assertStringContainsString("not available for this record type", $result->content[0]->text);
     }
     
     /**
-     * Test invalid inline relation data
+     * Test that file fields are not supported
      */
-    public function testInvalidInlineRelationData(): void
+    public function testFileFieldsNotSupported(): void
     {
-        // Test with invalid inline data format
+        // The 'media' field on pages table is type='file', which is not supported
         $result = $this->tool->execute([
             'action' => 'create',
             'table' => 'pages',
             'pid' => 0,
             'data' => [
                 'title' => 'Test Page',
-                'media' => 'invalid_inline_data' // Should be array or integer
+                'media' => 'some_value' // File fields should be rejected regardless of value
             ]
         ]);
-        
-        $this->assertTrue($result->isError);
-        // This might fail differently based on TYPO3 version
-        $this->assertTrue($result->isError);
-        // The error might be from ResourceFactory or field validation
+
+        $this->assertTrue($result->isError, 'File fields should be rejected');
+        $this->assertStringContainsString('File fields are not supported', $result->content[0]->text);
+        $this->assertStringContainsString('media', $result->content[0]->text);
     }
     
     /**

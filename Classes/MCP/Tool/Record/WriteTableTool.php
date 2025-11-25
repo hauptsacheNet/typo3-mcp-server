@@ -663,7 +663,16 @@ class WriteTableTool extends AbstractRecordTool
             if (!$fieldConfig) {
                 continue;
             }
-            
+
+            // Check if field is accessible (filters out file fields and inaccessible inline relations)
+            if (!$this->tableAccessService->canAccessField($table, $fieldName)) {
+                $fieldType = $fieldConfig['config']['type'] ?? '';
+                if ($fieldType === 'file') {
+                    return "Field '{$fieldName}': File fields are not supported. Please use TYPO3 backend for file operations.";
+                }
+                return "Field '{$fieldName}' is not accessible";
+            }
+
             // Validate field value
             $validationError = $this->tableAccessService->validateFieldValue($table, $fieldName, $value);
             if ($validationError !== null) {
