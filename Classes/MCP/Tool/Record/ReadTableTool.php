@@ -13,6 +13,7 @@ use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
+use Hn\McpServer\Service\InputExamplesService;
 use Hn\McpServer\Service\LanguageService;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -23,11 +24,13 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class ReadTableTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
-    
+    protected InputExamplesService $inputExamplesService;
+
     public function __construct()
     {
         parent::__construct();
         $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
     }
 
     /**
@@ -94,7 +97,9 @@ class ReadTableTool extends AbstractRecordTool
             ],
             'annotations' => [
                 'readOnlyHint' => true,
-                'idempotentHint' => true
+                'idempotentHint' => true,
+                'allowedCallers' => ['code_execution_20250825'],
+                'inputExamples' => $this->inputExamplesService->getReadTableExamples(),
             ]
         ];
     }

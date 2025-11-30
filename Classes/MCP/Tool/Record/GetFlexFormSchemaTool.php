@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool\Record;
 
+use Hn\McpServer\Service\InputExamplesService;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -15,6 +16,14 @@ use Hn\McpServer\Service\TableAccessService;
  */
 class GetFlexFormSchemaTool extends AbstractRecordTool
 {
+    protected InputExamplesService $inputExamplesService;
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
+    }
+
     /**
      * Get the tool schema
      */
@@ -48,7 +57,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
             ],
             'annotations' => [
                 'readOnlyHint' => true,
-                'idempotentHint' => true
+                'idempotentHint' => true,
+                'allowedCallers' => ['code_execution_20250825'],
+                'inputExamples' => $this->inputExamplesService->getFlexFormSchemaExamples(),
             ]
         ];
     }

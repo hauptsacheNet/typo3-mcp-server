@@ -17,6 +17,7 @@ use Hn\McpServer\Utility\RecordFormattingUtility;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use TYPO3\CMS\Core\Site\SiteFinder;
+use Hn\McpServer\Service\InputExamplesService;
 use Hn\McpServer\Service\LanguageService;
 
 /**
@@ -25,11 +26,13 @@ use Hn\McpServer\Service\LanguageService;
 class SearchTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
+    protected InputExamplesService $inputExamplesService;
 
     public function __construct()
     {
         parent::__construct();
         $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
     }
 
     /**
@@ -85,7 +88,9 @@ class SearchTool extends AbstractRecordTool
         // Add annotations
         $schema['annotations'] = [
             'readOnlyHint' => true,
-            'idempotentHint' => true
+            'idempotentHint' => true,
+            'allowedCallers' => ['code_execution_20250825'],
+            'inputExamples' => $this->inputExamplesService->getSearchExamples(),
         ];
 
         return $schema;

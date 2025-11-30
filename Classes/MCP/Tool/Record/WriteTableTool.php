@@ -7,6 +7,7 @@ namespace Hn\McpServer\MCP\Tool\Record;
 use Doctrine\DBAL\ParameterType;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
+use Hn\McpServer\Service\InputExamplesService;
 use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -22,11 +23,13 @@ use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 class WriteTableTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
+    protected InputExamplesService $inputExamplesService;
 
     public function __construct()
     {
         parent::__construct();
         $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
     }
 
     /**
@@ -87,7 +90,9 @@ class WriteTableTool extends AbstractRecordTool
             ],
             'annotations' => [
                 'readOnlyHint' => false,
-                'idempotentHint' => false
+                'idempotentHint' => false,
+                'allowedCallers' => ['code_execution_20250825'],
+                'inputExamples' => $this->inputExamplesService->getWriteTableExamples(),
             ]
         ];
     }

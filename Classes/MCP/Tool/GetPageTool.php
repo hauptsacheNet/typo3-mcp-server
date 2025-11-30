@@ -21,6 +21,7 @@ use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
+use Hn\McpServer\Service\InputExamplesService;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
 use Hn\McpServer\Utility\RecordFormattingUtility;
@@ -33,7 +34,8 @@ class GetPageTool extends AbstractRecordTool
 {
     protected SiteInformationService $siteInformationService;
     protected McpLanguageService $languageService;
-    
+    protected InputExamplesService $inputExamplesService;
+
     public function __construct(
         SiteInformationService $siteInformationService,
         McpLanguageService $languageService
@@ -41,6 +43,7 @@ class GetPageTool extends AbstractRecordTool
         parent::__construct();
         $this->siteInformationService = $siteInformationService;
         $this->languageService = $languageService;
+        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
     }
 
     /**
@@ -89,9 +92,11 @@ class GetPageTool extends AbstractRecordTool
         // Add annotations
         $schema['annotations'] = [
             'readOnlyHint' => true,
-            'idempotentHint' => true
+            'idempotentHint' => true,
+            'allowedCallers' => ['code_execution_20250825'],
+            'inputExamples' => $this->inputExamplesService->getPageExamples(),
         ];
-        
+
         return $schema;
     }
 

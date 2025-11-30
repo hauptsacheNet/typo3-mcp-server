@@ -27,6 +27,21 @@ abstract class AbstractTool implements ToolInterface
         $className = (new \ReflectionClass($this))->getShortName();
         return str_replace('Tool', '', $className);
     }
+
+    /**
+     * Get annotations for this tool from the schema
+     *
+     * Annotations provide metadata hints about the tool's behavior:
+     * - readOnlyHint: Whether this tool only reads data
+     * - idempotentHint: Whether repeated calls produce the same result
+     * - allowedCallers: Which execution contexts can invoke this tool
+     * - inputExamples: Example input parameters for the tool
+     */
+    public function getAnnotations(): array
+    {
+        $schema = $this->getSchema();
+        return $schema['annotations'] ?? [];
+    }
     
     /**
      * Execute the tool with the given parameters
