@@ -13,7 +13,6 @@ use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
-use Hn\McpServer\Service\InputExamplesService;
 use Hn\McpServer\Service\LanguageService;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -24,13 +23,11 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class ReadTableTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
-    protected InputExamplesService $inputExamplesService;
 
     public function __construct()
     {
         parent::__construct();
         $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
-        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
     }
 
     /**
@@ -99,11 +96,28 @@ class ReadTableTool extends AbstractRecordTool
                 'readOnlyHint' => true,
                 'idempotentHint' => true,
                 'allowedCallers' => ['code_execution_20250825'],
-                'inputExamples' => $this->inputExamplesService->getReadTableExamples(),
+                'inputExamples' => $this->getInputExamples(),
             ]
         ];
     }
-    
+
+    /**
+     * Get dynamic input examples based on available tables
+     */
+    protected function getInputExamples(): array
+    {
+        $examples = [
+            ['table' => 'tt_content', 'pid' => 1, 'limit' => 10],
+            ['table' => 'pages', 'pid' => 0, 'where' => 'doktype = 1'],
+        ];
+
+        if (isset($GLOBALS['TCA']['tx_news_domain_model_news'])) {
+            $examples[] = ['table' => 'tx_news_domain_model_news', 'limit' => 5];
+        }
+
+        return $examples;
+    }
+
     /**
      * Execute the tool logic
      */

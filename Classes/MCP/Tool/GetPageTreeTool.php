@@ -14,7 +14,6 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\LanguageAspect;
-use Hn\McpServer\Service\InputExamplesService;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
@@ -26,7 +25,6 @@ class GetPageTreeTool extends AbstractRecordTool
 {
     protected SiteInformationService $siteInformationService;
     protected LanguageService $languageService;
-    protected InputExamplesService $inputExamplesService;
 
     public function __construct(
         SiteInformationService $siteInformationService,
@@ -35,7 +33,6 @@ class GetPageTreeTool extends AbstractRecordTool
         parent::__construct();
         $this->siteInformationService = $siteInformationService;
         $this->languageService = $languageService;
-        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
     }
 
     /**
@@ -76,7 +73,10 @@ class GetPageTreeTool extends AbstractRecordTool
             'readOnlyHint' => true,
             'idempotentHint' => true,
             'allowedCallers' => ['code_execution_20250825'],
-            'inputExamples' => $this->inputExamplesService->getPageTreeExamples(),
+            'inputExamples' => [
+                ['startPage' => 0, 'depth' => 2],
+                ['startPage' => 1, 'depth' => 1],
+            ],
         ];
 
         return $schema;

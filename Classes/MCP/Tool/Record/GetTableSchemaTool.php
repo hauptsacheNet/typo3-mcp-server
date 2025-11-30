@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool\Record;
 
-use Hn\McpServer\Service\InputExamplesService;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -16,14 +15,6 @@ use Hn\McpServer\Service\TableAccessService;
  */
 class GetTableSchemaTool extends AbstractRecordTool
 {
-    protected InputExamplesService $inputExamplesService;
-
-    public function __construct()
-    {
-        parent::__construct();
-        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
-    }
-
     /**
      * Get the tool schema
      */
@@ -55,9 +46,27 @@ class GetTableSchemaTool extends AbstractRecordTool
                 'readOnlyHint' => true,
                 'idempotentHint' => true,
                 'allowedCallers' => ['code_execution_20250825'],
-                'inputExamples' => $this->inputExamplesService->getTableSchemaExamples(),
+                'inputExamples' => $this->getInputExamples(),
             ]
         ];
+    }
+
+    /**
+     * Get dynamic input examples based on available tables
+     */
+    protected function getInputExamples(): array
+    {
+        $examples = [
+            ['table' => 'tt_content'],
+            ['table' => 'tt_content', 'type' => 'text'],
+            ['table' => 'pages'],
+        ];
+
+        if (isset($GLOBALS['TCA']['tx_news_domain_model_news'])) {
+            $examples[] = ['table' => 'tx_news_domain_model_news'];
+        }
+
+        return $examples;
     }
 
     /**

@@ -7,7 +7,6 @@ namespace Hn\McpServer\MCP\Tool\Record;
 use Doctrine\DBAL\ParameterType;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
-use Hn\McpServer\Service\InputExamplesService;
 use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -23,13 +22,11 @@ use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 class WriteTableTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
-    protected InputExamplesService $inputExamplesService;
 
     public function __construct()
     {
         parent::__construct();
         $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
-        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
     }
 
     /**
@@ -92,9 +89,41 @@ class WriteTableTool extends AbstractRecordTool
                 'readOnlyHint' => false,
                 'idempotentHint' => false,
                 'allowedCallers' => ['code_execution_20250825'],
-                'inputExamples' => $this->inputExamplesService->getWriteTableExamples(),
+                'inputExamples' => $this->getInputExamples(),
             ]
         ];
+    }
+
+    /**
+     * Get dynamic input examples based on available tables
+     */
+    protected function getInputExamples(): array
+    {
+        $examples = [
+            [
+                'action' => 'create',
+                'table' => 'tt_content',
+                'pid' => 1,
+                'data' => ['CType' => 'text', 'header' => 'New Header', 'bodytext' => 'Content'],
+            ],
+            [
+                'action' => 'update',
+                'table' => 'tt_content',
+                'uid' => 42,
+                'data' => ['header' => 'Updated Header'],
+            ],
+        ];
+
+        if (isset($GLOBALS['TCA']['tx_news_domain_model_news'])) {
+            $examples[] = [
+                'action' => 'create',
+                'table' => 'tx_news_domain_model_news',
+                'pid' => 1,
+                'data' => ['title' => 'News Title', 'bodytext' => 'Article content'],
+            ];
+        }
+
+        return $examples;
     }
 
     /**

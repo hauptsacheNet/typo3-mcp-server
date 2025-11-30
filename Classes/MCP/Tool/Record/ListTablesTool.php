@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool\Record;
 
-use Hn\McpServer\Service\InputExamplesService;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -14,14 +13,6 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class ListTablesTool extends AbstractRecordTool
 {
-    protected InputExamplesService $inputExamplesService;
-
-    public function __construct()
-    {
-        parent::__construct();
-        $this->inputExamplesService = GeneralUtility::makeInstance(InputExamplesService::class);
-    }
-
     /**
      * Get the tool schema
      */
@@ -38,7 +29,7 @@ class ListTablesTool extends AbstractRecordTool
                 'readOnlyHint' => true,
                 'idempotentHint' => true,
                 'allowedCallers' => ['code_execution_20250825'],
-                'inputExamples' => $this->inputExamplesService->getListTablesExamples(),
+                'inputExamples' => [[]],
             ]
         ];
     }
