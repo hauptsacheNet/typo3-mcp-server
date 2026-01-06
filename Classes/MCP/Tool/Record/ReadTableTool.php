@@ -23,7 +23,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class ReadTableTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
-    
+
     public function __construct()
     {
         parent::__construct();
@@ -38,12 +38,12 @@ class ReadTableTool extends AbstractRecordTool
         // Check if multiple languages are available
         $availableLanguages = $this->languageService->getAvailableIsoCodes();
         $hasMultipleLanguages = count($availableLanguages) > 1;
-        
+
         // Get all accessible tables for enum
         $accessibleTables = $this->tableAccessService->getAccessibleTables(true);
         $tableNames = array_keys($accessibleTables);
         sort($tableNames); // Sort alphabetically for better readability
-        
+
         // Build the base properties
         $properties = [
             'table' => [
@@ -72,7 +72,7 @@ class ReadTableTool extends AbstractRecordTool
                 'description' => 'Offset for pagination',
             ],
         ];
-        
+
         // Only add language parameters if multiple languages are configured
         if ($hasMultipleLanguages) {
             $properties['language'] = [
@@ -85,7 +85,7 @@ class ReadTableTool extends AbstractRecordTool
                 'description' => 'Include translation source information for translated records (default: false)',
             ];
         }
-        
+
         return [
             'description' => 'Read records from TYPO3 tables with filtering, pagination, and relation embedding. By default, returns records from ALL languages mixed together (matching TYPO3\'s list module behavior). Use the language parameter to filter to a specific language. For page content, use pid filter instead of individual record lookups.',
             'inputSchema' => [
@@ -98,21 +98,21 @@ class ReadTableTool extends AbstractRecordTool
             ]
         ];
     }
-    
+
     /**
      * Execute the tool logic
      */
     protected function doExecute(array $params): CallToolResult
     {
-        
+
         // Validate table access
         $table = $params['table'] ?? '';
         if (empty($table)) {
             throw new ValidationException(['Table name is required']);
         }
-        
+
         $this->ensureTableAccess($table, 'read');
-        
+
         // Execute main logic
             // Extract and validate parameters
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
@@ -122,7 +122,7 @@ class ReadTableTool extends AbstractRecordTool
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
         $language = $params['language'] ?? null;
         $includeTranslationSource = $params['includeTranslationSource'] ?? false;
-        
+
         // Validate parameters
         if ($limit < 1 || $limit > 1000) {
             throw new ValidationException(['Limit must be between 1 and 1000']);
@@ -130,7 +130,7 @@ class ReadTableTool extends AbstractRecordTool
         if ($offset < 0) {
             throw new ValidationException(['Offset must be non-negative']);
         }
-        
+
         // Convert language ISO code to UID if provided
         $languageUid = null;
         if ($language !== null) {
@@ -139,7 +139,7 @@ class ReadTableTool extends AbstractRecordTool
                 throw new ValidationException(["Unknown language code: {$language}"]);
             }
         }
-        
+
         // Get records from the table
         $result = $this->getRecords(
             $table,
@@ -150,15 +150,15 @@ class ReadTableTool extends AbstractRecordTool
             $offset,
             $languageUid
         );
-        
+
         // Include related records
         $result = $this->includeRelations($result, $table);
-        
+
         // Include translation metadata if requested
         if ($includeTranslationSource && $languageUid !== null && $languageUid > 0) {
             $result['translationSource'] = $this->getTranslationSourceData($result['records'], $table);
         }
-        
+
         // Return the result as JSON
         return $this->createJsonResult($result);
     }
@@ -197,7 +197,7 @@ class ReadTableTool extends AbstractRecordTool
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
             );
         }
-        
+
         // Filter by language if specified and table has language field
         if ($languageUid !== null) {
             $languageField = $this->tableAccessService->getLanguageFieldName($table);
@@ -273,16 +273,16 @@ class ReadTableTool extends AbstractRecordTool
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
             ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
-        
+
         $countQueryBuilder->count('uid')->from($table);
-        
+
         // Apply the same WHERE conditions as the main query
         if ($pid !== null && $this->tableHasPidField($table)) {
             $countQueryBuilder->andWhere(
                 $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
             );
         }
-        
+
         // Apply language filter to count query as well
         if ($languageUid !== null) {
             $languageField = $this->tableAccessService->getLanguageFieldName($table);
@@ -292,7 +292,7 @@ class ReadTableTool extends AbstractRecordTool
                 );
             }
         }
-        
+
         if ($uid !== null) {
             // Apply the same UID filtering logic for count query
             $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
@@ -312,11 +312,11 @@ class ReadTableTool extends AbstractRecordTool
                 );
             }
         }
-        
+
         if (!empty($condition)) {
             $countQueryBuilder->andWhere($condition);
         }
-        
+
         try {
             $totalCount = $countQueryBuilder->executeQuery()->fetchOne();
         } catch (\Doctrine\DBAL\Exception $e) {
@@ -355,7 +355,7 @@ class ReadTableTool extends AbstractRecordTool
     protected function processRecord(array $record, string $table, array $fields = []): array
     {
         $processedRecord = [];
-        
+
         // For workspace transparency, replace workspace UID with live UID
         if (isset($record['t3ver_oid']) && $record['t3ver_oid'] > 0) {
             // This is a workspace version of an existing record - use the live UID instead
@@ -365,10 +365,10 @@ class ReadTableTool extends AbstractRecordTool
             // New records don't have a live counterpart until published
             // No change needed
         }
-        
+
         // Get essential fields using TableAccessService
         $essentialFields = $this->tableAccessService->getEssentialFields($table);
-        
+
         // Get type-specific fields if a type field exists
         $typeField = $this->tableAccessService->getTypeFieldName($table);
         $typeSpecificFields = [];
@@ -383,7 +383,7 @@ class ReadTableTool extends AbstractRecordTool
             // If not, we'll get a reasonable fallback
             $hasValidTypeConfig = !empty($typeSpecificFields);
         }
-        
+
         // Process each field
         foreach ($record as $field => $value) {
             // Always include essential fields
@@ -391,42 +391,42 @@ class ReadTableTool extends AbstractRecordTool
                 $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
                 continue;
             }
-            
+
             // Always include fields that were explicitly requested to be preserved
             if (!empty($fields) && in_array($field, $fields)) {
                 $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
                 continue;
             }
-            
+
             // Special handling for pi_flexform in list content elements
-            if ($field === 'pi_flexform' && $table === 'tt_content' && 
+            if ($field === 'pi_flexform' && $table === 'tt_content' &&
                 isset($record['CType']) && $record['CType'] === 'list' &&
                 !empty($record['list_type'])) {
                 // Check if there's a FlexForm DS configured for this plugin
                 $flexFormDs = $GLOBALS['TCA']['tt_content']['columns']['pi_flexform']['config']['ds'] ?? [];
                 $listType = $record['list_type'];
-                
+
                 // Check various DS key patterns
-                $hasFlexFormConfig = isset($flexFormDs[$listType . ',list']) || 
+                $hasFlexFormConfig = isset($flexFormDs[$listType . ',list']) ||
                                     isset($flexFormDs['*,' . $listType]) ||
                                     isset($flexFormDs[$listType]);
-                
+
                 if ($hasFlexFormConfig) {
                     // Include pi_flexform for this plugin
                     $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
                     continue;
                 }
             }
-            
+
             // Skip fields not relevant to this record type (only if we have a valid type configuration)
             if ($hasValidTypeConfig && !empty($typeSpecificFields) && !in_array($field, $typeSpecificFields)) {
                 continue;
             }
-            
+
             // Include the field
             $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
         }
-        
+
         return $processedRecord;
     }
 
@@ -439,7 +439,7 @@ class ReadTableTool extends AbstractRecordTool
         if ($value === null) {
             return null;
         }
-        
+
         // Check if this is an integer field based on TCA eval rules or select field with integer values
         $fieldConfig = $this->tableAccessService->getFieldConfig($table, $field);
         if ($fieldConfig) {
@@ -447,7 +447,7 @@ class ReadTableTool extends AbstractRecordTool
             if (isset($fieldConfig['config']['eval']) && strpos($fieldConfig['config']['eval'], 'int') !== false) {
                 return (int)$value;
             }
-            
+
             // Check if it's a select field with numeric string that should be integer
             if (isset($fieldConfig['config']['type']) && $fieldConfig['config']['type'] === 'select') {
                 // If the value is numeric, check if this field typically uses integers
@@ -456,12 +456,12 @@ class ReadTableTool extends AbstractRecordTool
                     if (in_array($field, ['type', 'sys_language_uid', 'colPos', 'layout', 'frame_class', 'space_before_class', 'space_after_class', 'header_layout'])) {
                         return (int)$value;
                     }
-                    
+
                     // Check if ALL items use integer values (not just one)
                     if (!empty($fieldConfig['config']['items'])) {
                         $allIntegers = true;
                         $hasItems = false;
-                        
+
                         foreach ($fieldConfig['config']['items'] as $item) {
                             $itemValue = null;
                             if (isset($item['value'])) {
@@ -469,7 +469,7 @@ class ReadTableTool extends AbstractRecordTool
                             } elseif (isset($item[1])) {
                                 $itemValue = $item[1];
                             }
-                            
+
                             if ($itemValue !== null && $itemValue !== '--div--') {
                                 $hasItems = true;
                                 if (!is_int($itemValue) && !ctype_digit((string)$itemValue)) {
@@ -478,7 +478,7 @@ class ReadTableTool extends AbstractRecordTool
                                 }
                             }
                         }
-                        
+
                         // Only convert if all items are integers
                         if ($hasItems && $allIntegers) {
                             return (int)$value;
@@ -487,18 +487,18 @@ class ReadTableTool extends AbstractRecordTool
                 }
             }
         }
-        
+
         // Convert FlexForm XML to JSON
         if ($this->tableAccessService->isFlexFormField($table, $field) && is_string($value) && !empty($value) && strpos($value, '<?xml') === 0) {
             try {
                 // Use TYPO3's FlexFormService to convert XML to array
                 $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
                 $flexFormArray = $flexFormService->convertFlexFormContentToArray($value);
-                
+
                 // Simplify the structure for easier use in LLMs
                 $result = [];
                 $settings = [];
-                
+
                 // Process each field and organize settings
                 foreach ($flexFormArray as $key => $val) {
                     // Check if this is a settings field (key starts with "settings")
@@ -514,12 +514,12 @@ class ReadTableTool extends AbstractRecordTool
                         $result[$key] = $val;
                     }
                 }
-                
+
                 // Add settings to result if any were found
                 if (!empty($settings)) {
                     $result['settings'] = $settings;
                 }
-                
+
                 return $result;
             } catch (\Exception $e) {
                 // Log the error but continue with empty result
@@ -527,7 +527,7 @@ class ReadTableTool extends AbstractRecordTool
                 return [];
             }
         }
-        
+
         // Convert JSON strings to arrays
         if (is_string($value) && strpos($value, '{') === 0) {
             $decoded = json_decode($value, true);
@@ -535,7 +535,7 @@ class ReadTableTool extends AbstractRecordTool
                 return $decoded;
             }
         }
-        
+
         // Convert timestamps to ISO 8601 dates
         if (is_numeric($value) && $this->tableAccessService->isDateField($table, $field)) {
             if ($value > 0) {
@@ -545,7 +545,7 @@ class ReadTableTool extends AbstractRecordTool
             }
             return null;
         }
-        
+
         return $value;
     }
 
@@ -642,7 +642,7 @@ class ReadTableTool extends AbstractRecordTool
     protected function includeMmRelations(array &$records, string $fieldName, array $fieldConfig, string $table): void
     {
         $mmTable = $fieldConfig['config']['MM'];
-        
+
         // Get MM values for all records
         foreach ($records as &$record) {
             if (isset($record['uid'])) {
@@ -671,7 +671,7 @@ class ReadTableTool extends AbstractRecordTool
         if (isset($fieldConfig['config']['multiple']) && $fieldConfig['config']['multiple']) {
             $supportsMultiple = true;
         }
-        
+
         // Convert comma-separated values to array for each record
         foreach ($records as &$record) {
             if (isset($record[$fieldName])) {
@@ -744,7 +744,7 @@ class ReadTableTool extends AbstractRecordTool
         // Get all related records
         $foreignSortBy = $fieldConfig['config']['foreign_sortby'] ?? '';
         $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy);
-        
+
         // Group related records by parent record
         $groupedRecords = [];
         foreach ($relatedRecords as $relatedRecord) {
@@ -787,7 +787,7 @@ class ReadTableTool extends AbstractRecordTool
         if (empty($parentUids)) {
             return [];
         }
-        
+
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
 
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
@@ -801,8 +801,15 @@ class ReadTableTool extends AbstractRecordTool
 
         // Select all fields
         // Apply default sorting if foreign_sortby is defined
-        $sortField = !empty($foreignSortBy) ? $foreignSortBy : 'sorting';
-        
+
+        if (empty($foreignSortBy)) {
+            $this->applyDefaultSorting($queryBuilder, $table);
+        } else {
+            $queryBuilder->orderBy($foreignSortBy, 'ASC')
+                ->addOrderBy('uid', 'ASC');  // Secondary sort by UID for consistency;
+        }
+
+
         // Ensure we have the sort field in our select
         $records = $queryBuilder->select('*')
             ->from($table)
@@ -812,25 +819,24 @@ class ReadTableTool extends AbstractRecordTool
                     $queryBuilder->createNamedParameter($parentUids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
                 )
             )
-            ->orderBy($sortField, 'ASC')
-            ->addOrderBy('uid', 'ASC')  // Secondary sort by UID for consistency
             ->executeQuery()
             ->fetchAllAssociative();
+
 
 
         // Process records for workspace transparency
         // For inline relations, we need to ensure the foreign field is preserved
         $fieldsToPreserve = [$foreignField];
-        
+
         $processedRecords = [];
         foreach ($records as $record) {
             $processed = $this->processRecord($record, $table, $fieldsToPreserve);
-            
+
             // Ensure the foreign field is always included if it exists in the raw record
             if (isset($record[$foreignField]) && !isset($processed[$foreignField])) {
                 $processed[$foreignField] = $this->convertFieldValue($table, $foreignField, $record[$foreignField]);
             }
-            
+
             $processedRecords[] = $processed;
         }
 
@@ -839,15 +845,15 @@ class ReadTableTool extends AbstractRecordTool
 
     /**
      * Get MM relation values for a field
-     * 
+     *
      * NOTE: This method provides basic MM relation support. It does NOT:
      * - Apply foreign_table_where conditions
      * - Resolve placeholders in foreign_table_where
      * - Handle complex TYPO3 relation scenarios
-     * 
-     * For complex scenarios, use TYPO3 Backend or DataHandler which handle 
+     *
+     * For complex scenarios, use TYPO3 Backend or DataHandler which handle
      * these complexities properly.
-     * 
+     *
      * @param string $mmTable The MM table name
      * @param string $localTable The local table name
      * @param int $localUid The local record UID
@@ -859,10 +865,10 @@ class ReadTableTool extends AbstractRecordTool
     {
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($mmTable);
-        
+
         // Determine if this is an opposite/reverse relation
         $isOppositeRelation = !empty($fieldConfig['MM_opposite_field']);
-        
+
         // Set column names based on relation direction
         if ($isOppositeRelation) {
             // For opposite relations (like categories), local record is in uid_foreign
@@ -875,12 +881,12 @@ class ReadTableTool extends AbstractRecordTool
             $foreignColumn = 'uid_foreign';
             $sortingColumn = 'sorting';
         }
-        
+
         // Basic constraints
         $constraints = [
             $queryBuilder->expr()->eq($localColumn, $queryBuilder->createNamedParameter($localUid, ParameterType::INTEGER))
         ];
-        
+
         // Add match fields if specified (e.g., for shared MM tables like sys_category_record_mm)
         $matchFields = $fieldConfig['MM_match_fields'] ?? [];
         foreach ($matchFields as $field => $value) {
@@ -889,7 +895,7 @@ class ReadTableTool extends AbstractRecordTool
                 $queryBuilder->createNamedParameter($value)
             );
         }
-        
+
         // Execute query
         $result = $queryBuilder
             ->select($foreignColumn)
@@ -897,12 +903,12 @@ class ReadTableTool extends AbstractRecordTool
             ->where(...$constraints)
             ->orderBy($sortingColumn, 'ASC')
             ->executeQuery();
-        
+
         $values = [];
         while ($row = $result->fetchAssociative()) {
             $values[] = (int)$row[$foreignColumn];
         }
-        
+
         return $values;
     }
 
@@ -929,20 +935,20 @@ class ReadTableTool extends AbstractRecordTool
 
         return true;
     }
-    
+
     /**
      * Get translation source data for records
      */
     protected function getTranslationSourceData(array $records, string $table): array
     {
         $translationData = [];
-        
+
         // Get translation parent field name
         $translationParentField = $this->tableAccessService->getTranslationParentFieldName($table);
         if (empty($translationParentField)) {
             return [];
         }
-        
+
         // Collect parent UIDs
         $parentUids = [];
         foreach ($records as $record) {
@@ -950,34 +956,34 @@ class ReadTableTool extends AbstractRecordTool
                 $parentUids[] = (int)$record[$translationParentField];
             }
         }
-        
+
         if (empty($parentUids)) {
             return [];
         }
-        
+
         // Load parent records
         $parentRecords = $this->loadParentRecords($table, array_unique($parentUids));
-        
+
         // Build translation metadata
         foreach ($records as $record) {
             if (!empty($record[$translationParentField])) {
                 $parentUid = (int)$record[$translationParentField];
                 $recordUid = (int)$record['uid'];
-                
+
                 if (isset($parentRecords[$parentUid])) {
                     $parentRecord = $parentRecords[$parentUid];
-                    
+
                     // Get excluded and synchronized fields
                     $excludedFields = $this->tableAccessService->getExcludedFieldsInTranslation($table);
                     $inheritedValues = [];
-                    
+
                     // Collect inherited field values
                     foreach ($excludedFields as $field) {
                         if (isset($parentRecord[$field])) {
                             $inheritedValues[$field] = $this->convertFieldValue($table, $field, $parentRecord[$field]);
                         }
                     }
-                    
+
                     $translationData[$recordUid] = [
                         'sourceUid' => $parentUid,
                         'sourceLanguage' => $this->languageService->getIsoCodeFromUid(0) ?? 'default',
@@ -986,10 +992,10 @@ class ReadTableTool extends AbstractRecordTool
                 }
             }
         }
-        
+
         return $translationData;
     }
-    
+
     /**
      * Load parent records for translations
      */
@@ -998,17 +1004,17 @@ class ReadTableTool extends AbstractRecordTool
         if (empty($parentUids)) {
             return [];
         }
-        
+
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
-        
+
         // Apply restrictions
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
             ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
-        
+
         $records = $queryBuilder
             ->select('*')
             ->from($table)
@@ -1020,14 +1026,14 @@ class ReadTableTool extends AbstractRecordTool
             )
             ->executeQuery()
             ->fetchAllAssociative();
-        
+
         // Process and index by UID
         $indexedRecords = [];
         foreach ($records as $record) {
             $processedRecord = $this->processRecord($record, $table);
             $indexedRecords[$processedRecord['uid']] = $processedRecord;
         }
-        
+
         return $indexedRecords;
     }
 
