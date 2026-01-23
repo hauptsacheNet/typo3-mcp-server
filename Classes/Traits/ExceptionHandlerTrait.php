@@ -74,9 +74,9 @@ trait ExceptionHandlerTrait
         }
         
         if ($this->isExpectedException($e)) {
-            $this->getLogger()->warning($e->getMessage(), $context);
-        } else {
             $this->getLogger()->error($e->getMessage(), $context);
+        } else {
+            $this->getLogger()->critical($e->getMessage(), $context);
         }
     }
     

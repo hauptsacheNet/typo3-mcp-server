@@ -9,6 +9,8 @@ use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
+use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
+use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Localization\LanguageService;
@@ -151,14 +153,57 @@ class GetPageTool extends AbstractRecordTool
 
     /**
      * Get basic page data with language overlay if applicable
+     *
+     * This method uses direct QueryBuilder instead of PageRepository to properly
+     * handle workspace-only pages (pages that exist only in a workspace, not yet live).
      */
     protected function getPageData(int $uid, int $languageId = 0): array
     {
-        // Create a context with the specified language
-        $context = GeneralUtility::makeInstance(Context::class);
-        
-        // Set up language aspect if language is specified
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $queryBuilder = $connectionPool->getQueryBuilderForTable('pages');
+
+        // Apply proper workspace restrictions
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
+
+        $queryBuilder->select('*')->from('pages');
+
+        // Handle workspace UID lookup (both live UID and workspace versions)
+        if ($currentWorkspace > 0) {
+            // In workspace context, check both live UID and workspace versions (t3ver_oid)
+            $queryBuilder->andWhere(
+                $queryBuilder->expr()->or(
+                    $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
+                    $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
+                )
+            );
+        } else {
+            // In live workspace, just filter by UID
+            $queryBuilder->andWhere(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
+            );
+        }
+
+        $page = $queryBuilder->executeQuery()->fetchAssociative();
+
+        if (!$page) {
+            throw new \RuntimeException('Page not found: ' . $uid);
+        }
+
+        // Apply workspace transparency - return live UID for consistency
+        // For workspace versions of existing records, use the live UID
+        if (isset($page['t3ver_oid']) && $page['t3ver_oid'] > 0) {
+            $page['uid'] = (int)$page['t3ver_oid'];
+        }
+
+        // Apply language overlay if language is specified
         if ($languageId > 0) {
+            // Create a context with the specified language for PageRepository overlay
+            $context = GeneralUtility::makeInstance(Context::class);
             $languageAspect = new LanguageAspect(
                 $languageId,
                 $languageId,
@@ -166,22 +211,10 @@ class GetPageTool extends AbstractRecordTool
                 [$languageId]
             );
             $context->setAspect('language', $languageAspect);
-        }
-        
-        // Create PageRepository with context
-        $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
-        
-        // Get the page - PageRepository handles workspace and deleted restrictions
-        $page = $pageRepository->getPage($uid);
-        
-        if (!$page) {
-            throw new \RuntimeException('Page not found: ' . $uid);
-        }
-        
-        // Apply language overlay if language is specified
-        if ($languageId > 0) {
+
+            $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
             $overlaidPage = $pageRepository->getPageOverlay($page, $languageId);
-            
+
             // Add our custom metadata
             if ($overlaidPage !== $page) {
                 // Page was overlaid
@@ -197,7 +230,7 @@ class GetPageTool extends AbstractRecordTool
                 $page['_language_uid'] = $languageId;
             }
         }
-        
+
         // Convert some values to their proper types
         $page['uid'] = (int)$page['uid'];
         $page['pid'] = (int)$page['pid'];
@@ -216,11 +249,15 @@ class GetPageTool extends AbstractRecordTool
     {
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
-        
+
+        // Apply proper workspace restrictions
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
         $queryBuilder->getRestrictions()
             ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-        
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
+
         $translations = $queryBuilder->select('sys_language_uid', 'title')
             ->from('pages')
             ->where(
@@ -229,7 +266,7 @@ class GetPageTool extends AbstractRecordTool
             ->orderBy('sys_language_uid')
             ->executeQuery()
             ->fetchAllAssociative();
-        
+
         $result = [];
         foreach ($translations as $translation) {
             $languageId = (int)$translation['sys_language_uid'];
@@ -242,7 +279,7 @@ class GetPageTool extends AbstractRecordTool
                 ];
             }
         }
-        
+
         return $result;
     }
     
@@ -307,14 +344,18 @@ class GetPageTool extends AbstractRecordTool
                 'records' => []
             ];
         }
-        
+
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
 
+        // Apply proper workspace restrictions
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
         $queryBuilder->getRestrictions()
             ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-        
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
+
         // Always include hidden records (like the TYPO3 backend does)
 
         // First, get the total count of records
@@ -326,7 +367,7 @@ class GetPageTool extends AbstractRecordTool
             )
             ->executeQuery()
             ->fetchOne();
-            
+
         // Now get the limited records
         $query = $queryBuilder->select('*')
             ->from($table)
@@ -336,7 +377,7 @@ class GetPageTool extends AbstractRecordTool
 
         // Limit to 20 records per table
         $query->setMaxResults(20);
-        
+
         // Order by uid as default, but use TCA sorting field if available
         if (!empty($GLOBALS['TCA'][$table]['ctrl']['sortby'])) {
             $query->orderBy($GLOBALS['TCA'][$table]['ctrl']['sortby']);
@@ -354,12 +395,21 @@ class GetPageTool extends AbstractRecordTool
             $query->orderBy('uid');
         }
 
+        $records = $query->executeQuery()->fetchAllAssociative();
+
+        // Apply workspace transparency - use live UID for workspace versions
+        foreach ($records as &$record) {
+            if (isset($record['t3ver_oid']) && $record['t3ver_oid'] > 0) {
+                $record['uid'] = (int)$record['t3ver_oid'];
+            }
+        }
+
         return [
             'total' => (int)$totalCount,
-            'records' => $query->executeQuery()->fetchAllAssociative()
+            'records' => $records
         ];
     }
-    
+
     /**
      * Check if a table has a hidden field using TCA
      */
