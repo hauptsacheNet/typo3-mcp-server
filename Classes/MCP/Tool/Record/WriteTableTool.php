@@ -225,6 +225,21 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function createRecord(string $table, int $pid, array $data, string $position): CallToolResult
     {
+        // Pre-validate page access for non-admin users
+        $pageAccessError = $this->validatePageAccess($pid);
+        if ($pageAccessError !== null) {
+            return $this->createErrorResult($pageAccessError);
+        }
+
+        // Ensure language field is set for language-aware tables (needed for non-admin permission checks)
+        $data = $this->ensureLanguageField($table, $data);
+
+        // Pre-validate authMode permissions (e.g., CType values) for non-admin users
+        $authModeError = $this->validateAuthModePermissions($table, $data);
+        if ($authModeError !== null) {
+            return $this->createErrorResult($authModeError);
+        }
+
         // Validate the data
         $validationResult = $this->validateRecordData($table, $data, 'create');
         if ($validationResult !== true) {
@@ -281,7 +296,7 @@ class WriteTableTool extends AbstractRecordTool
         
         // Check for errors in parent creation
         if (!empty($dataHandler->errorLog)) {
-            return $this->createErrorResult('Error creating record: ' . implode(', ', $dataHandler->errorLog));
+            return $this->createErrorResult('Error creating record: ' . $this->formatDataHandlerErrors($dataHandler->errorLog));
         }
         
         // Get the UID of the newly created parent record
@@ -1209,5 +1224,221 @@ class WriteTableTool extends AbstractRecordTool
         }
         
         return $liveUid;
+    }
+
+    /**
+     * Ensure sys_language_uid is set for language-aware tables.
+     * Non-admin users require this field to be set for language permission checks.
+     *
+     * Note: This method only adds the language field if it's not already set and
+     * the table supports it. The validation step will catch if the field is not
+     * available for the specific record type.
+     *
+     * @param string $table Table name
+     * @param array $data Record data
+     * @return array Modified data with sys_language_uid if needed
+     */
+    protected function ensureLanguageField(string $table, array $data): array
+    {
+        // Only modify data for non-admin users who need this for permission checks
+        $beUser = $GLOBALS['BE_USER'];
+        if ($beUser->isAdmin()) {
+            return $data;
+        }
+
+        $languageField = $this->tableAccessService->getLanguageFieldName($table);
+
+        // If table has no language field, nothing to do
+        if ($languageField === null) {
+            return $data;
+        }
+
+        // If language field is already set, keep it
+        if (isset($data[$languageField])) {
+            return $data;
+        }
+
+        // Get the type field to check if language field is available for this type
+        $typeFieldName = $this->tableAccessService->getTypeFieldName($table);
+        $type = '';
+        if ($typeFieldName !== null && isset($data[$typeFieldName])) {
+            $type = (string)$data[$typeFieldName];
+        }
+
+        // Check if the language field is actually available for this record type
+        if (!$this->tableAccessService->canAccessField($table, $languageField, $type)) {
+            // Language field is not available for this type, don't add it
+            return $data;
+        }
+
+        // Default to default language (0) for create operations
+        $data[$languageField] = 0;
+
+        return $data;
+    }
+
+    /**
+     * Validate that the current user has access to the target page.
+     * This checks webmounts for non-admin users.
+     *
+     * @param int $pid Target page ID
+     * @return string|null Error message if access denied, null if access granted
+     */
+    protected function validatePageAccess(int $pid): ?string
+    {
+        $beUser = $GLOBALS['BE_USER'];
+
+        // Admin users have access to all pages
+        if ($beUser->isAdmin()) {
+            return null;
+        }
+
+        // Check if user has access to this page through webmounts
+        if (!$beUser->isInWebMount($pid)) {
+            return sprintf(
+                'Permission denied: You do not have access to page %d. Your account needs database mount point (DB Mount) ' .
+                'access to this page or its parent pages. Contact your administrator.',
+                $pid
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * Validate authMode permissions for fields like CType.
+     * Non-admin users need explicit permissions for certain field values.
+     *
+     * @param string $table Table name
+     * @param array $data Record data
+     * @return string|null Error message if permission denied, null if all permissions granted
+     */
+    protected function validateAuthModePermissions(string $table, array $data): ?string
+    {
+        $beUser = $GLOBALS['BE_USER'];
+
+        // Admin users bypass authMode checks
+        if ($beUser->isAdmin()) {
+            return null;
+        }
+
+        $tca = $GLOBALS['TCA'][$table] ?? [];
+        $columns = $tca['columns'] ?? [];
+
+        foreach ($data as $fieldName => $value) {
+            if (!isset($columns[$fieldName])) {
+                continue;
+            }
+
+            $fieldConfig = $columns[$fieldName]['config'] ?? [];
+            $authMode = $fieldConfig['authMode'] ?? null;
+
+            // Only check fields with authMode configured
+            if ($authMode === null) {
+                continue;
+            }
+
+            // Check if user has permission for this value
+            if (!$beUser->checkAuthMode($table, $fieldName, $value)) {
+                $fieldLabel = $this->tableAccessService->translateLabel(
+                    $columns[$fieldName]['label'] ?? $fieldName
+                );
+
+                // Collect allowed values for this field
+                $allowedValues = $this->getAllowedAuthModeValues($table, $fieldName, $fieldConfig);
+
+                $errorMsg = sprintf(
+                    'You do not have permission to use %s="%s" for field "%s".',
+                    $fieldName,
+                    $value,
+                    $fieldLabel
+                );
+
+                if (!empty($allowedValues)) {
+                    $errorMsg .= ' Allowed values for your user: ' . implode(', ', $allowedValues) . '.';
+                } else {
+                    $errorMsg .= ' No values are allowed for your user group. Contact your administrator.';
+                }
+
+                return $errorMsg;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Get allowed authMode values for the current user.
+     *
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @param array $fieldConfig Field configuration
+     * @return array List of allowed values
+     */
+    protected function getAllowedAuthModeValues(string $table, string $fieldName, array $fieldConfig): array
+    {
+        $beUser = $GLOBALS['BE_USER'];
+        $allowedValues = [];
+
+        // Get all possible values from the field config
+        $items = $fieldConfig['items'] ?? [];
+        $parsed = $this->tableAccessService->parseSelectItems($items, true); // Skip dividers
+
+        foreach ($parsed['values'] as $itemValue) {
+            if ($beUser->checkAuthMode($table, $fieldName, $itemValue)) {
+                $label = $parsed['labels'][$itemValue] ?? '';
+                $translatedLabel = $this->tableAccessService->translateLabel($label);
+                $allowedValues[] = $itemValue . ' (' . $translatedLabel . ')';
+            }
+        }
+
+        return $allowedValues;
+    }
+
+    /**
+     * Format DataHandler error messages into user-friendly messages.
+     *
+     * @param array $errorLog DataHandler error log
+     * @return string Formatted error message
+     */
+    protected function formatDataHandlerErrors(array $errorLog): string
+    {
+        $errors = [];
+
+        foreach ($errorLog as $error) {
+            // Parse common TYPO3 DataHandler error patterns
+            if (strpos($error, 'Attempt to insert record on pages:') !== false) {
+                if (strpos($error, 'not allowed') !== false) {
+                    $errors[] = 'Cannot create record on this page. Check that you have database mount point access ' .
+                        'and the necessary table permissions.';
+                    continue;
+                }
+            }
+
+            if (strpos($error, 'recordEditAccessInternals()') !== false) {
+                if (strpos($error, 'authMode') !== false) {
+                    // Already handled by validateAuthModePermissions, but show if it slipped through
+                    preg_match('/field "([^"]+)" with value "([^"]+)"/', $error, $matches);
+                    if (count($matches) === 3) {
+                        $errors[] = sprintf(
+                            'Permission denied for %s="%s". Your user group needs explicit permission for this value.',
+                            $matches[1],
+                            $matches[2]
+                        );
+                        continue;
+                    }
+                }
+
+                if (strpos($error, 'languageField') !== false) {
+                    $errors[] = 'Language permission check failed. Ensure sys_language_uid is set in your data.';
+                    continue;
+                }
+            }
+
+            // Default: include original error
+            $errors[] = $error;
+        }
+
+        return implode(' | ', $errors);
     }
 }

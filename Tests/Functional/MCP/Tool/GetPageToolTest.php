@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\GetPageTool;
+use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
+use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\TextContent;
 use Symfony\Component\Yaml\Yaml;
 use TYPO3\CMS\Core\Site\SiteFinder;
@@ -33,6 +35,7 @@ class GetPageToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
         
         // Set up backend user for DataHandler and TableAccessService
         $this->setUpBackendUser(1);
@@ -628,21 +631,21 @@ class GetPageToolTest extends FunctionalTestCase
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
         $languageService = GeneralUtility::makeInstance(LanguageService::class);
         $tool = new GetPageTool($siteInformationService, $languageService);
-        
+
         // Test Home page (root) - should have base URL
         $result = $tool->execute(['uid' => 1]);
         $this->assertFalse($result->isError);
         $content = $result->content[0]->text;
         $this->assertStringContainsString('URL:', $content);
         $this->assertStringContainsString('https://example.com/', $content);
-        
+
         // Test Contact page
         $result = $tool->execute(['uid' => 6]);
         $this->assertFalse($result->isError);
         $content = $result->content[0]->text;
         $this->assertStringContainsString('URL:', $content);
         $this->assertStringContainsString('https://example.com/contact', $content);
-        
+
         // Test nested page (Team under About)
         $result = $tool->execute(['uid' => 4]);
         $this->assertFalse($result->isError);
@@ -650,5 +653,120 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertStringContainsString('URL:', $content);
         $this->assertStringContainsString('https://example.com/about/team', $content);
     }
-    
+
+    /**
+     * Test getting a page that was created in workspace (no live version)
+     *
+     * This tests the scenario where:
+     * 1. A page is created in a workspace (not yet live)
+     * 2. GetPage should be able to retrieve this workspace-only page
+     */
+    public function testGetWorkspaceOnlyPage(): void
+    {
+        // Switch to workspace context
+        $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+        $workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        // Create a new page in the workspace using WriteTableTool
+        $writeTool = new WriteTableTool();
+        $createResult = $writeTool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => 1, // Under home page
+            'data' => [
+                'title' => 'Workspace Only Page',
+                'doktype' => 1,
+                'slug' => '/workspace-only-page'
+            ]
+        ]);
+
+        $this->assertFalse($createResult->isError, 'Failed to create page: ' . json_encode($createResult->jsonSerialize()));
+        $createData = json_decode($createResult->content[0]->text, true);
+        $newPageUid = $createData['uid'];
+
+        // Verify we got a valid UID
+        $this->assertGreaterThan(0, $newPageUid, 'Should have received a valid page UID');
+
+        // Now try to get this workspace-only page using GetPage
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $getPageTool = new GetPageTool($siteInformationService, $languageService);
+
+        $result = $getPageTool->execute([
+            'uid' => $newPageUid
+        ]);
+
+        // This is the main assertion - GetPage should find the workspace-only page
+        $this->assertFalse($result->isError, 'GetPage should find workspace-only page: ' . json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+
+        // Verify page information is present
+        $this->assertStringContainsString('PAGE INFORMATION', $content);
+        $this->assertStringContainsString('UID: ' . $newPageUid, $content);
+        $this->assertStringContainsString('Title: Workspace Only Page', $content);
+        $this->assertStringContainsString('Parent Page (PID): 1', $content);
+    }
+
+    /**
+     * Test getting a page that was created in workspace with content elements
+     */
+    public function testGetWorkspaceOnlyPageWithContent(): void
+    {
+        // Switch to workspace context
+        $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+        $workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        // Create a new page in the workspace
+        $writeTool = new WriteTableTool();
+        $createPageResult = $writeTool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => 1,
+            'data' => [
+                'title' => 'Workspace Page With Content',
+                'doktype' => 1,
+                'slug' => '/workspace-page-with-content'
+            ]
+        ]);
+
+        $this->assertFalse($createPageResult->isError, json_encode($createPageResult->jsonSerialize()));
+        $pageData = json_decode($createPageResult->content[0]->text, true);
+        $newPageUid = $pageData['uid'];
+
+        // Create content element on the new workspace page
+        $createContentResult = $writeTool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => $newPageUid,
+            'data' => [
+                'header' => 'Workspace Content Element',
+                'CType' => 'text',
+                'bodytext' => 'This content was created in workspace'
+            ]
+        ]);
+
+        $this->assertFalse($createContentResult->isError, json_encode($createContentResult->jsonSerialize()));
+
+        // Now get the page and verify it shows the content element
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $getPageTool = new GetPageTool($siteInformationService, $languageService);
+
+        $result = $getPageTool->execute([
+            'uid' => $newPageUid
+        ]);
+
+        $this->assertFalse($result->isError, 'GetPage should find workspace page: ' . json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+
+        // Verify page info
+        $this->assertStringContainsString('Title: Workspace Page With Content', $content);
+
+        // Verify content element is listed
+        $this->assertStringContainsString('Content Elements (tt_content)', $content);
+        $this->assertStringContainsString('Workspace Content Element', $content);
+    }
+
 }

@@ -264,10 +264,15 @@ class McpEndpoint
         if ($userData) {
             $beUser->user = $userData;
             $GLOBALS['BE_USER'] = $beUser;
-            
+
+            // CRITICAL: Fetch group data to populate permissions
+            // This computes tables_select, tables_modify, non_exclude_fields, webmounts, etc.
+            // Without this, non-admin users have no permissions computed from their groups
+            $beUser->fetchGroupData();
+
             // Initialize language service (required for DataHandler and other core components)
             $this->initializeLanguageService($beUser);
-            
+
             // Set up workspace context
             $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
             $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);

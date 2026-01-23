@@ -335,14 +335,14 @@ class GetTableSchemaTool extends AbstractRecordTool
         // Handle both flattened (from TcaSchemaFactory) and nested (traditional TCA) structures
         $config = $fieldConfig['config'] ?? $fieldConfig;
         $type = $config['type'] ?? '';
-        
+
         // Add field details based on type
         if ($type === 'flex') {
             // For flex fields, show the available FlexForm identifiers
             $this->addFlexFormIdentifiers($result, $config, $table, $fieldName, $filterType);
         } else {
             // For other field types, use the TcaFormattingUtility
-            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName);
+            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName, $table);
         }
     }
     
