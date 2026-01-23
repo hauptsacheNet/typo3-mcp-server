@@ -1344,17 +1344,55 @@ class WriteTableTool extends AbstractRecordTool
                     $columns[$fieldName]['label'] ?? $fieldName
                 );
 
-                return sprintf(
-                    'You do not have permission to use %s="%s" for field "%s". ' .
-                    'Your user group needs explicit permission for this value. Contact your administrator.',
+                // Collect allowed values for this field
+                $allowedValues = $this->getAllowedAuthModeValues($table, $fieldName, $fieldConfig);
+
+                $errorMsg = sprintf(
+                    'You do not have permission to use %s="%s" for field "%s".',
                     $fieldName,
                     $value,
                     $fieldLabel
                 );
+
+                if (!empty($allowedValues)) {
+                    $errorMsg .= ' Allowed values for your user: ' . implode(', ', $allowedValues) . '.';
+                } else {
+                    $errorMsg .= ' No values are allowed for your user group. Contact your administrator.';
+                }
+
+                return $errorMsg;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Get allowed authMode values for the current user.
+     *
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @param array $fieldConfig Field configuration
+     * @return array List of allowed values
+     */
+    protected function getAllowedAuthModeValues(string $table, string $fieldName, array $fieldConfig): array
+    {
+        $beUser = $GLOBALS['BE_USER'];
+        $allowedValues = [];
+
+        // Get all possible values from the field config
+        $items = $fieldConfig['items'] ?? [];
+        $parsed = $this->tableAccessService->parseSelectItems($items, true); // Skip dividers
+
+        foreach ($parsed['values'] as $itemValue) {
+            if ($beUser->checkAuthMode($table, $fieldName, $itemValue)) {
+                $label = $parsed['labels'][$itemValue] ?? '';
+                $translatedLabel = $this->tableAccessService->translateLabel($label);
+                $allowedValues[] = $itemValue . ' (' . $translatedLabel . ')';
+            }
+        }
+
+        return $allowedValues;
     }
 
     /**

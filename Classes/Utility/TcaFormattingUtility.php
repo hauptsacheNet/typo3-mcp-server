@@ -18,12 +18,13 @@ class TcaFormattingUtility
 
     /**
      * Add field details inline for TCA or FlexForm configuration
-     * 
+     *
      * @param string &$result The result string to append to
      * @param array $config The field configuration
      * @param string $fieldName Optional field name for special handling
+     * @param string $table Optional table name for authMode filtering
      */
-    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = ''): void
+    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = ''): void
     {
         // Get the field type
         $type = $config['type'] ?? '';
@@ -74,7 +75,7 @@ class TcaFormattingUtility
                 if (isset($config['renderType'])) {
                     $result .= " [renderType: " . $config['renderType'] . "]";
                 }
-                
+
                 // Add foreign table and MM information
                 if (isset($config['foreign_table'])) {
                     $result .= " [foreign table: " . $config['foreign_table'] . "]";
@@ -82,21 +83,38 @@ class TcaFormattingUtility
                 if (isset($config['MM'])) {
                     $result .= " [MM table: " . $config['MM'] . "]";
                 }
-                
+
                 // Add select options if available
                 if (isset($config['items']) && is_array($config['items'])) {
                     $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
                     $parsed = $tableAccessService->parseSelectItems($config['items'], false); // Include dividers
-                    
+
+                    // Check if this field has authMode restrictions
+                    $hasAuthMode = !empty($config['authMode']);
+                    $beUser = $GLOBALS['BE_USER'] ?? null;
+                    $isAdmin = $beUser && $beUser->isAdmin();
+
                     $options = [];
                     foreach ($parsed['values'] as $value) {
+                        // Skip dividers
+                        if ($value === '--div--') {
+                            continue;
+                        }
+
+                        // Filter by authMode for non-admin users
+                        if ($hasAuthMode && !$isAdmin && $beUser && !empty($table) && !empty($fieldName)) {
+                            if (!$beUser->checkAuthMode($table, $fieldName, $value)) {
+                                continue; // User doesn't have permission for this value
+                            }
+                        }
+
                         $label = $parsed['labels'][$value] ?? '';
                         if ($label) {
                             $translatedLabel = TableAccessService::translateLabel($label);
                             $options[] = $value . " (" . $translatedLabel . ")";
                         }
                     }
-                    
+
                     if (!empty($options)) {
                         $result .= " [Options: " . implode(', ', $options) . "]";
                     }
