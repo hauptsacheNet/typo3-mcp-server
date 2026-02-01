@@ -65,7 +65,12 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'uid' => [
                         'type' => 'integer',
-                        'description' => 'Record UID (required for "update" and "delete" actions)',
+                        'description' => 'Record UID (required for "update", "delete", and "translate" actions when updating a single record)',
+                    ],
+                    'uids' => [
+                        'type' => 'array',
+                        'items' => ['type' => 'integer'],
+                        'description' => 'Array of record UIDs for batch operations (alternative to "uid" for "update" and "delete" actions). When using batch mode, the same data/action is applied to all specified records.',
                     ],
                     'data' => [
                         'type' => 'object',
@@ -103,6 +108,7 @@ class WriteTableTool extends AbstractRecordTool
         $table = $params['table'] ?? '';
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
+        $uids = isset($params['uids']) && is_array($params['uids']) ? array_map('intval', $params['uids']) : null;
         $data = $params['data'] ?? [];
         $position = $params['position'] ?? 'bottom';
         
@@ -165,18 +171,26 @@ class WriteTableTool extends AbstractRecordTool
                 break;
                 
             case 'update':
-                if ($uid === null) {
-                    throw new ValidationException(['Record UID is required for update action']);
+                if ($uid === null && ($uids === null || empty($uids))) {
+                    throw new ValidationException(['Record UID (uid) or array of UIDs (uids) is required for update action']);
                 }
-                
+
+                if ($uid !== null && $uids !== null) {
+                    throw new ValidationException(['Cannot specify both uid and uids - use one or the other']);
+                }
+
                 if (empty($data)) {
                     throw new ValidationException(['Data is required for update action']);
                 }
                 break;
-                
+
             case 'delete':
-                if ($uid === null) {
-                    throw new ValidationException(['Record UID is required for delete action']);
+                if ($uid === null && ($uids === null || empty($uids))) {
+                    throw new ValidationException(['Record UID (uid) or array of UIDs (uids) is required for delete action']);
+                }
+
+                if ($uid !== null && $uids !== null) {
+                    throw new ValidationException(['Cannot specify both uid and uids - use one or the other']);
                 }
                 break;
                 
@@ -202,18 +216,28 @@ class WriteTableTool extends AbstractRecordTool
         switch ($action) {
             case 'create':
                 return $this->createRecord($table, $pid, $data, $position);
-                
+
             case 'update':
+                // Batch update mode
+                if ($uids !== null && !empty($uids)) {
+                    return $this->batchUpdateRecords($table, $uids, $data);
+                }
+                // Single update mode
                 return $this->updateRecord($table, $uid, $data);
-                
+
             case 'delete':
+                // Batch delete mode
+                if ($uids !== null && !empty($uids)) {
+                    return $this->batchDeleteRecords($table, $uids);
+                }
+                // Single delete mode
                 return $this->deleteRecord($table, $uid);
 
             case 'translate':
                 // The language UID has already been converted from ISO code if needed
                 $targetLanguageUid = (int)$data['sys_language_uid'];
                 return $this->translateRecord($table, $uid, $targetLanguageUid);
-                
+
             default:
                 // This should never happen due to earlier validation
                 throw new \LogicException('Invalid action: ' . $action);
@@ -548,7 +572,175 @@ class WriteTableTool extends AbstractRecordTool
             'uid' => $uid, // Return the live UID that was passed in
         ]);
     }
-    
+
+    /**
+     * Batch update multiple records with the same data
+     *
+     * @param string $table Table name
+     * @param array $uids Array of record UIDs to update
+     * @param array $data Data to apply to all records
+     * @return CallToolResult Result with success/failure per UID
+     */
+    protected function batchUpdateRecords(string $table, array $uids, array $data): CallToolResult
+    {
+        $results = [
+            'action' => 'batch_update',
+            'table' => $table,
+            'total' => count($uids),
+            'succeeded' => [],
+            'failed' => [],
+        ];
+
+        foreach ($uids as $uid) {
+            // Validate the data for each record (type field may differ per record)
+            $recordData = $data; // Copy to avoid modifications affecting subsequent records
+            $validationResult = $this->validateRecordData($table, $recordData, 'update', $uid);
+            if ($validationResult !== true) {
+                $results['failed'][] = [
+                    'uid' => $uid,
+                    'error' => 'Validation error: ' . $validationResult,
+                ];
+                continue;
+            }
+
+            // Extract inline relations before converting data
+            $inlineRelations = $this->extractInlineRelations($table, $recordData);
+
+            // Convert data for storage
+            $recordData = $this->convertDataForStorage($table, $recordData);
+
+            // Resolve the live UID to workspace UID
+            $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
+
+            // Update the record using DataHandler
+            $dataMap = [$table => [$workspaceUid => $recordData]];
+            $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+            $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+            $dataHandler->start($dataMap, []);
+            $dataHandler->process_datamap();
+
+            // Check for errors
+            if (!empty($dataHandler->errorLog)) {
+                $results['failed'][] = [
+                    'uid' => $uid,
+                    'error' => $this->formatDataHandlerErrors($dataHandler->errorLog),
+                ];
+                continue;
+            }
+
+            // Process inline relations if needed
+            if (!empty($inlineRelations)) {
+                $record = BackendUtility::getRecord($table, $workspaceUid, 'pid');
+                $pid = $record['pid'] ?? 0;
+
+                $childDataMap = [];
+                $this->processInlineRelations($childDataMap, $table, $workspaceUid, $pid, $inlineRelations, $uid);
+
+                if (!empty($childDataMap)) {
+                    $childDataHandler = GeneralUtility::makeInstance(DataHandler::class);
+                    $childDataHandler->BE_USER = $GLOBALS['BE_USER'];
+                    $childDataHandler->start($childDataMap, []);
+                    $childDataHandler->process_datamap();
+
+                    if (!empty($childDataHandler->errorLog)) {
+                        $results['failed'][] = [
+                            'uid' => $uid,
+                            'error' => 'Record updated but inline relations failed: ' . implode(', ', $childDataHandler->errorLog),
+                        ];
+                        continue;
+                    }
+                }
+            }
+
+            $results['succeeded'][] = $uid;
+        }
+
+        // Add summary
+        $results['successCount'] = count($results['succeeded']);
+        $results['failedCount'] = count($results['failed']);
+
+        return $this->createJsonResult($results);
+    }
+
+    /**
+     * Batch delete multiple records
+     *
+     * @param string $table Table name
+     * @param array $uids Array of record UIDs to delete
+     * @return CallToolResult Result with success/failure per UID
+     */
+    protected function batchDeleteRecords(string $table, array $uids): CallToolResult
+    {
+        $results = [
+            'action' => 'batch_delete',
+            'table' => $table,
+            'total' => count($uids),
+            'succeeded' => [],
+            'failed' => [],
+        ];
+
+        // Build command map for all deletions
+        $cmdMap = [];
+        $uidMapping = []; // Map workspace UIDs back to live UIDs
+
+        foreach ($uids as $uid) {
+            $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
+            $cmdMap[$table][$workspaceUid] = ['delete' => 1];
+            $uidMapping[$workspaceUid] = $uid;
+        }
+
+        // Execute all deletions in a single DataHandler call for efficiency
+        $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+        $dataHandler->start([], $cmdMap);
+        $dataHandler->process_cmdmap();
+
+        // Process results - DataHandler doesn't give per-record error info easily,
+        // so we check if there were any errors and report accordingly
+        if (empty($dataHandler->errorLog)) {
+            // All succeeded
+            $results['succeeded'] = $uids;
+        } else {
+            // Some may have failed - try to determine which ones
+            // DataHandler errors often contain table:uid patterns
+            $failedUids = [];
+            foreach ($dataHandler->errorLog as $error) {
+                // Try to extract UID from error message
+                foreach ($uidMapping as $workspaceUid => $liveUid) {
+                    if (strpos($error, (string)$workspaceUid) !== false ||
+                        strpos($error, (string)$liveUid) !== false) {
+                        $failedUids[$liveUid] = $error;
+                    }
+                }
+            }
+
+            // If we couldn't identify specific failures, mark all as potentially failed
+            if (empty($failedUids)) {
+                // Report the error but assume deletions that didn't error succeeded
+                $results['succeeded'] = $uids;
+                $results['warning'] = 'DataHandler reported errors but specific failures could not be identified: ' .
+                    implode('; ', $dataHandler->errorLog);
+            } else {
+                foreach ($uids as $uid) {
+                    if (isset($failedUids[$uid])) {
+                        $results['failed'][] = [
+                            'uid' => $uid,
+                            'error' => $failedUids[$uid],
+                        ];
+                    } else {
+                        $results['succeeded'][] = $uid;
+                    }
+                }
+            }
+        }
+
+        // Add summary
+        $results['successCount'] = count($results['succeeded']);
+        $results['failedCount'] = count($results['failed']);
+
+        return $this->createJsonResult($results);
+    }
+
     /**
      * Translate a record to another language
      */

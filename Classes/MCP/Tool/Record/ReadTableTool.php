@@ -71,6 +71,11 @@ class ReadTableTool extends AbstractRecordTool
                 'type' => 'integer',
                 'description' => 'Offset for pagination',
             ],
+            'fields' => [
+                'type' => 'array',
+                'items' => ['type' => 'string'],
+                'description' => 'Specific field names to return. If not specified, all relevant fields are returned. Essential fields (uid, pid, type fields) are always included. Use this to reduce response size when you only need specific data (e.g., ["uid", "header"] to get just UIDs and headers).',
+            ],
         ];
 
         // Only add language parameters if multiple languages are configured
@@ -122,6 +127,7 @@ class ReadTableTool extends AbstractRecordTool
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
         $language = $params['language'] ?? null;
         $includeTranslationSource = $params['includeTranslationSource'] ?? false;
+        $fields = isset($params['fields']) && is_array($params['fields']) ? $params['fields'] : null;
 
         // Validate parameters
         if ($limit < 1 || $limit > 1000) {
@@ -148,11 +154,12 @@ class ReadTableTool extends AbstractRecordTool
             $condition,
             $limit,
             $offset,
-            $languageUid
+            $languageUid,
+            $fields
         );
 
-        // Include related records
-        $result = $this->includeRelations($result, $table);
+        // Include related records (skip if specific fields requested and relation fields not included)
+        $result = $this->includeRelations($result, $table, $fields);
 
         // Include translation metadata if requested
         if ($includeTranslationSource && $languageUid !== null && $languageUid > 0) {
@@ -165,6 +172,15 @@ class ReadTableTool extends AbstractRecordTool
 
     /**
      * Get records from a table
+     *
+     * @param string $table Table name
+     * @param int|null $pid Filter by page ID
+     * @param int|null $uid Filter by record UID
+     * @param string $condition SQL WHERE condition
+     * @param int $limit Maximum records to return
+     * @param int $offset Pagination offset
+     * @param int|null $languageUid Language UID filter
+     * @param array|null $fields Specific fields to return (null = all fields)
      */
     protected function getRecords(
         string $table,
@@ -173,7 +189,8 @@ class ReadTableTool extends AbstractRecordTool
         string $condition,
         int $limit,
         int $offset,
-        ?int $languageUid = null
+        ?int $languageUid = null,
+        ?array $fields = null
     ): array {
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
@@ -187,9 +204,47 @@ class ReadTableTool extends AbstractRecordTool
 
         // Always include hidden records (like the TYPO3 backend does)
 
-        // Select all fields
-        $queryBuilder->select('*')
-            ->from($table);
+        // Determine which fields to select
+        if ($fields !== null && !empty($fields)) {
+            // Build list of fields to select: requested fields + essential fields
+            $essentialFields = $this->tableAccessService->getEssentialFields($table);
+            $typeField = $this->tableAccessService->getTypeFieldName($table);
+            $languageField = $this->tableAccessService->getLanguageFieldName($table);
+            $sortingField = $this->tableAccessService->getSortingFieldName($table);
+
+            // Start with requested fields
+            $selectFields = array_unique($fields);
+
+            // Always include essential fields for proper record processing
+            foreach ($essentialFields as $essential) {
+                if (!in_array($essential, $selectFields)) {
+                    $selectFields[] = $essential;
+                }
+            }
+
+            // Always include type field if it exists (needed for type-based field filtering)
+            if ($typeField && !in_array($typeField, $selectFields)) {
+                $selectFields[] = $typeField;
+            }
+
+            // Always include language field if filtering by language
+            if ($languageField && $languageUid !== null && !in_array($languageField, $selectFields)) {
+                $selectFields[] = $languageField;
+            }
+
+            // Always include sorting field if it exists (needed for proper ordering)
+            if ($sortingField && !in_array($sortingField, $selectFields)) {
+                $selectFields[] = $sortingField;
+            }
+
+            // Select only the specified fields
+            $queryBuilder->select(...$selectFields)
+                ->from($table);
+        } else {
+            // Select all fields
+            $queryBuilder->select('*')
+                ->from($table);
+        }
 
         // Filter by pid if specified
         if ($pid !== null && $this->tableHasPidField($table)) {
@@ -333,12 +388,12 @@ class ReadTableTool extends AbstractRecordTool
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
         foreach ($records as $record) {
-            $processedRecord = $this->processRecord($record, $table);
+            $processedRecord = $this->processRecord($record, $table, $fields ?? []);
             $processedRecords[] = $processedRecord;
         }
 
         // Return the result with metadata
-        return [
+        $result = [
             'table' => $table,
             'tableLabel' => $this->getTableLabel($table),
             'records' => $processedRecords,
@@ -347,10 +402,21 @@ class ReadTableTool extends AbstractRecordTool
             'offset' => $offset,
             'hasMore' => ($offset + count($records)) < $totalCount,
         ];
+
+        // Include field selection info if fields were specified
+        if ($fields !== null && !empty($fields)) {
+            $result['fields'] = $fields;
+        }
+
+        return $result;
     }
 
     /**
      * Process a record
+     *
+     * @param array $record Raw database record
+     * @param string $table Table name
+     * @param array $fields Explicitly requested fields (empty = all fields)
      */
     protected function processRecord(array $record, string $table, array $fields = []): array
     {
@@ -368,6 +434,9 @@ class ReadTableTool extends AbstractRecordTool
 
         // Get essential fields using TableAccessService
         $essentialFields = $this->tableAccessService->getEssentialFields($table);
+
+        // Determine if we're in field selection mode (explicit fields requested)
+        $fieldSelectionMode = !empty($fields);
 
         // Get type-specific fields if a type field exists
         $typeField = $this->tableAccessService->getTypeFieldName($table);
@@ -392,11 +461,16 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
 
-            // Always include fields that were explicitly requested to be preserved
-            if (!empty($fields) && in_array($field, $fields)) {
-                $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
+            // In field selection mode, only include explicitly requested fields (plus essentials)
+            if ($fieldSelectionMode) {
+                if (in_array($field, $fields)) {
+                    $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
+                }
+                // Skip non-requested fields in field selection mode
                 continue;
             }
+
+            // Below this point: standard mode (no field selection)
 
             // Special handling for pi_flexform in list content elements
             if ($field === 'pi_flexform' && $table === 'tt_content' &&
@@ -576,8 +650,12 @@ class ReadTableTool extends AbstractRecordTool
 
     /**
      * Include related records in the result
+     *
+     * @param array $result Query result with records
+     * @param string $table Table name
+     * @param array|null $requestedFields Fields explicitly requested (null = all fields)
      */
-    protected function includeRelations(array $result, string $table): array
+    protected function includeRelations(array $result, string $table, ?array $requestedFields = null): array
     {
         if (empty($result['records'])) {
             return $result;
@@ -593,6 +671,11 @@ class ReadTableTool extends AbstractRecordTool
 
         // Process each field that might contain relations
         foreach ($tca['columns'] as $fieldName => $fieldConfig) {
+            // Skip relation processing if field selection mode is active and this field wasn't requested
+            if ($requestedFields !== null && !empty($requestedFields) && !in_array($fieldName, $requestedFields)) {
+                continue;
+            }
+
             $fieldType = $fieldConfig['config']['type'] ?? '';
 
             match ($fieldType) {

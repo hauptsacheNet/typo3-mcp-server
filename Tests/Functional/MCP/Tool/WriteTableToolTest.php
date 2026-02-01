@@ -1087,15 +1087,15 @@ class WriteTableToolTest extends AbstractFunctionalTest
     public function testMissingUidOnUpdateError(): void
     {
         $tool = new WriteTableTool();
-        
+
         $result = $tool->execute([
             'action' => 'update',
             'table' => 'tt_content',
             'data' => ['header' => 'Test']
         ]);
-        
+
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Record UID is required', $result->content[0]->text);
+        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required', $result->content[0]->text);
     }
 
     /**
@@ -1177,6 +1177,220 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $this->assertArrayHasKey('required', $schema['inputSchema']);
         $this->assertContains('action', $schema['inputSchema']['required']);
         $this->assertContains('table', $schema['inputSchema']['required']);
+    }
+
+    /**
+     * Test batch update with multiple UIDs
+     */
+    public function testBatchUpdateMultipleRecords(): void
+    {
+        $tool = new WriteTableTool();
+        $readTool = new ReadTableTool();
+        $pid = $this->getRootPageUid();
+
+        // Create test records using WriteTableTool (so they're in workspace)
+        $createResult1 = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => $pid,
+            'data' => ['CType' => 'textmedia', 'header' => 'Batch Test 1', 'bodytext' => 'Original 1', 'colPos' => 0]
+        ]);
+        $this->assertFalse($createResult1->isError, json_encode($createResult1->jsonSerialize()));
+        $uid1 = json_decode($createResult1->content[0]->text, true)['uid'];
+
+        $createResult2 = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => $pid,
+            'data' => ['CType' => 'textmedia', 'header' => 'Batch Test 2', 'bodytext' => 'Original 2', 'colPos' => 0]
+        ]);
+        $this->assertFalse($createResult2->isError, json_encode($createResult2->jsonSerialize()));
+        $uid2 = json_decode($createResult2->content[0]->text, true)['uid'];
+
+        $createResult3 = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => $pid,
+            'data' => ['CType' => 'textmedia', 'header' => 'Batch Test 3', 'bodytext' => 'Original 3', 'colPos' => 0]
+        ]);
+        $this->assertFalse($createResult3->isError, json_encode($createResult3->jsonSerialize()));
+        $uid3 = json_decode($createResult3->content[0]->text, true)['uid'];
+
+        // Batch update all three records
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uids' => [$uid1, $uid2, $uid3],
+            'data' => [
+                'header' => 'Batch Updated Header'
+            ]
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $data = json_decode($result->content[0]->text, true);
+
+        // Verify batch response structure
+        $this->assertEquals('batch_update', $data['action']);
+        $this->assertEquals('tt_content', $data['table']);
+        $this->assertEquals(3, $data['total']);
+        $this->assertArrayHasKey('succeeded', $data);
+        $this->assertArrayHasKey('failed', $data);
+        $this->assertEquals(3, $data['successCount']);
+        $this->assertEquals(0, $data['failedCount']);
+
+        // Verify all UIDs are in succeeded list
+        $this->assertContains($uid1, $data['succeeded']);
+        $this->assertContains($uid2, $data['succeeded']);
+        $this->assertContains($uid3, $data['succeeded']);
+
+        // Verify the records were actually updated by reading them back
+        foreach ([$uid1, $uid2, $uid3] as $uid) {
+            $readResult = $readTool->execute([
+                'table' => 'tt_content',
+                'uid' => $uid
+            ]);
+            $this->assertFalse($readResult->isError);
+            $readData = json_decode($readResult->content[0]->text, true);
+            $this->assertEquals('Batch Updated Header', $readData['records'][0]['header']);
+        }
+    }
+
+    /**
+     * Test batch delete with multiple UIDs
+     */
+    public function testBatchDeleteMultipleRecords(): void
+    {
+        $tool = new WriteTableTool();
+        $pid = $this->getRootPageUid();
+
+        // Create test records using WriteTableTool (so they're in workspace)
+        $createResult1 = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => $pid,
+            'data' => ['CType' => 'textmedia', 'header' => 'Delete Test 1', 'bodytext' => 'Will be deleted', 'colPos' => 0]
+        ]);
+        $this->assertFalse($createResult1->isError, json_encode($createResult1->jsonSerialize()));
+        $uid1 = json_decode($createResult1->content[0]->text, true)['uid'];
+
+        $createResult2 = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => $pid,
+            'data' => ['CType' => 'textmedia', 'header' => 'Delete Test 2', 'bodytext' => 'Will be deleted', 'colPos' => 0]
+        ]);
+        $this->assertFalse($createResult2->isError, json_encode($createResult2->jsonSerialize()));
+        $uid2 = json_decode($createResult2->content[0]->text, true)['uid'];
+
+        // Batch delete both records
+        $result = $tool->execute([
+            'action' => 'delete',
+            'table' => 'tt_content',
+            'uids' => [$uid1, $uid2]
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $data = json_decode($result->content[0]->text, true);
+
+        // Verify batch response structure
+        $this->assertEquals('batch_delete', $data['action']);
+        $this->assertEquals('tt_content', $data['table']);
+        $this->assertEquals(2, $data['total']);
+        $this->assertArrayHasKey('succeeded', $data);
+        $this->assertArrayHasKey('failed', $data);
+        $this->assertEquals(2, $data['successCount']);
+        $this->assertEquals(0, $data['failedCount']);
+
+        // Verify both UIDs are in succeeded list
+        $this->assertContains($uid1, $data['succeeded']);
+        $this->assertContains($uid2, $data['succeeded']);
+    }
+
+    /**
+     * Test error when both uid and uids are provided
+     */
+    public function testErrorWhenBothUidAndUidsProvided(): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'uids' => [100, 101],
+            'data' => ['header' => 'Test']
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('Cannot specify both uid and uids', $result->content[0]->text);
+    }
+
+    /**
+     * Test batch update validation error for missing uid/uids
+     */
+    public function testBatchUpdateRequiresUidOrUids(): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'data' => ['header' => 'Test']
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required', $result->content[0]->text);
+    }
+
+    /**
+     * Test batch delete validation error for missing uid/uids
+     */
+    public function testBatchDeleteRequiresUidOrUids(): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'delete',
+            'table' => 'tt_content'
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required', $result->content[0]->text);
+    }
+
+    /**
+     * Test batch update with empty uids array
+     */
+    public function testBatchUpdateWithEmptyUidsArray(): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uids' => [],
+            'data' => ['header' => 'Test']
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required', $result->content[0]->text);
+    }
+
+    /**
+     * Test uids parameter is in schema
+     */
+    public function testUidsParameterInSchema(): void
+    {
+        $tool = new WriteTableTool();
+        $schema = $tool->getSchema();
+
+        $properties = $schema['inputSchema']['properties'];
+        $this->assertArrayHasKey('uids', $properties);
+        $this->assertEquals('array', $properties['uids']['type']);
+        $this->assertArrayHasKey('items', $properties['uids']);
+        $this->assertEquals('integer', $properties['uids']['items']['type']);
     }
 
     /**

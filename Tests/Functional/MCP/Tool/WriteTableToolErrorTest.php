@@ -100,7 +100,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             'data' => ['title' => 'Test']
         ]);
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Record UID is required for update action', $result->content[0]->text);
+        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required for update action', $result->content[0]->text);
         
         // Missing PID for create
         $result = $this->tool->execute([

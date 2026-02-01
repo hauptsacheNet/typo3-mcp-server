@@ -405,24 +405,168 @@ class ReadTableToolTest extends AbstractFunctionalTest
     {
         // Create a record with an unknown CType
         $tool = new ReadTableTool();
-        
+
         // Read a record but simulate unknown CType by testing field filtering behavior
         $result = $tool->execute([
             'table' => 'tt_content',
             'uid' => 100
         ]);
-        
+
         $this->assertFalse($result->isError, json_encode($result->content));
         $data = json_decode($result->content[0]->text, true);
         $record = $data['records'][0];
-        
+
         // Even with unknown CTypes, essential fields should be present
         $essentialFields = ['uid', 'pid', 'CType', 'header', 'sorting', 'tstamp', 'crdate'];
         foreach ($essentialFields as $field) {
             $this->assertArrayHasKey($field, $record, "Essential field $field missing");
         }
-        
+
         // Should have reasonable field count (not all possible fields)
         $this->assertLessThan(100, count($record), "Too many fields for unknown CType");
+    }
+
+    /**
+     * Test field selection - return only specified fields
+     */
+    public function testFieldSelection(): void
+    {
+        $tool = new ReadTableTool();
+
+        // Request only specific fields
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'pid' => 1,
+            'fields' => ['header', 'bodytext']
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->content));
+        $data = json_decode($result->content[0]->text, true);
+
+        // Verify field selection metadata is included
+        $this->assertArrayHasKey('fields', $data);
+        $this->assertEquals(['header', 'bodytext'], $data['fields']);
+
+        // Check records
+        $this->assertNotEmpty($data['records']);
+
+        foreach ($data['records'] as $record) {
+            // Requested fields should be present
+            $this->assertArrayHasKey('header', $record, 'Requested field "header" should be present');
+            $this->assertArrayHasKey('bodytext', $record, 'Requested field "bodytext" should be present');
+
+            // Essential fields should always be present
+            $this->assertArrayHasKey('uid', $record, 'Essential field "uid" should always be present');
+            $this->assertArrayHasKey('pid', $record, 'Essential field "pid" should always be present');
+
+            // Type field should be auto-included for processing
+            $this->assertArrayHasKey('CType', $record, 'Type field "CType" should be auto-included');
+        }
+    }
+
+    /**
+     * Test field selection with only uid requested
+     */
+    public function testFieldSelectionOnlyUid(): void
+    {
+        $tool = new ReadTableTool();
+
+        // Request only uid field - useful for getting a list of IDs
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'pid' => 1,
+            'fields' => ['uid']
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->content));
+        $data = json_decode($result->content[0]->text, true);
+
+        $this->assertNotEmpty($data['records']);
+
+        foreach ($data['records'] as $record) {
+            // uid and essential fields should be present
+            $this->assertArrayHasKey('uid', $record);
+            $this->assertArrayHasKey('pid', $record);
+
+            // Non-essential, non-requested fields should NOT be present
+            $this->assertArrayNotHasKey('bodytext', $record, 'Non-requested field "bodytext" should not be present');
+        }
+
+        // Verify the response is significantly smaller (fewer fields per record)
+        $firstRecord = $data['records'][0];
+        $fieldCount = count(array_keys($firstRecord));
+        $this->assertLessThan(10, $fieldCount, 'Field selection should reduce the number of returned fields');
+    }
+
+    /**
+     * Test field selection ensures essential fields are always included
+     */
+    public function testFieldSelectionAlwaysIncludesEssentialFields(): void
+    {
+        $tool = new ReadTableTool();
+
+        // Request a field that is NOT an essential field
+        $result = $tool->execute([
+            'table' => 'pages',
+            'uid' => 1,
+            'fields' => ['nav_title']
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->content));
+        $data = json_decode($result->content[0]->text, true);
+
+        $this->assertCount(1, $data['records']);
+        $record = $data['records'][0];
+
+        // Requested field should be present
+        $this->assertArrayHasKey('nav_title', $record);
+
+        // Essential fields should ALWAYS be present even when not requested
+        $this->assertArrayHasKey('uid', $record, 'uid is essential');
+        $this->assertArrayHasKey('pid', $record, 'pid is essential');
+        $this->assertArrayHasKey('tstamp', $record, 'tstamp is essential');
+        $this->assertArrayHasKey('crdate', $record, 'crdate is essential');
+    }
+
+    /**
+     * Test field selection schema includes the fields parameter
+     */
+    public function testFieldSelectionInSchema(): void
+    {
+        $tool = new ReadTableTool();
+        $schema = $tool->getSchema();
+
+        $properties = $schema['inputSchema']['properties'];
+        $this->assertArrayHasKey('fields', $properties);
+        $this->assertEquals('array', $properties['fields']['type']);
+        $this->assertArrayHasKey('items', $properties['fields']);
+        $this->assertEquals('string', $properties['fields']['items']['type']);
+    }
+
+    /**
+     * Test field selection with empty array returns all fields (standard behavior)
+     */
+    public function testFieldSelectionWithEmptyArray(): void
+    {
+        $tool = new ReadTableTool();
+
+        // Empty fields array should behave like not specifying fields at all
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+            'fields' => []
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->content));
+        $data = json_decode($result->content[0]->text, true);
+
+        // Should NOT have fields metadata when empty array provided
+        $this->assertArrayNotHasKey('fields', $data);
+
+        // Should return all relevant fields (standard behavior)
+        $record = $data['records'][0];
+        $this->assertArrayHasKey('header', $record);
+        $this->assertArrayHasKey('bodytext', $record);
+        $this->assertArrayHasKey('CType', $record);
     }
 }
