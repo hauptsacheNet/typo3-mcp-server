@@ -17,6 +17,7 @@ require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/Client/LlmClientInterface.php';
 require_once __DIR__ . '/Client/LlmResponse.php';
 require_once __DIR__ . '/Client/AnthropicClient.php';
+require_once __DIR__ . '/Client/SymfonyAiClient.php';
 require_once __DIR__ . '/LlmTestCase.php';
 
 // Simple .env.local loader
@@ -35,8 +36,8 @@ require_once __DIR__ . '/LlmTestCase.php';
             continue;
         }
         
-        // Parse KEY=VALUE or KEY='VALUE' or KEY="VALUE"
-        if (preg_match('/^([A-Z_]+)\s*=\s*(.*)$/', $line, $matches)) {
+        // Parse KEY=VALUE or KEY='VALUE' or KEY="VALUE" (allows lowercase for LLM_MODEL, LLM_PROVIDER)
+        if (preg_match('/^([A-Za-z_]+)\s*=\s*(.*)$/', $line, $matches)) {
             $key = $matches[1];
             $value = $matches[2];
             

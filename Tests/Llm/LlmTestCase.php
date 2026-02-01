@@ -4,14 +4,13 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Llm;
 
-use Hn\McpServer\MCP\Tool\ToolInterface;
 use Hn\McpServer\MCP\ToolRegistry;
-use Hn\McpServer\Tests\Llm\Client\AnthropicClient;
 use Hn\McpServer\Tests\Llm\Client\LlmClientInterface;
 use Hn\McpServer\Tests\Llm\Client\LlmResponse;
+use Hn\McpServer\Tests\Llm\Client\SymfonyAiClient;
+use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
-use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 
 /**
  * Base class for LLM-based tests
@@ -34,27 +33,56 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected ?LlmResponse $lastResponse = null;
     protected array $toolCallHistory = [];
 
+    /**
+     * Get the LLM provider to use (can be overridden by subclasses or environment)
+     */
+    protected function getLlmProvider(): string
+    {
+        return getenv('LLM_PROVIDER') ?: SymfonyAiClient::PROVIDER_ANTHROPIC;
+    }
+
+    /**
+     * Get the model to use for this provider
+     */
+    protected function getLlmModel(): ?string
+    {
+        $model = getenv('LLM_MODEL');
+        return $model ?: null;
+    }
+
     protected function setUp(): void
     {
         parent::setUp();
-        
-        // Skip test if no API key is configured
-        $apiKey = getenv('ANTHROPIC_API_KEY');
+
+        $provider = $this->getLlmProvider();
+
+        // Get the appropriate API key based on provider
+        $apiKey = match ($provider) {
+            SymfonyAiClient::PROVIDER_ANTHROPIC => getenv('ANTHROPIC_API_KEY'),
+            SymfonyAiClient::PROVIDER_MISTRAL => getenv('MISTRAL_API_KEY'),
+            default => null,
+        };
+
         if (empty($apiKey)) {
-            $this->markTestSkipped('ANTHROPIC_API_KEY environment variable not set');
+            $envVar = match ($provider) {
+                SymfonyAiClient::PROVIDER_ANTHROPIC => 'ANTHROPIC_API_KEY',
+                SymfonyAiClient::PROVIDER_MISTRAL => 'MISTRAL_API_KEY',
+                default => strtoupper($provider) . '_API_KEY',
+            };
+            $this->markTestSkipped("{$envVar} environment variable not set");
         }
-        
+
         // Import backend user fixture
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/be_users.csv');
-        
+
         // Set up backend user for DataHandler and other tools
         $this->setUpBackendUser(1);
-        
+
         // Initialize language service
         $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('en');
-        
-        // Initialize LLM client
-        $this->llmClient = new AnthropicClient($apiKey);
+
+        // Initialize LLM client using Symfony AI Platform
+        $this->llmClient = new SymfonyAiClient($apiKey, $provider);
     }
 
     /**
@@ -85,7 +113,7 @@ abstract class LlmTestCase extends FunctionalTestCase
 
     /**
      * Call LLM with a prompt and available tools
-     * 
+     *
      * @param string $prompt
      * @param array $options Additional options for the LLM call
      * @return LlmResponse
@@ -94,16 +122,24 @@ abstract class LlmTestCase extends FunctionalTestCase
     {
         $this->lastPrompt = $prompt;
         $tools = $this->getMcpToolsAsLlmFunctions();
-        
+
+        $defaultOptions = [
+            'temperature' => 0, // Deterministic responses
+            'max_tokens' => 4000,
+        ];
+
+        // Add model if specified via environment
+        $model = $this->getLlmModel();
+        if ($model !== null) {
+            $defaultOptions['model'] = $model;
+        }
+
         $this->lastResponse = $this->llmClient->complete(
             $prompt,
             $tools,
-            array_merge([
-                'temperature' => 0, // Deterministic responses
-                'max_tokens' => 4000,
-            ], $options)
+            array_merge($defaultOptions, $options)
         );
-        
+
         return $this->lastResponse;
     }
 
@@ -305,33 +341,41 @@ abstract class LlmTestCase extends FunctionalTestCase
 
     /**
      * Continue conversation with tool results
-     * 
+     *
      * @param LlmResponse $previousResponse Previous LLM response
      * @param array $toolResults Array of tool results (from executeToolCall)
      * @param array $options Additional options for the LLM call
      * @return LlmResponse
      */
     protected function continueWithToolResult(
-        LlmResponse $previousResponse, 
-        array $toolResults, 
+        LlmResponse $previousResponse,
+        array $toolResults,
         array $options = []
     ): LlmResponse {
         // Wrap single result in array if needed
         if (isset($toolResults['content'])) {
             $toolResults = [$toolResults];
         }
-        
+
+        $defaultOptions = [
+            'temperature' => 0,
+            'max_tokens' => 4000,
+        ];
+
+        // Add model if specified via environment
+        $model = $this->getLlmModel();
+        if ($model !== null) {
+            $defaultOptions['model'] = $model;
+        }
+
         $this->lastResponse = $this->llmClient->completeWithHistory(
             $this->lastPrompt,
             $previousResponse,
             $toolResults,
             $this->getMcpToolsAsLlmFunctions(),
-            array_merge([
-                'temperature' => 0,
-                'max_tokens' => 4000,
-            ], $options)
+            array_merge($defaultOptions, $options)
         );
-        
+
         return $this->lastResponse;
     }
 
