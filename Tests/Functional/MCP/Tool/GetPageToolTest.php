@@ -21,6 +21,7 @@ class GetPageToolTest extends FunctionalTestCase
     protected array $coreExtensionsToLoad = [
         'workspaces',
         'frontend',
+        'sys_note',
     ];
     
     protected array $testExtensionsToLoad = [
@@ -36,6 +37,7 @@ class GetPageToolTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_note.csv');
         
         // Set up backend user for DataHandler and TableAccessService
         $this->setUpBackendUser(1);
@@ -767,6 +769,134 @@ class GetPageToolTest extends FunctionalTestCase
         // Verify content element is listed
         $this->assertStringContainsString('Content Elements (tt_content)', $content);
         $this->assertStringContainsString('Workspace Content Element', $content);
+    }
+
+    /**
+     * Test that sys_note records are displayed in GetPage output
+     */
+    public function testGetPageWithSysNotes(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
+
+        // Test page 1 (Home) which has 2 sys_notes in our fixture
+        $result = $tool->execute([
+            'uid' => 1
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        // Verify INTERNAL NOTES section is present
+        $this->assertStringContainsString('INTERNAL NOTES (for editors)', $content);
+
+        // Verify the notes content is displayed
+        $this->assertStringContainsString('Legal Compliance', $content);
+        $this->assertStringContainsString('header text on this page must not be changed', $content);
+        $this->assertStringContainsString('Seasonal Content', $content);
+        $this->assertStringContainsString('Update the hero banner in December', $content);
+
+        // Verify category labels are shown (category 1=Instructions, 4=To-Do)
+        $this->assertStringContainsString('[Instructions]', $content);
+        $this->assertStringContainsString('[To-Do]', $content);
+    }
+
+    /**
+     * Test that sys_notes appear before RECORDS section
+     */
+    public function testSysNotesAppearBeforeRecords(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
+
+        $result = $tool->execute([
+            'uid' => 1
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        // Verify INTERNAL NOTES section appears before RECORDS section
+        $notesPosition = strpos($content, 'INTERNAL NOTES');
+        $recordsPosition = strpos($content, 'RECORDS ON THIS PAGE');
+
+        $this->assertNotFalse($notesPosition, 'INTERNAL NOTES section should be present');
+        $this->assertNotFalse($recordsPosition, 'RECORDS ON THIS PAGE section should be present');
+        $this->assertLessThan($recordsPosition, $notesPosition, 'INTERNAL NOTES should appear before RECORDS');
+    }
+
+    /**
+     * Test page without sys_notes does not show INTERNAL NOTES section
+     */
+    public function testGetPageWithoutSysNotes(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
+
+        // Test page 7 (News) which has no sys_notes in our fixture
+        $result = $tool->execute([
+            'uid' => 7
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        // Verify INTERNAL NOTES section is NOT present
+        $this->assertStringNotContainsString('INTERNAL NOTES', $content);
+
+        // But RECORDS section should still be present
+        $this->assertStringContainsString('RECORDS ON THIS PAGE', $content);
+    }
+
+    /**
+     * Test sys_notes on different pages show correct notes
+     */
+    public function testSysNotesPerPage(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
+
+        // Test page 2 (About) which has 1 sys_note
+        $result = $tool->execute([
+            'uid' => 2
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        // Verify the About page note is displayed
+        $this->assertStringContainsString('Team Page Guidelines', $content);
+        $this->assertStringContainsString('team member information up to date', $content);
+
+        // Verify notes from other pages are NOT displayed
+        $this->assertStringNotContainsString('Legal Compliance', $content);
+        $this->assertStringNotContainsString('Seasonal Content', $content);
+    }
+
+    /**
+     * Test sys_note with different categories displays correct labels
+     */
+    public function testSysNoteCategoryLabels(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
+
+        // Test page 6 (Contact) which has a "Notes" category sys_note (category=3)
+        $result = $tool->execute([
+            'uid' => 6
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        // Verify the Notes category label is shown (category 3 = Notes)
+        $this->assertStringContainsString('[Notes]', $content);
+        $this->assertStringContainsString('Contact Form Note', $content);
     }
 
 }

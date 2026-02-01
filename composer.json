@@ -15,7 +15,8 @@
         "logiscape/mcp-sdk-php": "^1.2",
         "typo3/cms-backend": "^13.4",
         "typo3/cms-core": "^13.4",
-        "typo3/cms-workspaces": "^13.4"
+        "typo3/cms-workspaces": "^13.4",
+        "typo3/cms-sys-note": "^13.4"
     },
     "require-dev": {
         "typo3/testing-framework": "^9.2.0",

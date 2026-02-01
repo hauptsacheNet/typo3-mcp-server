@@ -135,18 +135,21 @@ class GetPageTool extends AbstractRecordTool
 
         // Get page data (with language overlay if applicable)
         $pageData = $this->getPageData($uid, $languageId);
-        
+
         // Get page URL using SiteInformationService
         $pageUrl = $this->siteInformationService->generatePageUrl((int)$pageData['uid'], $languageId);
-        
+
         // Get records on this page (filtered by language if specified)
         $recordsInfo = $this->getPageRecords($uid, $languageId);
-        
+
         // Get available translations for this page
         $translations = $this->getPageTranslations($uid);
-        
+
+        // Get internal notes (sys_note) for this page
+        $sysNotes = $this->getSysNotes($uid);
+
         // Build a text representation of the page information
-        $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl, $languageId, $translations);
+        $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl, $languageId, $translations, $sysNotes);
         
         return new CallToolResult([new TextContent($result)]);
     }
@@ -458,40 +461,40 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Format page information as readable text
      */
-    protected function formatPageInfo(array $pageData, array $recordsInfo, ?string $pageUrl = null, int $languageId = 0, array $translations = []): string
+    protected function formatPageInfo(array $pageData, array $recordsInfo, ?string $pageUrl = null, int $languageId = 0, array $translations = [], array $sysNotes = []): string
     {
         $result = "PAGE INFORMATION\n";
         $result .= "================\n\n";
-        
+
         // Basic page info
         $result .= "UID: " . $pageData['uid'] . "\n";
         $result .= "Title: " . $pageData['title'] . "\n";
-        
+
         if ($pageUrl !== null) {
             $result .= "URL: " . $pageUrl . "\n";
         }
-        
+
         if (!empty($pageData['nav_title'])) {
             $result .= "Navigation Title: " . $pageData['nav_title'] . "\n";
         }
-        
+
         if (!empty($pageData['subtitle'])) {
             $result .= "Subtitle: " . $pageData['subtitle'] . "\n";
         }
-        
+
         $result .= "Parent Page (PID): " . $pageData['pid'] . "\n";
         $result .= "Doktype: " . $pageData['doktype'] . "\n";
         $result .= "Hidden: " . ($pageData['hidden'] ? 'Yes' : 'No') . "\n";
         $result .= "Created: " . date('Y-m-d H:i:s', (int)$pageData['crdate']) . "\n";
         $result .= "Last Modified: " . date('Y-m-d H:i:s', (int)$pageData['tstamp']) . "\n";
-        
+
         // Add language/translation information
         if ($languageId > 0) {
             $isoCode = $this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown';
             $result .= "Language: " . strtoupper($isoCode) . " (ID: $languageId)\n";
             $result .= "Translated: " . (($pageData['_translated'] ?? false) ? 'Yes' : 'No') . "\n";
         }
-        
+
         // Show available translations
         if (!empty($translations)) {
             $result .= "Available Translations: ";
@@ -501,9 +504,12 @@ class GetPageTool extends AbstractRecordTool
             }
             $result .= implode(', ', $translationList) . "\n";
         }
-        
+
         $result .= "\n";
-        
+
+        // Add internal notes section (before records, for prominence)
+        $result .= $this->formatSysNotes($sysNotes);
+
         // Records on the page
         $result .= "RECORDS ON THIS PAGE\n";
         $result .= "===================\n\n";
@@ -866,13 +872,119 @@ class GetPageTool extends AbstractRecordTool
     
     /**
      * Check if a table is workspace capable
-     * 
+     *
      * @param string $table
      * @return bool
      */
     protected function isTableWorkspaceCapable(string $table): bool
     {
-        return isset($GLOBALS['TCA'][$table]['ctrl']['versioningWS']) && 
+        return isset($GLOBALS['TCA'][$table]['ctrl']['versioningWS']) &&
                $GLOBALS['TCA'][$table]['ctrl']['versioningWS'] === true;
+    }
+
+    /**
+     * Get sys_note records for a page
+     *
+     * Returns internal notes (sysnotes) associated with a page.
+     * These are editorial notes that provide context for content editors.
+     *
+     * @param int $pageId The page ID to get notes for
+     * @return array Array of sys_note records
+     */
+    protected function getSysNotes(int $pageId): array
+    {
+        // Check if sys_note table exists (sysnote extension loaded)
+        if (!isset($GLOBALS['TCA']['sys_note'])) {
+            return [];
+        }
+
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $queryBuilder = $connectionPool->getQueryBuilderForTable('sys_note');
+
+        // Apply workspace restrictions
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
+
+        $records = $queryBuilder->select('*')
+            ->from('sys_note')
+            ->where(
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
+            )
+            ->orderBy('sorting')
+            ->addOrderBy('crdate', 'DESC')
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        // Apply workspace transparency - use live UID for workspace versions
+        foreach ($records as &$record) {
+            if (isset($record['t3ver_oid']) && $record['t3ver_oid'] > 0) {
+                $record['uid'] = (int)$record['t3ver_oid'];
+            }
+        }
+
+        return $records;
+    }
+
+    /**
+     * Format sys_note records for display
+     *
+     * @param array $sysNotes Array of sys_note records
+     * @return string Formatted text output
+     */
+    protected function formatSysNotes(array $sysNotes): string
+    {
+        if (empty($sysNotes)) {
+            return '';
+        }
+
+        // Category labels from TYPO3 sys_note extension
+        // See: EXT:sys_note/Resources/Private/Language/locallang_tca.xlf
+        $categoryLabels = [
+            0 => 'Note',        // Default (empty label in TYPO3)
+            1 => 'Instructions',
+            2 => 'Template',
+            3 => 'Notes',
+            4 => 'To-Do',
+        ];
+
+        $result = "INTERNAL NOTES (for editors)\n";
+        $result .= "============================\n\n";
+
+        foreach ($sysNotes as $note) {
+            $subject = trim($note['subject'] ?? '');
+            $message = trim($note['message'] ?? '');
+            $category = (int)($note['category'] ?? 2);
+            $categoryLabel = $categoryLabels[$category] ?? 'Note';
+
+            // Format the note header
+            if (!empty($subject)) {
+                $result .= "- [{$categoryLabel}] {$subject}\n";
+            } else {
+                $result .= "- [{$categoryLabel}]\n";
+            }
+
+            // Format the note content
+            if (!empty($message)) {
+                // Strip HTML tags and normalize whitespace
+                $message = strip_tags($message);
+                $message = preg_replace('/\s+/', ' ', $message);
+                $message = trim($message);
+
+                // Wrap long messages nicely (indent continuation lines)
+                $lines = wordwrap($message, 76, "\n", true);
+                $lines = explode("\n", $lines);
+                foreach ($lines as $line) {
+                    $result .= "  " . $line . "\n";
+                }
+            }
+
+            $result .= "\n";
+        }
+
+        return $result;
     }
 }

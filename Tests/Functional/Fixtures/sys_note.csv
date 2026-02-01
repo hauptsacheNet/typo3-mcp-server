@@ -1,0 +1,6 @@
+"sys_note"
+,"uid","pid","tstamp","crdate","cruser","deleted","subject","message","category","personal","position","sorting"
+,1,1,1734875000,1734875000,1,0,"Legal Compliance","The header text on this page must not be changed without approval from the legal department.",1,0,0,256
+,2,1,1734875000,1734875000,1,0,"Seasonal Content","Update the hero banner in December for winter campaign.",4,0,0,512
+,3,2,1734875000,1734875000,1,0,"Team Page Guidelines","Always keep team member information up to date. Contact HR for any changes.",1,0,0,256
+,4,6,1734875000,1734875000,1,0,"Contact Form Note","The contact form sends emails to info@example.com. Do not change the form configuration.",3,0,0,256
