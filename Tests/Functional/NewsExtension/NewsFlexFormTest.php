@@ -171,7 +171,7 @@ class NewsFlexFormTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tt_content',
             'action' => 'update',
-            'uid' => $pluginUid,
+            'uids' => [$pluginUid],
             'data' => [
                 'pi_flexform' => [
                     'settings' => [
@@ -302,7 +302,7 @@ class NewsFlexFormTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tt_content',
             'action' => 'update',
-            'uid' => $pluginUid,
+            'uids' => [$pluginUid],
             'data' => [
                 'pi_flexform' => [
                     'settings' => []
@@ -389,7 +389,7 @@ class NewsFlexFormTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tt_content',
             'action' => 'update',
-            'uid' => $pluginUid,
+            'uids' => [$pluginUid],
             'data' => [
                 'pi_flexform' => [
                     'settings' => [
@@ -400,7 +400,7 @@ class NewsFlexFormTest extends FunctionalTestCase
                 ]
             ],
         ]);
-        
+
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         
         // Verify workspace version has the updates

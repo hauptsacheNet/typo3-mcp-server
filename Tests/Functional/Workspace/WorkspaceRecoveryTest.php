@@ -191,7 +191,7 @@ class WorkspaceRecoveryTest extends AbstractFunctionalTest
         $result = $tool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['title' => 'Updated after duplicate handling']
         ]);
         
@@ -334,8 +334,8 @@ class WorkspaceRecoveryTest extends AbstractFunctionalTest
             $tool = GeneralUtility::makeInstance(WriteTableTool::class);
             $result = $tool->execute([
                 'action' => 'update',
-                'table' => 'pages',
-                'uid' => 1,
+            'table' => 'pages',
+            'uids' => [1],
                 'data' => ['title' => "Rapid Update $i"]
             ]);
             $operations[] = $result;

@@ -95,7 +95,7 @@ class IntegrationTest extends FunctionalTestCase
         $updateResult = $writeTool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => $liveUid,
+            'uids' => [$liveUid],
             'data' => [
                 'header' => 'Updated Workspace Test',
                 'bodytext' => 'Content has been updated transparently',
@@ -104,10 +104,9 @@ class IntegrationTest extends FunctionalTestCase
         
         $this->assertFalse($updateResult->isError);
         $updateData = json_decode($updateResult->content[0]->text, true);
-        
-        
-        // The returned UID should still be the same
-        $this->assertEquals($liveUid, $updateData['uid']);
+
+        // The returned UID should still be the same (now in succeeded array for batch operations)
+        $this->assertContains($liveUid, $updateData['succeeded']);
         
         // Step 4: Read again to verify the update
         $readAgainResult = $readTool->execute([
@@ -301,14 +300,14 @@ class IntegrationTest extends FunctionalTestCase
         $deleteResult = $writeTool->execute([
             'action' => 'delete',
             'table' => 'tt_content',
-            'uid' => $uid,
+            'uids' => [$uid],
         ]);
-        
+
         $this->assertFalse($deleteResult->isError);
         $deleteData = json_decode($deleteResult->content[0]->text, true);
-        
-        // Should return the same UID
-        $this->assertEquals($uid, $deleteData['uid']);
+
+        // Should return the same UID (now in succeeded array for batch operations)
+        $this->assertContains($uid, $deleteData['succeeded']);
         
         // Try to read the deleted record
         $readResult = $readTool->execute([
@@ -364,14 +363,14 @@ class IntegrationTest extends FunctionalTestCase
         $deleteResult = $writeTool->execute([
             'action' => 'delete',
             'table' => 'tt_content',
-            'uid' => $liveUid,
+            'uids' => [$liveUid],
         ]);
-        
+
         $this->assertFalse($deleteResult->isError);
         $deleteData = json_decode($deleteResult->content[0]->text, true);
-        
-        // Should return the live UID for transparency
-        $this->assertEquals($liveUid, $deleteData['uid']);
+
+        // Should return the live UID for transparency (now in succeeded array for batch operations)
+        $this->assertContains($liveUid, $deleteData['succeeded']);
         
         // Try to read the record again - it should not be found in workspace context
         $readAfterDeleteResult = $readTool->execute([

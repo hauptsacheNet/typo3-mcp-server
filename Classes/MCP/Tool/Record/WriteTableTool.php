@@ -65,12 +65,12 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'uid' => [
                         'type' => 'integer',
-                        'description' => 'Record UID (required for "update", "delete", and "translate" actions when updating a single record)',
+                        'description' => 'Record UID (required only for "translate" action)',
                     ],
                     'uids' => [
                         'type' => 'array',
                         'items' => ['type' => 'integer'],
-                        'description' => 'Array of record UIDs for batch operations (alternative to "uid" for "update" and "delete" actions). When using batch mode, the same data/action is applied to all specified records.',
+                        'description' => 'Array of record UIDs to operate on (required for "update" and "delete" actions). Use [uid] for single records or [uid1, uid2, ...] for batch operations. The same data/action is applied to all specified records.',
                     ],
                     'data' => [
                         'type' => 'object',
@@ -171,12 +171,8 @@ class WriteTableTool extends AbstractRecordTool
                 break;
                 
             case 'update':
-                if ($uid === null && ($uids === null || empty($uids))) {
-                    throw new ValidationException(['Record UID (uid) or array of UIDs (uids) is required for update action']);
-                }
-
-                if ($uid !== null && $uids !== null) {
-                    throw new ValidationException(['Cannot specify both uid and uids - use one or the other']);
+                if ($uids === null || empty($uids)) {
+                    throw new ValidationException(['Array of record UIDs (uids) is required for update action. Use [uid] for single records.']);
                 }
 
                 if (empty($data)) {
@@ -185,12 +181,8 @@ class WriteTableTool extends AbstractRecordTool
                 break;
 
             case 'delete':
-                if ($uid === null && ($uids === null || empty($uids))) {
-                    throw new ValidationException(['Record UID (uid) or array of UIDs (uids) is required for delete action']);
-                }
-
-                if ($uid !== null && $uids !== null) {
-                    throw new ValidationException(['Cannot specify both uid and uids - use one or the other']);
+                if ($uids === null || empty($uids)) {
+                    throw new ValidationException(['Array of record UIDs (uids) is required for delete action. Use [uid] for single records.']);
                 }
                 break;
                 
@@ -218,20 +210,10 @@ class WriteTableTool extends AbstractRecordTool
                 return $this->createRecord($table, $pid, $data, $position);
 
             case 'update':
-                // Batch update mode
-                if ($uids !== null && !empty($uids)) {
-                    return $this->batchUpdateRecords($table, $uids, $data);
-                }
-                // Single update mode
-                return $this->updateRecord($table, $uid, $data);
+                return $this->batchUpdateRecords($table, $uids, $data);
 
             case 'delete':
-                // Batch delete mode
-                if ($uids !== null && !empty($uids)) {
-                    return $this->batchDeleteRecords($table, $uids);
-                }
-                // Single delete mode
-                return $this->deleteRecord($table, $uid);
+                return $this->batchDeleteRecords($table, $uids);
 
             case 'translate':
                 // The language UID has already been converted from ISO code if needed

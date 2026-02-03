@@ -120,7 +120,7 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
         $updateResult = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['title' => 'Not Allowed']
         ]);
         $this->assertTrue($updateResult->isError);
@@ -137,7 +137,7 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
         $contentResult = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['header' => 'Allowed Update']
         ]);
         $this->assertFalse($contentResult->isError, json_encode($contentResult->jsonSerialize()));
@@ -158,7 +158,7 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'title' => 'Allowed Field Update',
                 'nav_title' => 'Should Be Denied',
@@ -206,7 +206,7 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['title' => 'Should fail due to workspace access']
         ]);
         
@@ -340,8 +340,8 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
             // Try to write instead
             $writeResult = $this->writeTool->execute([
                 'action' => 'update',
-                'table' => 'pages',
-                'uid' => $outsidePage,
+            'table' => 'pages',
+            'uids' => [$outsidePage],
                 'data' => ['title' => 'Should not be allowed']
             ]);
             
@@ -373,7 +373,7 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
         $updateResult = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['title' => 'Updated Title']
         ]);
         
@@ -421,7 +421,7 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'sys_template',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['title' => 'Should not be allowed']
         ]);
         
@@ -467,7 +467,7 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => $parentUid,
+            'uids' => [$parentUid],
             'data' => ['title' => 'Should not work']
         ]);
         

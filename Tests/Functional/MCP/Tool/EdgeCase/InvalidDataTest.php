@@ -58,8 +58,8 @@ class InvalidDataTest extends AbstractFunctionalTest
             'invalid field names' => [
                 [
                     'action' => 'update',
-                    'table' => 'pages',
-                    'uid' => 1,
+            'table' => 'pages',
+            'uids' => [1],
                     'data' => ['"; DROP TABLE pages; --' => 'value']
                 ],
                 'success', // TYPO3 DataHandler ignores invalid fields
@@ -68,8 +68,8 @@ class InvalidDataTest extends AbstractFunctionalTest
             'exceeding field length' => [
                 [
                     'action' => 'update',
-                    'table' => 'pages',
-                    'uid' => 1,
+            'table' => 'pages',
+            'uids' => [1],
                     'data' => ['title' => str_repeat('x', 300)]
                 ],
                 'exceeds maximum length', // Tool validates field length
@@ -78,8 +78,8 @@ class InvalidDataTest extends AbstractFunctionalTest
             'invalid datetime format' => [
                 [
                     'action' => 'update',
-                    'table' => 'pages',
-                    'uid' => 1,
+            'table' => 'pages',
+            'uids' => [1],
                     'data' => ['starttime' => 'not-a-date']
                 ],
                 'success', // TYPO3 converts invalid dates to 0
@@ -96,7 +96,7 @@ class InvalidDataTest extends AbstractFunctionalTest
         } else {
             $result = $this->writeTool->execute($params);
         }
-        
+
         if ($expectedError === 'empty_result') {
             // Special case for empty results
             $this->assertFalse($result->isError);
@@ -111,9 +111,17 @@ class InvalidDataTest extends AbstractFunctionalTest
             // Special case for operations that should succeed
             $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         } else {
-            // Normal error case
-            $this->assertTrue($result->isError, "Expected error but got success");
-            $this->assertStringContainsString($expectedError, $result->content[0]->text);
+            // For batch write operations, validation errors go to 'failed' array instead of isError
+            if ($toolType === 'write' && isset($params['uids'])) {
+                $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+                $data = json_decode($result->content[0]->text, true);
+                $this->assertNotEmpty($data['failed'], "Expected validation error in failed array");
+                $this->assertStringContainsString($expectedError, $data['failed'][0]['error']);
+            } else {
+                // Normal error case
+                $this->assertTrue($result->isError, "Expected error but got success");
+                $this->assertStringContainsString($expectedError, $result->content[0]->text);
+            }
         }
     }
     
@@ -160,7 +168,7 @@ class InvalidDataTest extends AbstractFunctionalTest
         $deleteResult = $this->writeTool->execute([
             'action' => 'delete',
             'table' => 'pages',
-            'uid' => $uid
+            'uids' => [$uid]
         ]);
         
         $this->assertFalse($deleteResult->isError, json_encode($deleteResult->jsonSerialize()));
@@ -190,7 +198,7 @@ class InvalidDataTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'hidden' => 'not-a-number',
                 'sorting' => 'invalid-sorting'
@@ -218,23 +226,26 @@ class InvalidDataTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'doktype' => 999 // Invalid doktype
             ]
         ]);
-        
-        $this->assertTrue($result->isError);
+
+        // Batch operations report validation errors in failed array
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
         // Check for validation error about doktype
-        $errorText = $result->content[0]->text;
+        $errorText = $data['failed'][0]['error'];
         $this->assertTrue(
-            str_contains($errorText, 'doktype') || 
+            str_contains($errorText, 'doktype') ||
             str_contains($errorText, 'Validation error') ||
             str_contains($errorText, 'must be one of'),
             "Expected error about doktype validation, got: $errorText"
         );
     }
-    
+
     /**
      * Test circular parent reference
      */
@@ -244,16 +255,19 @@ class InvalidDataTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'pid' => 1 // Self-reference
             ]
         ]);
-        
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('can only be set during record creation', $result->content[0]->text);
+
+        // Batch operations report validation errors in failed array
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
+        $this->assertStringContainsString('can only be set during record creation', $data['failed'][0]['error']);
     }
-    
+
     /**
      * Test mass assignment protection
      */
@@ -262,7 +276,7 @@ class InvalidDataTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'uid' => 999, // Should not be allowed
                 'deleted' => 1, // Should not be allowed directly
@@ -270,9 +284,12 @@ class InvalidDataTest extends AbstractFunctionalTest
                 'title' => 'Allowed Field' // This should work
             ]
         ]);
-        
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString("Field 'uid' cannot be modified", $result->content[0]->text);
+
+        // Batch operations report validation errors in failed array
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
+        $this->assertStringContainsString("Field 'uid' cannot be modified", $data['failed'][0]['error']);
     }
     
     /**
@@ -314,8 +331,8 @@ class InvalidDataTest extends AbstractFunctionalTest
         foreach ($problematicStrings as $string) {
             $result = $this->writeTool->execute([
                 'action' => 'update',
-                'table' => 'pages',
-                'uid' => 1,
+            'table' => 'pages',
+            'uids' => [1],
                 'data' => [
                     'title' => $string
                 ]
@@ -369,7 +386,7 @@ class InvalidDataTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'title' => ['array', 'not', 'allowed']
             ]
@@ -395,7 +412,7 @@ class InvalidDataTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'sorting' => PHP_INT_MAX,
                 'nav_hide' => 999999 // Should be 0 or 1

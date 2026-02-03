@@ -399,13 +399,13 @@ class WriteTableLanguageTest extends FunctionalTestCase
         $updateResult = $tool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => $germanUid,
+            'uids' => [$germanUid],
             'data' => [
                 'header' => 'Aktualisierter deutscher Titel',
                 'bodytext' => 'Aktualisierter deutscher Inhalt'
             ]
         ]);
-        
+
         $this->assertFalse($updateResult->isError, json_encode($updateResult->jsonSerialize()));
         
         // Verify the update - need to use BackendUtility to get workspace overlay

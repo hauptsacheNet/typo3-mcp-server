@@ -204,7 +204,7 @@ class NewsCrudTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
-            'uid' => $newsUid,
+            'uids' => [$newsUid],
             'data' => [
                 'categories' => [$this->categoryUids[1], $this->categoryUids[3]] // Only Breaking News and Sports
             ]
@@ -301,7 +301,7 @@ class NewsCrudTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'delete',
-            'uid' => $newsUid
+            'uids' => [$newsUid]
         ]);
         
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));

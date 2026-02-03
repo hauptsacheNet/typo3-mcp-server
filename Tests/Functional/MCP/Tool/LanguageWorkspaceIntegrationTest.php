@@ -270,7 +270,7 @@ class LanguageWorkspaceIntegrationTest extends FunctionalTestCase
         $updateResult = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => $germanRecord['uid'],
+            'uids' => [$germanRecord['uid']],
             'data' => [
                 'header' => 'Aktualisierte deutsche Überschrift'
             ]
@@ -356,7 +356,7 @@ class LanguageWorkspaceIntegrationTest extends FunctionalTestCase
         $updateResult = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => $liveId,
+            'uids' => [$liveId],
             'data' => [
                 'header' => 'Workspace English'
             ]

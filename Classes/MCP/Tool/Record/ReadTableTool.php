@@ -206,14 +206,30 @@ class ReadTableTool extends AbstractRecordTool
 
         // Determine which fields to select
         if ($fields !== null && !empty($fields)) {
-            // Build list of fields to select: requested fields + essential fields
+            // Validate requested fields exist in TCA and are accessible
+            $validatedFields = [];
+            foreach ($fields as $fieldName) {
+                // Check if field exists in TCA
+                $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
+                if ($fieldConfig === null) {
+                    // Skip invalid fields silently (they might be typos or non-existent)
+                    continue;
+                }
+                // Check if field is accessible
+                if (!$this->tableAccessService->canAccessField($table, $fieldName)) {
+                    continue;
+                }
+                $validatedFields[] = $fieldName;
+            }
+
+            // Build list of fields to select: validated requested fields + essential fields
             $essentialFields = $this->tableAccessService->getEssentialFields($table);
             $typeField = $this->tableAccessService->getTypeFieldName($table);
             $languageField = $this->tableAccessService->getLanguageFieldName($table);
             $sortingField = $this->tableAccessService->getSortingFieldName($table);
 
-            // Start with requested fields
-            $selectFields = array_unique($fields);
+            // Start with validated requested fields
+            $selectFields = array_unique($validatedFields);
 
             // Always include essential fields for proper record processing
             foreach ($essentialFields as $essential) {
@@ -236,6 +252,9 @@ class ReadTableTool extends AbstractRecordTool
             if ($sortingField && !in_array($sortingField, $selectFields)) {
                 $selectFields[] = $sortingField;
             }
+
+            // Update fields to validated set for later processing
+            $fields = $validatedFields;
 
             // Select only the specified fields
             $queryBuilder->select(...$selectFields)
@@ -651,9 +670,14 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Include related records in the result
      *
+     * When field selection is active ($requestedFields is set), relations are only processed
+     * if the relation field is in the requested list. However, when a relation IS included,
+     * it is FULLY embedded - child records are never filtered by the parent's field selection.
+     *
      * @param array $result Query result with records
      * @param string $table Table name
-     * @param array|null $requestedFields Fields explicitly requested (null = all fields)
+     * @param array|null $requestedFields Fields explicitly requested (null = all fields). Only affects
+     *                                     WHETHER a relation is included, not its contents.
      */
     protected function includeRelations(array $result, string $table, ?array $requestedFields = null): array
     {
@@ -908,12 +932,13 @@ class ReadTableTool extends AbstractRecordTool
 
 
         // Process records for workspace transparency
-        // For inline relations, we need to ensure the foreign field is preserved
-        $fieldsToPreserve = [$foreignField];
+        // For inline relations, we always include ALL fields (no field selection)
+        // The parent's field selection should not affect child records
 
         $processedRecords = [];
         foreach ($records as $record) {
-            $processed = $this->processRecord($record, $table, $fieldsToPreserve);
+            // Pass empty array to processRecord - child records are never filtered by field selection
+            $processed = $this->processRecord($record, $table, []);
 
             // Ensure the foreign field is always included if it exists in the raw record
             if (isset($record[$foreignField]) && !isset($processed[$foreignField])) {

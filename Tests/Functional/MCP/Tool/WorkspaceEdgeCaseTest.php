@@ -60,7 +60,7 @@ class WorkspaceEdgeCaseTest extends FunctionalTestCase
         $result1 = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['title' => 'Update from Tool 1']
         ]);
         
@@ -155,7 +155,7 @@ class WorkspaceEdgeCaseTest extends FunctionalTestCase
         $updateResult = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => $livePageId,
+            'uids' => [$livePageId],
             'data' => ['title' => 'Live Page Modified in Workspace']
         ]);
         
@@ -251,8 +251,8 @@ class WorkspaceEdgeCaseTest extends FunctionalTestCase
         $deleteResult = $this->writeTool->execute([
             'action' => 'delete',
             'table' => 'tt_content',
-            'uid' => $liveUid
-        ]);
+            'uids' => [$liveUid
+        ]]);
         
         $this->assertFalse($deleteResult->isError, json_encode($deleteResult->jsonSerialize()));
         
@@ -395,7 +395,7 @@ class WorkspaceEdgeCaseTest extends FunctionalTestCase
         $result1 = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => $uid,
+            'uids' => [$uid],
             'data' => ['header' => 'First Update']
         ]);
         
@@ -405,7 +405,7 @@ class WorkspaceEdgeCaseTest extends FunctionalTestCase
         $result2 = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => $uid,
+            'uids' => [$uid],
             'data' => ['header' => 'Second Update']
         ]);
         
@@ -415,7 +415,7 @@ class WorkspaceEdgeCaseTest extends FunctionalTestCase
         $result3 = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => $uid,
+            'uids' => [$uid],
             'data' => [
                 'header' => 'Final Update',
                 'bodytext' => 'Updated body text'

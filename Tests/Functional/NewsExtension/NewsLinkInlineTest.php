@@ -146,7 +146,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
-            'uid' => $newsUid,
+            'uids' => [$newsUid],
             'data' => [
                 'related_links' => [
                     [
@@ -212,7 +212,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
-            'uid' => $newsUid,
+            'uids' => [$newsUid],
             'data' => [
                 'related_links' => []  // Empty array removes all
             ],

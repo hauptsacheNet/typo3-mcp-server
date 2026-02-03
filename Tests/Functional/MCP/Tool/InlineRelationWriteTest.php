@@ -172,7 +172,7 @@ class InlineRelationWriteTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
-            'uid' => $newsUid,
+            'uids' => [$newsUid],
             'data' => [
                 'content_elements' => $contentUids,  // Array of UIDs
             ],
@@ -245,7 +245,7 @@ class InlineRelationWriteTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tt_content',
             'action' => 'update',
-            'uid' => $contentUid,
+            'uids' => [$contentUid],
             'data' => [
                 'tx_news_related_news' => 0,  // Remove relation
             ],
@@ -412,7 +412,7 @@ class InlineRelationWriteTest extends FunctionalTestCase
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
-            'uid' => $newsUid,
+            'uids' => [$newsUid],
             'data' => [
                 'content_elements' => $keptUids,
             ],
@@ -501,54 +501,62 @@ class InlineRelationWriteTest extends FunctionalTestCase
         ]);
         $newsUid = json_decode($result->content[0]->text, true)['uid'];
         
-        // Test 1: Non-array value
+        // Test 1: Non-array value - batch operations report validation errors in failed array
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
-            'uid' => $newsUid,
+            'uids' => [$newsUid],
             'data' => [
                 'content_elements' => 'not-an-array',
             ],
         ]);
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('must be an array of UIDs', $result->jsonSerialize()['content'][0]->text);
-        
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
+        $this->assertStringContainsString('must be an array of UIDs', $data['failed'][0]['error']);
+
         // Test 2: Array with non-numeric values
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
-            'uid' => $newsUid,
+            'uids' => [$newsUid],
             'data' => [
                 'content_elements' => [1, 'invalid', 3],
             ],
         ]);
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('must contain only positive integer UIDs', $result->jsonSerialize()['content'][0]->text);
-        
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
+        $this->assertStringContainsString('must contain only positive integer UIDs', $data['failed'][0]['error']);
+
         // Test 3: Array with negative values
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
-            'uid' => $newsUid,
+            'uids' => [$newsUid],
             'data' => [
                 'content_elements' => [1, -5, 3],
             ],
         ]);
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('must contain only positive integer UIDs', $result->jsonSerialize()['content'][0]->text);
-        
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
+        $this->assertStringContainsString('must contain only positive integer UIDs', $data['failed'][0]['error']);
+
         // Test 4: Array with data objects (not supported yet)
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
-            'uid' => $newsUid,
+            'uids' => [$newsUid],
             'data' => [
                 'content_elements' => [
                     ['header' => 'New content', 'CType' => 'text'],
                 ],
             ],
         ]);
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('must contain only positive integer UIDs', $result->jsonSerialize()['content'][0]->text);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
+        $this->assertStringContainsString('must contain only positive integer UIDs', $data['failed'][0]['error']);
     }
 }

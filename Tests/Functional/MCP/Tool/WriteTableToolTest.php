@@ -57,17 +57,17 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $updateResult = $this->tool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => $contentUid,
+            'uids' => [$contentUid],
             'data' => [
                 'header' => 'Updated via Tool',
                 'bodytext' => 'Content updated through WriteTableTool'
             ]
         ]);
-        
+
         $this->assertSuccessfulToolResult($updateResult);
         $data = $this->extractJsonFromResult($updateResult);
-        $this->assertEquals('update', $data['action']);
-        $this->assertEquals($contentUid, $data['uid']);
+        $this->assertEquals('batch_update', $data['action']);
+        $this->assertContains($contentUid, $data['succeeded']);
     }
     
     /**
@@ -122,7 +122,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $updateResult = $writeTool->execute([
             'action' => 'update',
             'table' => $table,
-            'uid' => $uid,
+            'uids' => [$uid],
             'data' => $updateData
         ]);
         $this->assertSuccessfulToolResult($updateResult);
@@ -140,7 +140,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $deleteResult = $writeTool->execute([
             'action' => 'delete',
             'table' => $table,
-            'uid' => $uid
+            'uids' => [$uid]
         ]);
         $this->assertSuccessfulToolResult($deleteResult);
         
@@ -213,18 +213,18 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $result = $tool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => 100,
+            'uids' => [100],
             'data' => [
                 'header' => 'Updated Welcome Header',
                 'bodytext' => 'This content has been updated in workspace',
             ]
         ]);
-        
+
         $this->assertFalse($result->isError, json_encode($result->content));
-        
+
         $data = json_decode($result->content[0]->text, true);
-        $this->assertEquals('update', $data['action']);
-        $this->assertEquals(100, $data['uid']);
+        $this->assertEquals('batch_update', $data['action']);
+        $this->assertContains(100, $data['succeeded']);
     }
 
     /**
@@ -384,19 +384,19 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $result = $tool->execute([
             'action' => 'update',
             'table' => 'tt_content',
-            'uid' => 100,
+            'uids' => [100],
             'data' => [
                 'header' => 'Modified Header',
                 'bodytext' => 'Modified body text'
             ]
         ]);
-        
+
         $this->assertFalse($result->isError, json_encode($result->content));
-        
+
         $data = json_decode($result->content[0]->text, true);
-        $this->assertEquals('update', $data['action']);
+        $this->assertEquals('batch_update', $data['action']);
         $this->assertEquals('tt_content', $data['table']);
-        $this->assertEquals(100, $data['uid']);
+        $this->assertContains(100, $data['succeeded']);
         
         // VERIFY THE RECORD WAS ACTUALLY UPDATED IN DATABASE
         // Get workspace version of the record
@@ -472,15 +472,15 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $result = $tool->execute([
             'action' => 'delete',
             'table' => 'tt_content',
-            'uid' => 101
+            'uids' => [101]
         ]);
-        
+
         $this->assertFalse($result->isError, json_encode($result->content));
-        
+
         $data = json_decode($result->content[0]->text, true);
-        $this->assertEquals('delete', $data['action']);
+        $this->assertEquals('batch_delete', $data['action']);
         $this->assertEquals('tt_content', $data['table']);
-        $this->assertEquals(101, $data['uid']);
+        $this->assertContains(101, $data['succeeded']);
         
         // VERIFY THE RECORD WAS ACTUALLY MARKED AS DELETED
         // In TYPO3 workspaces, deletion creates a delete placeholder
@@ -1082,9 +1082,9 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
-     * Test error handling for missing uid on update
+     * Test error handling for missing uids on update
      */
-    public function testMissingUidOnUpdateError(): void
+    public function testMissingUidsOnUpdateError(): void
     {
         $tool = new WriteTableTool();
 
@@ -1095,7 +1095,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
         ]);
 
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required', $result->content[0]->text);
+        $this->assertStringContainsString('Array of record UIDs (uids) is required for update action', $result->content[0]->text);
     }
 
     /**
@@ -1169,7 +1169,8 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $this->assertArrayHasKey('action', $properties);
         $this->assertArrayHasKey('table', $properties);
         $this->assertArrayHasKey('pid', $properties);
-        $this->assertArrayHasKey('uid', $properties);
+        $this->assertArrayHasKey('uid', $properties); // For translate action
+        $this->assertArrayHasKey('uids', $properties); // For update/delete actions
         $this->assertArrayHasKey('data', $properties);
         $this->assertArrayHasKey('position', $properties);
         
@@ -1309,45 +1310,9 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
-     * Test error when both uid and uids are provided
+     * Test batch delete validation error for missing uids
      */
-    public function testErrorWhenBothUidAndUidsProvided(): void
-    {
-        $tool = new WriteTableTool();
-
-        $result = $tool->execute([
-            'action' => 'update',
-            'table' => 'tt_content',
-            'uid' => 100,
-            'uids' => [100, 101],
-            'data' => ['header' => 'Test']
-        ]);
-
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Cannot specify both uid and uids', $result->content[0]->text);
-    }
-
-    /**
-     * Test batch update validation error for missing uid/uids
-     */
-    public function testBatchUpdateRequiresUidOrUids(): void
-    {
-        $tool = new WriteTableTool();
-
-        $result = $tool->execute([
-            'action' => 'update',
-            'table' => 'tt_content',
-            'data' => ['header' => 'Test']
-        ]);
-
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required', $result->content[0]->text);
-    }
-
-    /**
-     * Test batch delete validation error for missing uid/uids
-     */
-    public function testBatchDeleteRequiresUidOrUids(): void
+    public function testBatchDeleteRequiresUids(): void
     {
         $tool = new WriteTableTool();
 
@@ -1357,7 +1322,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
         ]);
 
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required', $result->content[0]->text);
+        $this->assertStringContainsString('Array of record UIDs (uids) is required for delete action', $result->content[0]->text);
     }
 
     /**
@@ -1375,7 +1340,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
         ]);
 
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required', $result->content[0]->text);
+        $this->assertStringContainsString('Array of record UIDs (uids) is required for update action', $result->content[0]->text);
     }
 
     /**

@@ -50,14 +50,14 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     {
         $result = $this->tool->execute([
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['title' => 'Test']
         ]);
-        
+
         $this->assertTrue($result->isError, 'Result should be an error');
         $this->assertStringContainsString('Action is required', $result->content[0]->text);
     }
-    
+
     /**
      * Test invalid action parameter
      */
@@ -66,13 +66,13 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         $result = $this->tool->execute([
             'action' => 'invalid',
             'table' => 'pages',
-            'uid' => 1
+            'uids' => [1]
         ]);
-        
+
         $this->assertTrue($result->isError, 'Result should be an error');
         $this->assertStringContainsString('Invalid action: invalid', $result->content[0]->text);
     }
-    
+
     /**
      * Test missing table parameter
      */
@@ -80,28 +80,28 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     {
         $result = $this->tool->execute([
             'action' => 'update',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['title' => 'Test']
         ]);
-        
+
         $this->assertTrue($result->isError, 'Result should be an error');
         $this->assertStringContainsString('Table name is required', $result->content[0]->text);
     }
-    
+
     /**
      * Test missing required parameters for each action
      */
     public function testMissingRequiredParameters(): void
     {
-        // Missing UID for update
+        // Missing uids for update
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'pages',
             'data' => ['title' => 'Test']
         ]);
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Record UID (uid) or array of UIDs (uids) is required for update action', $result->content[0]->text);
-        
+        $this->assertStringContainsString('Array of record UIDs (uids) is required for update action', $result->content[0]->text);
+
         // Missing PID for create
         $result = $this->tool->execute([
             'action' => 'create',
@@ -110,12 +110,12 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         ]);
         $this->assertTrue($result->isError);
         $this->assertStringContainsString('Page ID (pid) is required for create action', $result->content[0]->text);
-        
+
         // Missing data for update
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1
+            'uids' => [1]
         ]);
         $this->assertTrue($result->isError);
         $this->assertStringContainsString('Data is required for update action', $result->content[0]->text);
@@ -173,61 +173,67 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'sys_template',
-            'uid' => 1,
+            'uids' => [1],
             'data' => ['title' => 'Test']
         ]);
-        
+
         $this->assertTrue($result->isError);
         // The error message may vary - sys_template is not workspace-capable
         $this->assertStringContainsString('sys_template', $result->content[0]->text);
     }
-    
+
     /**
      * Test TCA validation errors
      */
     public function testTcaValidationErrors(): void
     {
-        // Test 1: Direct uid modification
+        // Test 1: Direct uid modification - batch operations report validation errors in failed array
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'uid' => 999, // Cannot modify uid
                 'title' => 'Test'
             ]
         ]);
-        
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString("Field 'uid' cannot be modified directly", $result->content[0]->text);
-        
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
+        $this->assertStringContainsString("Field 'uid' cannot be modified directly", $data['failed'][0]['error']);
+
         // Test 2: pid modification in update
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'pid' => 2, // Cannot modify pid in update
                 'title' => 'Test'
             ]
         ]);
-        
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString("Field 'pid' can only be set during record creation", $result->content[0]->text);
-        
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
+        $this->assertStringContainsString("Field 'pid' can only be set during record creation", $data['failed'][0]['error']);
+
         // Test 3: Invalid field value (exceeds max length)
         $longTitle = str_repeat('x', 300); // Title field typically has max length of 255
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'title' => $longTitle
             ]
         ]);
-        
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('exceeds maximum length', $result->content[0]->text);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertNotEmpty($data['failed'], 'Should have failed records');
+        $this->assertStringContainsString('exceeds maximum length', $data['failed'][0]['error']);
     }
     
     /**
@@ -301,17 +307,17 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'be_users',
-            'uid' => 1,
+            'uids' => [1],
             'data' => [
                 'username' => 'modified_admin'
             ]
         ]);
-        
+
         $this->assertTrue($result->isError);
         $this->assertStringContainsString('Cannot access table', $result->content[0]->text);
         $this->assertStringContainsString('be_users', $result->content[0]->text);
     }
-    
+
     /**
      * Test updating non-existent record
      */
@@ -320,20 +326,20 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 99999, // Non-existent UID
+            'uids' => [99999], // Non-existent UID
             'data' => [
                 'title' => 'Updated Title'
             ]
         ]);
-        
+
         // The tool should handle this gracefully - DataHandler will fail
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
-        
+
         // But the record shouldn't actually be created
         $record = BackendUtility::getRecord('pages', 99999);
         $this->assertNull($record, 'Non-existent record should not be created');
     }
-    
+
     /**
      * Test deleting non-existent record
      */
@@ -342,14 +348,14 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         $result = $this->tool->execute([
             'action' => 'delete',
             'table' => 'pages',
-            'uid' => 99999 // Non-existent UID
+            'uids' => [99999] // Non-existent UID
         ]);
-        
+
         // Should succeed but report no deletion
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $data = json_decode($result->content[0]->text, true);
-        $this->assertEquals('delete', $data['action']);
-        $this->assertEquals(99999, $data['uid']);
+        $this->assertEquals('batch_delete', $data['action']);
+        $this->assertContains(99999, $data['succeeded']);
     }
     
     /**

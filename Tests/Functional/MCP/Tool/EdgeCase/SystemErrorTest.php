@@ -63,8 +63,8 @@ class SystemErrorTest extends AbstractFunctionalTest
         try {
             $result = $this->writeTool->execute([
                 'action' => 'update',
-                'table' => 'pages',
-                'uid' => 1,
+            'table' => 'pages',
+            'uids' => [1],
                 'data' => ['title' => 'Test Title']
             ]);
             
@@ -106,8 +106,8 @@ class SystemErrorTest extends AbstractFunctionalTest
             
             $result = $this->writeTool->execute([
                 'action' => 'update',
-                'table' => 'pages',
-                'uid' => 1,
+            'table' => 'pages',
+            'uids' => [1],
                 'data' => ['title' => 'Test in invalid workspace']
             ]);
             
@@ -175,7 +175,7 @@ class SystemErrorTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 1,
+            'uids' => [1],
             'data' => null  // Should be array
         ]);
         
@@ -197,8 +197,8 @@ class SystemErrorTest extends AbstractFunctionalTest
             // Try to perform workspace-dependent operation
             $result = $this->writeTool->execute([
                 'action' => 'update',
-                'table' => 'pages',
-                'uid' => 1,
+            'table' => 'pages',
+            'uids' => [1],
                 'data' => ['title' => 'Test without workspaces']
             ]);
             
@@ -273,7 +273,7 @@ class SystemErrorTest extends AbstractFunctionalTest
         $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => $uid,
+            'uids' => [$uid],
             'data' => ['title' => 'Modified by process 2']
         ]);
         
@@ -281,7 +281,7 @@ class SystemErrorTest extends AbstractFunctionalTest
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => $uid,
+            'uids' => [$uid],
             'data' => ['title' => 'Modified by process 1']
         ]);
         
