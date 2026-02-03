@@ -30,6 +30,10 @@ services:
   # Make ToolRegistry public for eID access
   Hn\McpServer\MCP\ToolRegistry:
     public: true
+
+  # Make McpServerFactory public for eID access
+  Hn\McpServer\MCP\McpServerFactory:
+    public: true
     
   # Make WorkspaceContextService public 
   Hn\McpServer\Service\WorkspaceContextService:
