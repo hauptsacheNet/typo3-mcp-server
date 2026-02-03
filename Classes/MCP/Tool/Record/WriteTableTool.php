@@ -631,6 +631,45 @@ class WriteTableTool extends AbstractRecordTool
                         ];
                         continue;
                     }
+
+                    // Update foreign fields for embedded relations
+                    foreach ($inlineRelations as $fieldName => $relationData) {
+                        $config = $relationData['config'];
+                        $foreignTable = $config['foreign_table'] ?? '';
+                        $foreignField = $config['foreign_field'] ?? '';
+
+                        if (empty($foreignTable) || empty($foreignField)) {
+                            continue;
+                        }
+
+                        // Check if this is an embedded table
+                        $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
+                        $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+
+                        if ($isHiddenTable) {
+                            // Collect the UIDs of created child records
+                            $childUids = [];
+                            foreach ($childDataHandler->substNEWwithIDs as $newId => $realId) {
+                                if (strpos($newId, 'NEW') === 0 && isset($childDataMap[$foreignTable][$newId])) {
+                                    $childUids[] = $realId;
+                                }
+                            }
+
+                            if (!empty($childUids)) {
+                                // Update foreign field directly in database
+                                $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                                    ->getConnectionForTable($foreignTable);
+
+                                foreach ($childUids as $childUid) {
+                                    $connection->update(
+                                        $foreignTable,
+                                        [$foreignField => $uid],
+                                        ['uid' => $childUid]
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
