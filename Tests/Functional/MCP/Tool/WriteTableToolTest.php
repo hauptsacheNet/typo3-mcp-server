@@ -543,7 +543,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
     public function testCreateContentAtBottom(): void
     {
         $tool = new WriteTableTool();
-        
+
         $result = $tool->execute([
             'action' => 'create',
             'table' => 'tt_content',
@@ -555,16 +555,16 @@ class WriteTableToolTest extends AbstractFunctionalTest
                 'colPos' => 0
             ]
         ]);
-        
+
         $this->assertFalse($result->isError, json_encode($result->content));
-        
+
         $data = json_decode($result->content[0]->text, true);
         $newUid = $data['uid'];
-        
+
         // Verify it's created with high sorting value
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('tt_content');
-        
+
         $record = $queryBuilder->select('sorting')
             ->from('tt_content')
             ->where(
@@ -572,11 +572,48 @@ class WriteTableToolTest extends AbstractFunctionalTest
             )
             ->executeQuery()
             ->fetchAssociative();
-        
+
         $this->assertIsArray($record);
         // The record should have a sorting value
         $this->assertArrayHasKey('sorting', $record);
         $this->assertIsInt($record['sorting']);
+    }
+
+    /**
+     * Test creating content at bottom position on a table without a sorting field configured.
+     * The position option should silently do nothing when no sorting field exists.
+     */
+    public function testCreateContentAtBottomWithoutSortingField(): void
+    {
+        // Temporarily remove sortby from tt_content TCA to simulate a table without sorting
+        $originalSortby = $GLOBALS['TCA']['tt_content']['ctrl']['sortby'];
+        unset($GLOBALS['TCA']['tt_content']['ctrl']['sortby']);
+
+        try {
+            $tool = new WriteTableTool();
+
+            $result = $tool->execute([
+                'action' => 'create',
+                'table' => 'tt_content',
+                'pid' => 1,
+                'position' => 'bottom',
+                'data' => [
+                    'CType' => 'textmedia',
+                    'header' => 'Content Without Sorting Field',
+                    'colPos' => 0
+                ]
+            ]);
+
+            $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+            $data = json_decode($result->content[0]->text, true);
+            $this->assertIsArray($data);
+            $this->assertEquals('create', $data['action']);
+            $this->assertIsInt($data['uid']);
+        } finally {
+            // Restore TCA
+            $GLOBALS['TCA']['tt_content']['ctrl']['sortby'] = $originalSortby;
+        }
     }
 
     /**

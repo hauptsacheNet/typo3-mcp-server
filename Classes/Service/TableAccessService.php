@@ -710,7 +710,8 @@ class TableAccessService implements SingletonInterface
     public function getSortingFieldName(string $table): ?string
     {
         $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
-        return $ctrl['sortby'] ?? null;
+        $sortby = $ctrl['sortby'] ?? null;
+        return ($sortby !== null && $sortby !== '') ? $sortby : null;
     }
     
     /**
