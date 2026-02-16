@@ -257,25 +257,26 @@ class WriteTableTool extends AbstractRecordTool
         $newRecordData['pid'] = $pid;
         
         // Handle sorting for bottom position
-        // Only set sorting if not explicitly provided in the data
-        if ($position === 'bottom' && !isset($data['sorting'])) {
+        // Only set sorting if the table has a sorting field configured and not explicitly provided
+        $sortingField = $this->tableAccessService->getSortingFieldName($table);
+        if ($position === 'bottom' && $sortingField !== null && !isset($data[$sortingField])) {
             // Get the maximum sorting value and add some space
             $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
                 ->getQueryBuilderForTable($table);
-            
+
             $maxSorting = $queryBuilder
-                ->select('sorting')
+                ->select($sortingField)
                 ->from($table)
                 ->where(
                     $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
                 )
-                ->orderBy('sorting', 'DESC')
+                ->orderBy($sortingField, 'DESC')
                 ->setMaxResults(1)
                 ->executeQuery()
                 ->fetchOne();
-            
+
             if ($maxSorting !== false) {
-                $newRecordData['sorting'] = (int)$maxSorting + 128; // Add some space for future insertions
+                $newRecordData[$sortingField] = (int)$maxSorting + 128; // Add some space for future insertions
             }
         }
         
