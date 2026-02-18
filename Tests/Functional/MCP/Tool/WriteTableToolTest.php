@@ -1217,6 +1217,91 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
+     * Test that trailing slashes are stripped from slug fields when creating a page.
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
+     */
+    public function testCreatePageStripsTrailingSlash(): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => $this->getRootPageUid(),
+            'data' => [
+                'title' => 'Trailing Slash Test',
+                'slug' => '/trailing-slash-test/',
+                'doktype' => 1,
+            ]
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $data = $this->extractJsonFromResult($result);
+        $uid = $data['uid'];
+
+        // Verify the slug was stored without trailing slash
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $record = $queryBuilder->select('slug')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($record, 'Page record should exist');
+        $this->assertEquals('/trailing-slash-test', $record['slug'], 'Trailing slash should be stripped from slug');
+    }
+
+    /**
+     * Test that trailing slashes are stripped from slug fields when updating a page.
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
+     */
+    public function testUpdatePageStripsTrailingSlash(): void
+    {
+        // Create a page first
+        $pageUid = $this->data->page()
+            ->withTitle('Slug Update Test')
+            ->withSlug('/slug-update-test')
+            ->withParent($this->getRootPageUid())
+            ->create();
+
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => $pageUid,
+            'data' => [
+                'slug' => '/updated-slug/',
+            ]
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Verify the slug was stored without trailing slash in the workspace version
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $record = $queryBuilder->select('slug')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($pageUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($record, 'Workspace version should exist');
+        $this->assertEquals('/updated-slug', $record['slug'], 'Trailing slash should be stripped from slug on update');
+    }
+
+    /**
      * Helper method to assert a record is not in live workspace
      */
     protected function assertRecordNotInLive(string $table, int $uid): void
