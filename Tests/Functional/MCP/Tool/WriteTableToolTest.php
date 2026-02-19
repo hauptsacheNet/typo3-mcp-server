@@ -1217,6 +1217,103 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
+     * Test that slug fields are normalized: trailing slashes stripped, leading slash ensured.
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
+     */
+    public static function slugNormalizationDataProvider(): array
+    {
+        return [
+            'trailing slash' => ['/trailing-slash-test/', '/trailing-slash-test'],
+            'missing leading slash' => ['no-leading-slash', '/no-leading-slash'],
+            'both issues' => ['both-issues/', '/both-issues'],
+            'already correct' => ['/already-correct', '/already-correct'],
+            'root page slash' => ['/', '/'],
+        ];
+    }
+
+    /**
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('slugNormalizationDataProvider')]
+    public function testCreatePageNormalizesSlug(string $inputSlug, string $expectedSlug): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => $this->getRootPageUid(),
+            'data' => [
+                'title' => 'Slug Normalization Test',
+                'slug' => $inputSlug,
+                'doktype' => 1,
+            ]
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $data = $this->extractJsonFromResult($result);
+        $uid = $data['uid'];
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $record = $queryBuilder->select('slug')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($record, 'Page record should exist');
+        $this->assertEquals($expectedSlug, $record['slug'], "Slug '$inputSlug' should be normalized to '$expectedSlug'");
+    }
+
+    /**
+     * Test that slug normalization also works on update.
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
+     */
+    public function testUpdatePageNormalizesSlug(): void
+    {
+        $pageUid = $this->data->page()
+            ->withTitle('Slug Update Test')
+            ->withSlug('/slug-update-test')
+            ->withParent($this->getRootPageUid())
+            ->create();
+
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => $pageUid,
+            'data' => [
+                'slug' => '/updated-slug/',
+            ]
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $record = $queryBuilder->select('slug')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($pageUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($record, 'Workspace version should exist');
+        $this->assertEquals('/updated-slug', $record['slug'], 'Trailing slash should be stripped from slug on update');
+    }
+
+    /**
      * Helper method to assert a record is not in live workspace
      */
     protected function assertRecordNotInLive(string $table, int $uid): void

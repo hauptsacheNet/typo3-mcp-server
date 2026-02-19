@@ -1102,7 +1102,17 @@ class WriteTableTool extends AbstractRecordTool
             if ($value === null) {
                 continue;
             }
-            
+
+            // Normalize slug fields: trim all slashes, then prepend exactly one.
+            // TYPO3's SlugNormalizer preserves trailing slashes if present in the input,
+            // but the frontend routing always strips them. LLMs commonly produce slugs
+            // with trailing slashes or missing leading slashes, so we normalize here.
+            // The root page slug "/" is handled correctly: trim('/', '/') = '' → '/' + '' = '/'.
+            $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
+            if ($fieldConfig && ($fieldConfig['config']['type'] ?? '') === 'slug' && is_string($value)) {
+                $data[$fieldName] = '/' . trim($value, '/');
+            }
+
             // Handle FlexForm fields
             if ($this->isFlexFormField($table, $fieldName)) {
                 // If the value is already a string (XML), keep it as is
