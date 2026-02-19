@@ -1217,10 +1217,25 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
-     * Test that trailing slashes are stripped from slug fields when creating a page.
+     * Test that slug fields are normalized: trailing slashes stripped, leading slash ensured.
      * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
      */
-    public function testCreatePageStripsTrailingSlash(): void
+    public static function slugNormalizationDataProvider(): array
+    {
+        return [
+            'trailing slash' => ['/trailing-slash-test/', '/trailing-slash-test'],
+            'missing leading slash' => ['no-leading-slash', '/no-leading-slash'],
+            'both issues' => ['both-issues/', '/both-issues'],
+            'already correct' => ['/already-correct', '/already-correct'],
+            'root page slash' => ['/', '/'],
+        ];
+    }
+
+    /**
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('slugNormalizationDataProvider')]
+    public function testCreatePageNormalizesSlug(string $inputSlug, string $expectedSlug): void
     {
         $tool = new WriteTableTool();
 
@@ -1229,8 +1244,8 @@ class WriteTableToolTest extends AbstractFunctionalTest
             'table' => 'pages',
             'pid' => $this->getRootPageUid(),
             'data' => [
-                'title' => 'Trailing Slash Test',
-                'slug' => '/trailing-slash-test/',
+                'title' => 'Slug Normalization Test',
+                'slug' => $inputSlug,
                 'doktype' => 1,
             ]
         ]);
@@ -1240,7 +1255,6 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $data = $this->extractJsonFromResult($result);
         $uid = $data['uid'];
 
-        // Verify the slug was stored without trailing slash
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
         $queryBuilder->getRestrictions()->removeAll();
@@ -1254,16 +1268,15 @@ class WriteTableToolTest extends AbstractFunctionalTest
             ->fetchAssociative();
 
         $this->assertIsArray($record, 'Page record should exist');
-        $this->assertEquals('/trailing-slash-test', $record['slug'], 'Trailing slash should be stripped from slug');
+        $this->assertEquals($expectedSlug, $record['slug'], "Slug '$inputSlug' should be normalized to '$expectedSlug'");
     }
 
     /**
-     * Test that trailing slashes are stripped from slug fields when updating a page.
+     * Test that slug normalization also works on update.
      * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
      */
-    public function testUpdatePageStripsTrailingSlash(): void
+    public function testUpdatePageNormalizesSlug(): void
     {
-        // Create a page first
         $pageUid = $this->data->page()
             ->withTitle('Slug Update Test')
             ->withSlug('/slug-update-test')
@@ -1283,7 +1296,6 @@ class WriteTableToolTest extends AbstractFunctionalTest
 
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
 
-        // Verify the slug was stored without trailing slash in the workspace version
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
         $queryBuilder->getRestrictions()->removeAll();

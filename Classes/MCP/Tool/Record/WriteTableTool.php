@@ -1103,15 +1103,14 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
 
-            // Strip trailing slashes from slug fields.
-            // TYPO3's SlugNormalizer intentionally preserves trailing slashes if present in the input,
-            // but trailing slashes in page slugs cause 404 errors in TYPO3's routing.
-            // The TYPO3 backend avoids this through its auto-generation flow (which never produces
-            // trailing slashes), but the MCP tool receives slugs directly from LLM input,
-            // so we must sanitize here.
+            // Normalize slug fields: trim all slashes, then prepend exactly one.
+            // TYPO3's SlugNormalizer preserves trailing slashes if present in the input,
+            // but the frontend routing always strips them. LLMs commonly produce slugs
+            // with trailing slashes or missing leading slashes, so we normalize here.
+            // The root page slug "/" is handled correctly: trim('/', '/') = '' → '/' + '' = '/'.
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
             if ($fieldConfig && ($fieldConfig['config']['type'] ?? '') === 'slug' && is_string($value)) {
-                $data[$fieldName] = rtrim($value, '/');
+                $data[$fieldName] = '/' . trim($value, '/');
             }
 
             // Handle FlexForm fields
