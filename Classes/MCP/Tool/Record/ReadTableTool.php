@@ -129,6 +129,14 @@ class ReadTableTool extends AbstractRecordTool
         $includeTranslationSource = $params['includeTranslationSource'] ?? false;
         $requestedFields = $params['fields'] ?? [];
 
+        // Ensure translation parent field is included when translation source is requested
+        if ($includeTranslationSource && !empty($requestedFields)) {
+            $translationParentField = $this->tableAccessService->getTranslationParentFieldName($table);
+            if ($translationParentField && !in_array($translationParentField, $requestedFields)) {
+                $requestedFields[] = $translationParentField;
+            }
+        }
+
         // Validate parameters
         if ($limit < 1 || $limit > 1000) {
             throw new ValidationException(['Limit must be between 1 and 1000']);
