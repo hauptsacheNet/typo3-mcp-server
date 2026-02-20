@@ -71,6 +71,11 @@ class ReadTableTool extends AbstractRecordTool
                 'type' => 'integer',
                 'description' => 'Offset for pagination',
             ],
+            'fields' => [
+                'type' => 'array',
+                'items' => ['type' => 'string'],
+                'description' => 'Optional list of field names to include in the result. Essential fields (uid, pid, type, label) are always included. When omitted, all type-relevant fields are returned. Use GetTableSchema to discover available fields.',
+            ],
         ];
 
         // Only add language parameters if multiple languages are configured
@@ -122,6 +127,7 @@ class ReadTableTool extends AbstractRecordTool
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
         $language = $params['language'] ?? null;
         $includeTranslationSource = $params['includeTranslationSource'] ?? false;
+        $requestedFields = $params['fields'] ?? [];
 
         // Validate parameters
         if ($limit < 1 || $limit > 1000) {
@@ -148,11 +154,12 @@ class ReadTableTool extends AbstractRecordTool
             $condition,
             $limit,
             $offset,
-            $languageUid
+            $languageUid,
+            $requestedFields
         );
 
         // Include related records
-        $result = $this->includeRelations($result, $table);
+        $result = $this->includeRelations($result, $table, $requestedFields);
 
         // Include translation metadata if requested
         if ($includeTranslationSource && $languageUid !== null && $languageUid > 0) {
@@ -173,7 +180,8 @@ class ReadTableTool extends AbstractRecordTool
         string $condition,
         int $limit,
         int $offset,
-        ?int $languageUid = null
+        ?int $languageUid = null,
+        array $requestedFields = []
     ): array {
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
@@ -333,7 +341,7 @@ class ReadTableTool extends AbstractRecordTool
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
         foreach ($records as $record) {
-            $processedRecord = $this->processRecord($record, $table);
+            $processedRecord = $this->processRecord($record, $table, [], $requestedFields);
             $processedRecords[] = $processedRecord;
         }
 
@@ -352,7 +360,7 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Process a record
      */
-    protected function processRecord(array $record, string $table, array $fields = []): array
+    protected function processRecord(array $record, string $table, array $fields = [], array $requestedFields = []): array
     {
         $processedRecord = [];
 
@@ -420,6 +428,11 @@ class ReadTableTool extends AbstractRecordTool
 
             // Skip fields not relevant to this record type (only if we have a valid type configuration)
             if ($hasValidTypeConfig && !empty($typeSpecificFields) && !in_array($field, $typeSpecificFields)) {
+                continue;
+            }
+
+            // Skip fields not in the user-requested field list
+            if (!empty($requestedFields) && !in_array($field, $requestedFields)) {
                 continue;
             }
 
@@ -577,7 +590,7 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Include related records in the result
      */
-    protected function includeRelations(array $result, string $table): array
+    protected function includeRelations(array $result, string $table, array $requestedFields = []): array
     {
         if (empty($result['records'])) {
             return $result;
@@ -593,6 +606,11 @@ class ReadTableTool extends AbstractRecordTool
 
         // Process each field that might contain relations
         foreach ($tca['columns'] as $fieldName => $fieldConfig) {
+            // Skip relations for fields not in the requested field list
+            if (!empty($requestedFields) && !in_array($fieldName, $requestedFields)) {
+                continue;
+            }
+
             $fieldType = $fieldConfig['config']['type'] ?? '';
 
             match ($fieldType) {
