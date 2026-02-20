@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\NewsExtension;
 
 use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Mcp\Types\TextContent;
+use TYPO3\CMS\Core\Information\Typo3Version;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -195,44 +196,50 @@ class NewsSchemaTest extends FunctionalTestCase
     public function testNewsPluginSchemaInTtContent(): void
     {
         $tool = new GetTableSchemaTool();
-        
+        $typo3Version = GeneralUtility::makeInstance(Typo3Version::class);
+
         // Get schema for News plugin content type
         $result = $tool->execute([
             'table' => 'tt_content',
             'type' => 'news_pi1' // News plugin
         ]);
-        
+
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $content = $result->content[0]->text;
-        
+
         // Verify it's the News plugin type
         $this->assertStringContainsString('Type: news_pi1', $content);
         // The label should be translated or have a meaningful fallback
         $this->assertTrue(
-            str_contains($content, 'News article list') || 
+            str_contains($content, 'News article list') ||
             str_contains($content, 'News list'), // Fallback from "news_list.title"
             'Should contain News plugin label or fallback'
         );
-        
+
         // Should contain pi_flexform field in Plugin tab
         $this->assertStringContainsString('(Plugin):', $content, 'Should have Plugin tab');
         $this->assertStringContainsString('pi_flexform', $content, 'News plugin should have pi_flexform field');
-        
+
         // Check that it's recognized as FlexForm type with proper formatting
-        $this->assertMatchesRegularExpression('/pi_flexform\s*\(Plugin Options\):\s*flex\s*\(FlexForm\)/i', $content, 
+        $this->assertMatchesRegularExpression('/pi_flexform\s*\(Plugin Options\):\s*flex\s*\(FlexForm\)/i', $content,
             'pi_flexform should be properly formatted with label and type');
-        
+
         // Check for FlexForm identifiers
-        $this->assertMatchesRegularExpression('/\[Identifiers:\s*[^\]]*news_pi1[^\]]*\]/', $content, 
+        $this->assertMatchesRegularExpression('/\[Identifiers:\s*[^\]]*news_pi1[^\]]*\]/', $content,
             'Should have news_pi1 in FlexForm identifiers');
-        
+
         // Verify the instruction to use GetFlexFormSchema tool
-        $this->assertStringContainsString('Use GetFlexFormSchema tool with these identifiers', $content, 
+        $this->assertStringContainsString('Use GetFlexFormSchema tool with these identifiers', $content,
             'Should provide instruction to use GetFlexFormSchema tool');
-        
-        // Check for ds_pointerField information
-        $this->assertStringContainsString('[ds_pointerField: list_type,CType]', $content, 
-            'Should show ds_pointerField configuration');
+
+        // Check for ds_pointerField information (differs by TYPO3 version)
+        if ($typo3Version->getMajorVersion() >= 14) {
+            // In TYPO3 14+, ds_pointerField is removed; FlexForm is per-CType via columnsOverrides
+            // No ds_pointerField assertion needed
+        } else {
+            $this->assertStringContainsString('[ds_pointerField: list_type,CType]', $content,
+                'Should show ds_pointerField configuration for TYPO3 13');
+        }
     }
 
     /**
@@ -241,40 +248,59 @@ class NewsSchemaTest extends FunctionalTestCase
     public function testGetNewsPluginFlexFormIdentifiers(): void
     {
         $tool = new GetTableSchemaTool();
-        
+        $typo3Version = GeneralUtility::makeInstance(Typo3Version::class);
+
         // First, check if News registers as a plugin type
         $result = $tool->execute([
             'table' => 'tt_content'
         ]);
-        
+
         $this->assertFalse($result->isError);
         $content = $result->content[0]->text;
-        
+
         // Look for available types to understand how News plugin is registered
         if (preg_match('/AVAILABLE TYPES:(.+?)(?=\n\n|$)/s', $content, $matches)) {
             $typesSection = $matches[1];
-            
-            // News typically registers as list_type "news_pi1" rather than a direct CType
-            if (strpos($typesSection, 'list') !== false) {
-                // List type exists, which is what News uses
-                $this->assertStringContainsString('list', $typesSection, 'List type should be available for plugins');
+
+            if ($typo3Version->getMajorVersion() >= 14) {
+                // In TYPO3 14+, News registers as its own CType
+                $this->assertStringContainsString('news_pi1', $typesSection, 'news_pi1 CType should be available');
+            } else {
+                // In TYPO3 13, News uses the generic 'list' CType
+                if (strpos($typesSection, 'list') !== false) {
+                    $this->assertStringContainsString('list', $typesSection, 'List type should be available for plugins');
+                }
             }
         }
-        
-        // Also check if the schema mentions list_type field for list content
-        $result = $tool->execute([
-            'table' => 'tt_content',
-            'type' => 'list'
-        ]);
-        
-        if (!$result->isError) {
+
+        if ($typo3Version->getMajorVersion() >= 14) {
+            // In TYPO3 14+, check the news_pi1 CType schema directly
+            $result = $tool->execute([
+                'table' => 'tt_content',
+                'type' => 'news_pi1'
+            ]);
+
+            $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
             $content = $result->content[0]->text;
-            
-            // List content should have list_type field
-            if (strpos($content, 'list_type') !== false) {
-                // Check that list_type is properly typed
-                $this->assertMatchesRegularExpression('/list_type\s*\([^)]*\):\s*select/i', $content, 
-                    'list_type should be a select field');
+
+            // Should have pi_flexform field
+            $this->assertStringContainsString('pi_flexform', $content, 'news_pi1 type should have pi_flexform field');
+        } else {
+            // In TYPO3 13, check the list CType schema for list_type field
+            $result = $tool->execute([
+                'table' => 'tt_content',
+                'type' => 'list'
+            ]);
+
+            if (!$result->isError) {
+                $content = $result->content[0]->text;
+
+                // List content should have list_type field
+                if (strpos($content, 'list_type') !== false) {
+                    // Check that list_type is properly typed
+                    $this->assertMatchesRegularExpression('/list_type\s*\([^)]*\):\s*select/i', $content,
+                        'list_type should be a select field');
+                }
             }
         }
     }

@@ -5,7 +5,7 @@
 ,102,2,"Team Introduction","Meet our team","textmedia",0,256,0,0,1734875000,1734875000,0,0
 ,103,2,"Team Members","John Doe, Jane Smith","textmedia",0,512,0,0,1734875000,1734875000,0,0
 ,104,1,"Hidden Content","This is hidden","textmedia",0,768,1,0,1734875000,1734875000,0,0
-,105,6,"Contact Form","Get in touch","list",0,256,0,0,1734875000,1734875000,0,0
+,105,6,"Contact Form","Get in touch","text",0,256,0,0,1734875000,1734875000,0,0
 ,108,6,"Office Hours","Mon-Fri 9am-5pm","textmedia",1,256,0,0,1734875000,1734875000,0,0
 ,106,7,"News Header","Latest news and updates","textmedia",0,256,0,0,1734875000,1734875000,0,0
 ,109,7,"Archive Links","Browse news archive","textmedia",1,256,0,0,1734875000,1734875000,0,0

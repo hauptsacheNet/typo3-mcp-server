@@ -9,6 +9,7 @@ use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Information\Typo3Version;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
@@ -48,20 +49,24 @@ class WorkspaceRecoveryTest extends AbstractFunctionalTest
         // Create an incomplete workspace manually (simulating partial creation)
         $connection = $this->connectionPool->getConnectionForTable('sys_workspace');
         
-        $connection->insert('sys_workspace', [
+        $workspaceData = [
             'title' => 'Incomplete MCP Workspace',
             'description' => 'Simulated incomplete workspace',
             'adminusers' => '1',
             'members' => '',
             'pid' => 0,
             'deleted' => 0,
-            'freeze' => 0,
             'live_edit' => 0,
             'publish_access' => 1,
             'stagechg_notification' => 0,
             'publish_time' => 0,
             // Intentionally missing some fields that might be required
-        ]);
+        ];
+        $typo3Version = GeneralUtility::makeInstance(Typo3Version::class);
+        if ($typo3Version->getMajorVersion() < 14) {
+            $workspaceData['freeze'] = 0;
+        }
+        $connection->insert('sys_workspace', $workspaceData);
         
         $incompleteId = (int)$connection->lastInsertId();
         $this->assertGreaterThan(0, $incompleteId, 'Incomplete workspace should be created');
@@ -147,19 +152,23 @@ class WorkspaceRecoveryTest extends AbstractFunctionalTest
         $connection = $this->connectionPool->getConnectionForTable('sys_workspace');
         
         $title = 'MCP Workspace for admin';
-        $connection->insert('sys_workspace', [
+        $workspaceData = [
             'title' => $title,
             'description' => 'First workspace',
             'adminusers' => '1',
             'members' => '',
             'pid' => 0,
             'deleted' => 0,
-            'freeze' => 0,
             'live_edit' => 0,
             'publish_access' => 1,
             'stagechg_notification' => 0,
             'publish_time' => 0,
-        ]);
+        ];
+        $typo3Version = GeneralUtility::makeInstance(Typo3Version::class);
+        if ($typo3Version->getMajorVersion() < 14) {
+            $workspaceData['freeze'] = 0;
+        }
+        $connection->insert('sys_workspace', $workspaceData);
         
         $firstId = (int)$connection->lastInsertId();
         
@@ -278,19 +287,23 @@ class WorkspaceRecoveryTest extends AbstractFunctionalTest
         // Create a workspace with invalid admin user reference
         $connection = $this->connectionPool->getConnectionForTable('sys_workspace');
         
-        $connection->insert('sys_workspace', [
+        $workspaceData = [
             'title' => 'Workspace with Invalid Admin',
             'description' => 'Test workspace',
             'adminusers' => '999999', // Non-existent user
             'members' => '',
             'pid' => 0,
             'deleted' => 0,
-            'freeze' => 0,
             'live_edit' => 0,
             'publish_access' => 1,
             'stagechg_notification' => 0,
             'publish_time' => 0,
-        ]);
+        ];
+        $typo3Version = GeneralUtility::makeInstance(Typo3Version::class);
+        if ($typo3Version->getMajorVersion() < 14) {
+            $workspaceData['freeze'] = 0;
+        }
+        $connection->insert('sys_workspace', $workspaceData);
         
         $invalidWorkspaceId = (int)$connection->lastInsertId();
         

@@ -1,0 +1,9 @@
+{
+    "name": "hn/test-tsconfig",
+    "type": "typo3-cms-extension",
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "test_tsconfig"
+        }
+    }
+}

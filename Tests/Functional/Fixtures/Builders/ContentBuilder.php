@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\Fixtures\Builders;
 
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Information\Typo3Version;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * Builder for creating content element records in tests
@@ -102,13 +104,23 @@ class ContentBuilder
     }
     
     /**
-     * Set as list/plugin type
+     * Set as plugin type.
+     * In TYPO3 14+, plugins have their own CType (e.g., 'news_pi1').
+     * In TYPO3 13, plugins use CType='list' with list_type field.
      */
     public function asPlugin(string $listType, string $header = ''): self
     {
-        $this->data['CType'] = 'list';
         $this->data['header'] = $header ?: $listType;
-        return $this->with('list_type', $listType);
+        $typo3Version = GeneralUtility::makeInstance(Typo3Version::class);
+        if ($typo3Version->getMajorVersion() >= 14) {
+            // In TYPO3 14+, each plugin has its own CType
+            $this->data['CType'] = $listType;
+        } else {
+            // In TYPO3 13, plugins use the generic 'list' CType with a list_type selector
+            $this->data['CType'] = 'list';
+            $this->with('list_type', $listType);
+        }
+        return $this;
     }
     
     /**

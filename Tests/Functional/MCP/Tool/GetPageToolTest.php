@@ -12,6 +12,7 @@ use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\TextContent;
 use Symfony\Component\Yaml\Yaml;
+use TYPO3\CMS\Core\Information\Typo3Version;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
@@ -416,10 +417,11 @@ class GetPageToolTest extends FunctionalTestCase
         
         // Verify page information
         $this->assertStringContainsString('Title: Contact', $content);
-        
-        // Verify list content element (old plugin system)
+
+        // Verify content element on the Contact page
         $this->assertStringContainsString('[105] Contact Form', $content);
-        $this->assertStringContainsString('list', $content);
+        // Record 105 has CType 'text' in fixtures
+        $this->assertStringContainsString('text', $content);
     }
 
     /**

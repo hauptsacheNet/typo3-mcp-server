@@ -9,6 +9,7 @@ use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
+use TYPO3\CMS\Core\Information\Typo3Version;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Workspaces\Service\WorkspaceService;
 
@@ -169,7 +170,6 @@ class WorkspaceContextService
             $workspaceDescription = 'Automatically created workspace for Model Context Protocol operations';
             
             // Create workspace record data
-            // Only use fields that are guaranteed to exist in TYPO3 core
             $workspaceData = [
                 'pid' => 0, // Workspaces are created at root level
                 'title' => $workspaceTitle,
@@ -180,15 +180,19 @@ class WorkspaceContextService
                 'file_mountpoints' => '', // Inherit from user
                 'publish_access' => 1, // Allow publishing
                 'stagechg_notification' => 0, // No email notifications by default
-                'freeze' => 0, // Not frozen
                 'live_edit' => 0, // No live edit
                 'publish_time' => 0, // No scheduled publishing
             ];
-            
+
+            // 'freeze' column was removed in TYPO3 14 (#107323)
+            $typo3Version = GeneralUtility::makeInstance(Typo3Version::class);
+            if ($typo3Version->getMajorVersion() < 14) {
+                $workspaceData['freeze'] = 0;
+            }
+
             // Use DataHandler to create the workspace
             $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
-            $dataHandler->admin = true; // Admin mode to bypass restrictions
-            $dataHandler->bypassWorkspaceRestrictions = true;
+            $dataHandler->bypassAccessCheckForRecords = true;
             
             $newId = 'NEW' . uniqid();
             $dataMap = [

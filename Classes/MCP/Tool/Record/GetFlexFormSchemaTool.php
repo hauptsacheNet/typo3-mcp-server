@@ -96,61 +96,102 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
         $header .= "Table: $table\n";
         $header .= "Field: $field\n\n";
 
-        // Check if the identifier exists directly in the ds array
-        if (isset($flexFormConfig['ds'][$identifier])) {
-            $dsValue = $flexFormConfig['ds'][$identifier];
+        // Resolve the ds value from TCA
+        $dsValue = $this->resolveFlexFormDs($table, $field, $identifier, $flexFormConfig);
 
-            // Handle FILE: references
-            if (is_string($dsValue) && strpos($dsValue, 'FILE:') === 0) {
-                $file = substr($dsValue, 5);
-                $file = GeneralUtility::getFileAbsFileName($file);
-                $prefix = "Schema defined in file: " . $file . "\n\n";
-
-                if (file_exists($file)) {
-                    $content = file_get_contents($file);
-                    if (!empty($content)) {
-                        // Parse the XML content using TYPO3's built-in method
-                        $xmlArray = GeneralUtility::xml2array($content);
-                        
-                        if ($xmlArray) {
-                            $processedData = $this->processFlexFormXml($xmlArray);
-                            $result = $this->formatFlexFormSchema($processedData, $header . $prefix);
-                            return $this->createSuccessResult($result);
-                        } else {
-                            throw new \RuntimeException("Failed to parse XML schema from file: $file");
-                        }
-                    } else {
-                        throw new \RuntimeException("FlexForm file is empty: $file");
-                    }
-                } else {
-                    throw new \RuntimeException("FlexForm file not found: $file");
-                }
-            } elseif (is_string($dsValue)) {
-                $prefix = "Schema defined inline as XML\n\n";
-
-                // Parse the XML content using TYPO3's built-in method
-                $xmlArray = GeneralUtility::xml2array($dsValue);
-                
-                if ($xmlArray) {
-                    $processedData = $this->processFlexFormXml($xmlArray);
-                    $result = $this->formatFlexFormSchema($processedData, $header . $prefix);
-                    return $this->createSuccessResult($result);
-                } else {
-                    throw new \RuntimeException("Failed to parse inline XML schema");
-                }
-            } elseif (is_array($dsValue)) {
-                // PHP array format - process directly
-                $processedData = $this->processFlexFormXml($dsValue);
-                $prefix = "Schema defined as PHP array\n\n";
-                $result = $this->formatFlexFormSchema($processedData, $prefix);
-                return $this->createSuccessResult($result);
-            }
-
-            return $this->createSuccessResult($result);
+        if ($dsValue !== null) {
+            return $this->processResolvedDs($dsValue, $header);
         }
 
         // If we get here, the identifier was not found
         throw new \InvalidArgumentException("FlexForm schema not found for identifier: $identifier");
+    }
+
+    /**
+     * Resolve FlexForm data structure from TCA.
+     *
+     * Checks:
+     * 1. Base column config ds array (TYPO3 13 multi-entry format)
+     * 2. columnsOverrides per type (TYPO3 14 single-entry format)
+     * 3. columnsOverrides using CType extracted from composite identifier like "*,news_pi1"
+     *
+     * @return string|array|null The resolved ds value, or null if not found
+     */
+    protected function resolveFlexFormDs(string $table, string $field, string $identifier, array $flexFormConfig): string|array|null
+    {
+        // 1. Check if the identifier exists directly in the base ds array (TYPO3 13 format)
+        if (isset($flexFormConfig['ds'][$identifier])) {
+            return $flexFormConfig['ds'][$identifier];
+        }
+
+        // 2. Check columnsOverrides for the identifier as a CType (TYPO3 14 format)
+        $dsFromOverrides = $GLOBALS['TCA'][$table]['types'][$identifier]['columnsOverrides'][$field]['config']['ds'] ?? null;
+        if ($dsFromOverrides !== null) {
+            return $dsFromOverrides;
+        }
+
+        // 3. For composite identifiers like "*,news_pi1", extract the CType part and check columnsOverrides
+        if (str_contains($identifier, ',')) {
+            $parts = GeneralUtility::trimExplode(',', $identifier, true);
+            $cType = end($parts);
+            $dsFromOverrides = $GLOBALS['TCA'][$table]['types'][$cType]['columnsOverrides'][$field]['config']['ds'] ?? null;
+            if ($dsFromOverrides !== null) {
+                return $dsFromOverrides;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Process a resolved ds value and return a CallToolResult
+     */
+    protected function processResolvedDs(string|array $dsValue, string $header): CallToolResult
+    {
+        // Handle FILE: references
+        if (is_string($dsValue) && strpos($dsValue, 'FILE:') === 0) {
+            $file = substr($dsValue, 5);
+            $file = GeneralUtility::getFileAbsFileName($file);
+            $prefix = "Schema defined in file: " . $file . "\n\n";
+
+            if (file_exists($file)) {
+                $content = file_get_contents($file);
+                if (!empty($content)) {
+                    $xmlArray = GeneralUtility::xml2array($content);
+
+                    if ($xmlArray) {
+                        $processedData = $this->processFlexFormXml($xmlArray);
+                        $result = $this->formatFlexFormSchema($processedData, $header . $prefix);
+                        return $this->createSuccessResult($result);
+                    } else {
+                        throw new \RuntimeException("Failed to parse XML schema from file: $file");
+                    }
+                } else {
+                    throw new \RuntimeException("FlexForm file is empty: $file");
+                }
+            } else {
+                throw new \RuntimeException("FlexForm file not found: $file");
+            }
+        } elseif (is_string($dsValue)) {
+            $prefix = "Schema defined inline as XML\n\n";
+
+            $xmlArray = GeneralUtility::xml2array($dsValue);
+
+            if ($xmlArray) {
+                $processedData = $this->processFlexFormXml($xmlArray);
+                $result = $this->formatFlexFormSchema($processedData, $header . $prefix);
+                return $this->createSuccessResult($result);
+            } else {
+                throw new \RuntimeException("Failed to parse inline XML schema");
+            }
+        } elseif (is_array($dsValue)) {
+            $processedData = $this->processFlexFormXml($dsValue);
+            $prefix = "Schema defined as PHP array\n\n";
+            $result = $this->formatFlexFormSchema($processedData, $prefix);
+            return $this->createSuccessResult($result);
+        }
+
+        throw new \RuntimeException("Unknown FlexForm ds value type");
     }
 
     /**
@@ -692,30 +733,31 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
         }
 
         $flexFormConfig = $GLOBALS['TCA'][$table]['columns'][$field]['config'];
-        $ds = $flexFormConfig['ds'] ?? [];
 
-        // Try to get the FlexForm DS directly from the configuration
-        if (!empty($ds[$identifier])) {
-            $flexFormDS = $ds[$identifier];
+        // Resolve ds value using version-aware lookup
+        $flexFormDS = $this->resolveFlexFormDs($table, $field, $identifier, $flexFormConfig);
 
-            // Handle FILE: references
-            if (is_string($flexFormDS) && strpos($flexFormDS, 'FILE:') === 0) {
-                $file = substr($flexFormDS, 5);
-                $file = GeneralUtility::getFileAbsFileName($file);
+        if ($flexFormDS === null) {
+            return [];
+        }
 
-                if (file_exists($file)) {
-                    $content = file_get_contents($file);
-                    if (!empty($content)) {
-                        $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
-                        return $flexFormService->convertFlexFormContentToArray($content);
-                    }
+        // Handle FILE: references
+        if (is_string($flexFormDS) && strpos($flexFormDS, 'FILE:') === 0) {
+            $file = substr($flexFormDS, 5);
+            $file = GeneralUtility::getFileAbsFileName($file);
+
+            if (file_exists($file)) {
+                $content = file_get_contents($file);
+                if (!empty($content)) {
+                    $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
+                    return $flexFormService->convertFlexFormContentToArray($content);
                 }
-            } elseif (is_string($flexFormDS)) {
-                $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
-                return $flexFormService->convertFlexFormContentToArray($flexFormDS);
-            } elseif (is_array($flexFormDS)) {
-                return $flexFormDS;
             }
+        } elseif (is_string($flexFormDS)) {
+            $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
+            return $flexFormService->convertFlexFormContentToArray($flexFormDS);
+        } elseif (is_array($flexFormDS)) {
+            return $flexFormDS;
         }
 
         return [];

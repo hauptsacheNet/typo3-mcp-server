@@ -148,7 +148,9 @@ class TableAccessService implements SingletonInterface
         }
         
         // Check workspace capability (required for write operations)
-        $info['workspace_capable'] = BackendUtility::isTableWorkspaceEnabled($table);
+        // Use TcaSchema API instead of deprecated BackendUtility::isTableWorkspaceEnabled()
+        $info['workspace_capable'] = $this->tcaSchemaFactory->has($table)
+            && $this->tcaSchemaFactory->get($table)->isWorkspaceAware();
         if ($requireWorkspaceCapability && !$info['workspace_capable']) {
             $info['reasons'][] = 'Table is not workspace-capable (required for write operations)';
             return $info;
@@ -254,10 +256,13 @@ class TableAccessService implements SingletonInterface
         // If a specific type is provided and the schema supports sub-schemas
         if (!empty($type) && $schema->hasSubSchema($type)) {
             $subSchema = $schema->getSubSchema($type);
-            
+
             // Check if this type uses subtypes (e.g., plugins using list_type)
-            $subtypeField = $subSchema->getSubTypeDivisorField();
-            
+            // getSubTypeDivisorField() was removed in TYPO3 14 along with subtypes
+            if (method_exists($subSchema, 'getSubTypeDivisorField')) {
+                $subtypeField = $subSchema->getSubTypeDivisorField();
+            }
+
             // Get fields from the sub-schema
             foreach ($subSchema->getFields() as $field) {
                 $fieldName = $field->getName();
@@ -813,16 +818,31 @@ class TableAccessService implements SingletonInterface
      */
     public function getSearchFields(string $table): array
     {
+        // TYPO3 14 removed searchFields from TCA ctrl (#106972), use Schema API instead
+        if ($this->tcaSchemaFactory->has($table)) {
+            $schema = $this->tcaSchemaFactory->get($table);
+            $searchableFields = [];
+            foreach ($schema->getFields() as $field) {
+                if ($field->isSearchable()) {
+                    $searchableFields[] = $field->getName();
+                }
+            }
+            if (!empty($searchableFields)) {
+                return $searchableFields;
+            }
+        }
+
+        // Fallback for TYPO3 13 where searchFields is in TCA ctrl
         $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
         $searchFields = $ctrl['searchFields'] ?? '';
-        
+
         if (empty($searchFields)) {
             return [];
         }
-        
+
         return GeneralUtility::trimExplode(',', $searchFields, true);
     }
-    
+
     /**
      * Get essential fields for a table (fields that should always be included)
      */

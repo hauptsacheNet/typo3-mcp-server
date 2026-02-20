@@ -10,6 +10,7 @@ use Hn\McpServer\Tests\Functional\Fixtures\TestDataBuilder;
 use Hn\McpServer\Tests\Functional\Traits\McpAssertionsTrait;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
+use TYPO3\CMS\Core\Information\Typo3Version;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Doctrine\DBAL\ParameterType;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -19,7 +20,12 @@ use Hn\McpServer\MCP\ToolRegistry;
 class WriteTableToolTest extends AbstractFunctionalTest
 {
     use McpAssertionsTrait;
-    
+
+    protected array $testExtensionsToLoad = [
+        'news',
+        'mcp_server',
+    ];
+
     private WriteTableTool $tool;
     private TestDataBuilder $data;
     
@@ -961,14 +967,25 @@ class WriteTableToolTest extends AbstractFunctionalTest
     public function testFlexFormFieldHandling(): void
     {
         $tool = new WriteTableTool();
-        
+        $typo3Version = GeneralUtility::makeInstance(Typo3Version::class);
+
         // Test creating content with FlexForm data
-        // Use list content element which has a pi_flexform field
-        $result = $tool->execute([
-            'action' => 'create',
-            'table' => 'tt_content',
-            'pid' => 1,
-            'data' => [
+        // Use a plugin content element which has a pi_flexform field
+        if ($typo3Version->getMajorVersion() >= 14) {
+            // In TYPO3 14+, plugins have their own CType (e.g., 'news_pi1')
+            $data = [
+                'CType' => 'news_pi1',
+                'header' => 'Plugin with FlexForm',
+                'pi_flexform' => [
+                    'settings' => [
+                        'caption' => 'Plugin Caption',
+                        'headerPosition' => 'top'
+                    ]
+                ]
+            ];
+        } else {
+            // In TYPO3 13, plugins use CType='list' with list_type field
+            $data = [
                 'CType' => 'list',
                 'header' => 'Plugin with FlexForm',
                 'pi_flexform' => [
@@ -977,7 +994,14 @@ class WriteTableToolTest extends AbstractFunctionalTest
                         'headerPosition' => 'top'
                     ]
                 ]
-            ]
+            ];
+        }
+
+        $result = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => 1,
+            'data' => $data
         ]);
         
         // Check for errors first

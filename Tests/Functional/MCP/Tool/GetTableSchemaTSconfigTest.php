@@ -23,10 +23,13 @@ class GetTableSchemaTSconfigTest extends FunctionalTestCase
 
     protected array $testExtensionsToLoad = [
         'mcp_server',
+        '../Tests/Functional/Fixtures/Extensions/test_tsconfig',
     ];
 
     /**
-     * Set TSconfig before TYPO3 bootstraps
+     * Set TSconfig before TYPO3 bootstraps.
+     * TYPO3 13 uses BE.defaultPageTSconfig, while TYPO3 14 uses
+     * Configuration/page.tsconfig in the test_tsconfig fixture extension.
      */
     protected array $configurationToUseInTestInstance = [
         'BE' => [

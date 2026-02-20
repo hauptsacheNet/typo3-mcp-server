@@ -352,20 +352,22 @@ class GetTableSchemaTool extends AbstractRecordTool
     protected function addFlexFormIdentifiers(string &$result, array $config, string $table, string $fieldName, string $filterType = ''): void
     {
         $result .= " (FlexForm)";
-        
-        // Get available FlexForm identifiers
+
+        $identifiers = [];
+
+        // Get available FlexForm identifiers from base ds array (TYPO3 13 format)
         if (isset($config['ds']) && is_array($config['ds'])) {
             $identifiers = array_keys($config['ds']);
-            
+
             // Filter out default identifier
             $identifiers = array_filter($identifiers, function($id) {
                 return $id !== 'default';
             });
-            
+
             // Filter identifiers based on the requested type
             if (!empty($filterType) && !empty($config['ds_pointerField'])) {
                 $pointerFields = GeneralUtility::trimExplode(',', $config['ds_pointerField'], true);
-                
+
                 // Filter identifiers that match the current type
                 // Either directly or with a wildcard
                 $filteredIdentifiers = [];
@@ -374,7 +376,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                         $parts = explode(',', $id);
                         // Check if the identifier matches the current type
                         // Either directly or with a wildcard
-                        if (($parts[0] === '*' && $parts[1] === $filterType) || 
+                        if (($parts[0] === '*' && $parts[1] === $filterType) ||
                             ($parts[1] === '*' && $parts[0] === $filterType) ||
                             ($parts[0] === $filterType) ||
                             ($parts[1] === $filterType)) {
@@ -384,19 +386,28 @@ class GetTableSchemaTool extends AbstractRecordTool
                         $filteredIdentifiers[] = $id;
                     }
                 }
-                
+
                 // Use filtered identifiers if any were found
                 if (!empty($filteredIdentifiers)) {
                     $identifiers = $filteredIdentifiers;
                 }
             }
-            
-            if (!empty($identifiers)) {
-                $result .= " [Identifiers: " . implode(', ', $identifiers) . "]";
-                $result .= " (Use GetFlexFormSchema tool with these identifiers for details)";
+        }
+
+        // TYPO3 14+: Check columnsOverrides for FlexForm ds (single-entry format)
+        // When a type has a FlexForm in columnsOverrides, the CType is the identifier
+        if (empty($identifiers) && !empty($filterType)) {
+            $dsFromOverrides = $GLOBALS['TCA'][$table]['types'][$filterType]['columnsOverrides'][$fieldName]['config']['ds'] ?? null;
+            if ($dsFromOverrides !== null) {
+                $identifiers = [$filterType];
             }
         }
-        
+
+        if (!empty($identifiers)) {
+            $result .= " [Identifiers: " . implode(', ', $identifiers) . "]";
+            $result .= " (Use GetFlexFormSchema tool with these identifiers for details)";
+        }
+
         // Add ds_pointerField information if available
         if (isset($config['ds_pointerField'])) {
             $result .= " [ds_pointerField: " . $config['ds_pointerField'] . "]";
