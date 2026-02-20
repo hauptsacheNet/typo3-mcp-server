@@ -425,4 +425,104 @@ class ReadTableToolTest extends AbstractFunctionalTest
         // Should have reasonable field count (not all possible fields)
         $this->assertLessThan(100, count($record), "Too many fields for unknown CType");
     }
+
+    /**
+     * Test that fields parameter limits returned fields
+     */
+    public function testFieldsParameterLimitsReturnedFields(): void
+    {
+        $result = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+            'fields' => ['header', 'bodytext'],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = $this->extractJsonFromResult($result);
+        $record = $data['records'][0];
+
+        // Essential fields should always be present
+        $this->assertArrayHasKey('uid', $record);
+        $this->assertArrayHasKey('pid', $record);
+        $this->assertArrayHasKey('CType', $record);
+
+        // Requested fields should be present
+        $this->assertArrayHasKey('header', $record);
+        $this->assertArrayHasKey('bodytext', $record);
+
+        // Non-requested, non-essential fields should be absent
+        $this->assertArrayNotHasKey('colPos', $record, 'Non-requested field colPos should be excluded');
+        $this->assertArrayNotHasKey('imagewidth', $record, 'Non-requested field imagewidth should be excluded');
+    }
+
+    /**
+     * Test that fields parameter with empty array returns all fields (default behavior)
+     */
+    public function testFieldsParameterEmptyArrayReturnsAllFields(): void
+    {
+        // Read without fields parameter
+        $resultWithout = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+        ]);
+
+        // Read with empty fields array
+        $resultWith = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+            'fields' => [],
+        ]);
+
+        $this->assertFalse($resultWithout->isError, json_encode($resultWithout->jsonSerialize()));
+        $this->assertFalse($resultWith->isError, json_encode($resultWith->jsonSerialize()));
+
+        $dataWithout = $this->extractJsonFromResult($resultWithout);
+        $dataWith = $this->extractJsonFromResult($resultWith);
+
+        // Both should return the same fields
+        $keysWithout = array_keys($dataWithout['records'][0]);
+        $keysWith = array_keys($dataWith['records'][0]);
+        sort($keysWithout);
+        sort($keysWith);
+
+        $this->assertEquals($keysWithout, $keysWith, 'Empty fields array should return the same fields as omitting the parameter');
+    }
+
+    /**
+     * Test that fields parameter appears in schema
+     */
+    public function testFieldsParameterInSchema(): void
+    {
+        $schema = $this->tool->getSchema();
+        $properties = $schema['inputSchema']['properties'];
+
+        $this->assertArrayHasKey('fields', $properties);
+        $this->assertEquals('array', $properties['fields']['type']);
+        $this->assertArrayHasKey('items', $properties['fields']);
+    }
+
+    /**
+     * Test that fields parameter works with pages table
+     */
+    public function testFieldsParameterWithPagesTable(): void
+    {
+        $result = $this->tool->execute([
+            'table' => 'pages',
+            'uid' => 1,
+            'fields' => ['title'],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = $this->extractJsonFromResult($result);
+        $record = $data['records'][0];
+
+        // Essential fields always included
+        $this->assertArrayHasKey('uid', $record);
+        $this->assertArrayHasKey('pid', $record);
+        $this->assertArrayHasKey('title', $record);
+
+        // Non-requested fields should be absent
+        $this->assertArrayNotHasKey('description', $record, 'Non-requested field description should be excluded');
+        $this->assertArrayNotHasKey('slug', $record, 'Non-requested field slug should be excluded');
+    }
 }
