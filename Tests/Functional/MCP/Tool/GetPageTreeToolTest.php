@@ -381,23 +381,164 @@ class GetPageTreeToolTest extends FunctionalTestCase
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
         $languageService = GeneralUtility::makeInstance(LanguageService::class);
         $tool = new GetPageTreeTool($siteInformationService, $languageService);
-        
+
         // Import content fixtures to have some records to count
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
-        
+
         // Test getting page tree from root
         $result = $tool->execute([
             'startPage' => 0,
             'depth' => 2
         ]);
-        
+
         $content = $result->content[0]->text;
-        
+
         // Verify doktype labels are included
         $this->assertStringContainsString('[1] Home [Page]', $content);
         $this->assertStringContainsString('[2] About Us [Page]', $content);
-        
+
         // Verify record counts are included (page 1 has 3 content elements)
         $this->assertStringContainsString('[tt_content: 3]', $content);
+    }
+
+    /**
+     * Test that subpages beyond the limit are truncated at depth > 1,
+     * but first-layer children are never truncated.
+     */
+    public function testSubpageTruncation(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('pages');
+
+        // Create: grandparent -> parent (with 15 children)
+        $connection->insert('pages', [
+            'uid' => 2000,
+            'pid' => 0,
+            'title' => 'Truncation Test Root',
+            'deleted' => 0,
+            'hidden' => 0,
+            'doktype' => 1,
+            'slug' => '/truncation-root',
+            'tstamp' => time(),
+            'crdate' => time(),
+        ]);
+
+        $connection->insert('pages', [
+            'uid' => 2001,
+            'pid' => 2000,
+            'title' => 'Parent With Many Children',
+            'deleted' => 0,
+            'hidden' => 0,
+            'doktype' => 1,
+            'slug' => '/truncation-root/parent',
+            'tstamp' => time(),
+            'crdate' => time(),
+            'sorting' => 100,
+        ]);
+
+        // Create 15 children of page 2001 (exceeds the 10-per-parent limit)
+        for ($i = 1; $i <= 15; $i++) {
+            $connection->insert('pages', [
+                'uid' => 2100 + $i,
+                'pid' => 2001,
+                'title' => 'Child ' . $i,
+                'deleted' => 0,
+                'hidden' => 0,
+                'doktype' => 1,
+                'slug' => '/truncation-root/parent/child-' . $i,
+                'tstamp' => time(),
+                'crdate' => time(),
+                'sorting' => $i * 100,
+            ]);
+        }
+
+        // Test: depth=2 from grandparent should truncate second-layer children
+        $result = $tool->execute([
+            'startPage' => 2000,
+            'depth' => 2,
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        // First layer (direct child of startPage) should NOT be truncated
+        $this->assertStringContainsString('[2001] Parent With Many Children', $content);
+
+        // Second layer: first 10 children should be shown
+        for ($i = 1; $i <= 10; $i++) {
+            $this->assertStringContainsString('[' . (2100 + $i) . '] Child ' . $i, $content);
+        }
+
+        // Children beyond the limit should NOT appear
+        for ($i = 11; $i <= 15; $i++) {
+            $this->assertStringNotContainsString('[' . (2100 + $i) . '] Child ' . $i, $content);
+        }
+
+        // Truncation notice should appear with actionable hint
+        $this->assertStringContainsString('showing 10 of 15 subpages', $content);
+        $this->assertStringContainsString('use GetPageTree with startPage: 2001 to see all', $content);
+    }
+
+    /**
+     * Test that first-layer children are never truncated even with many pages.
+     */
+    public function testFirstLayerNotTruncated(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('pages');
+
+        // Create a parent page with 15 direct children (first layer)
+        $connection->insert('pages', [
+            'uid' => 3000,
+            'pid' => 0,
+            'title' => 'First Layer Test Root',
+            'deleted' => 0,
+            'hidden' => 0,
+            'doktype' => 1,
+            'slug' => '/first-layer-root',
+            'tstamp' => time(),
+            'crdate' => time(),
+        ]);
+
+        for ($i = 1; $i <= 15; $i++) {
+            $connection->insert('pages', [
+                'uid' => 3000 + $i,
+                'pid' => 3000,
+                'title' => 'First Layer Child ' . $i,
+                'deleted' => 0,
+                'hidden' => 0,
+                'doktype' => 1,
+                'slug' => '/first-layer-root/child-' . $i,
+                'tstamp' => time(),
+                'crdate' => time(),
+                'sorting' => $i * 100,
+            ]);
+        }
+
+        // depth=1 from parent: all 15 first-layer children should appear
+        $result = $tool->execute([
+            'startPage' => 3000,
+            'depth' => 1,
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        // All 15 children should be shown (no truncation for first layer)
+        for ($i = 1; $i <= 15; $i++) {
+            $this->assertStringContainsString('[' . (3000 + $i) . '] First Layer Child ' . $i, $content);
+        }
+
+        // No truncation notice should appear
+        $this->assertStringNotContainsString('showing', $content);
+        $this->assertStringNotContainsString('to see all', $content);
     }
 }
