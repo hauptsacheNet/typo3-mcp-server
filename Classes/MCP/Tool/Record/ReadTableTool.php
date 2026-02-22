@@ -71,6 +71,11 @@ class ReadTableTool extends AbstractRecordTool
                 'type' => 'integer',
                 'description' => 'Offset for pagination',
             ],
+            'fields' => [
+                'type' => 'array',
+                'items' => ['type' => 'string'],
+                'description' => 'Optional list of field names to include in the result. Only uid is always included. When omitted, all type-relevant fields are returned. Use GetTableSchema to discover available fields.',
+            ],
         ];
 
         // Only add language parameters if multiple languages are configured
@@ -122,6 +127,15 @@ class ReadTableTool extends AbstractRecordTool
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
         $language = $params['language'] ?? null;
         $includeTranslationSource = $params['includeTranslationSource'] ?? false;
+        $requestedFields = $this->normalizeFieldNames($table, $params['fields'] ?? []);
+
+        // Ensure translation parent field is included when translation source is requested
+        if ($includeTranslationSource && !empty($requestedFields)) {
+            $translationParentField = $this->tableAccessService->getTranslationParentFieldName($table);
+            if ($translationParentField && !in_array($translationParentField, $requestedFields)) {
+                $requestedFields[] = $translationParentField;
+            }
+        }
 
         // Validate parameters
         if ($limit < 1 || $limit > 1000) {
@@ -148,11 +162,12 @@ class ReadTableTool extends AbstractRecordTool
             $condition,
             $limit,
             $offset,
-            $languageUid
+            $languageUid,
+            $requestedFields
         );
 
         // Include related records
-        $result = $this->includeRelations($result, $table);
+        $result = $this->includeRelations($result, $table, $requestedFields);
 
         // Include translation metadata if requested
         if ($includeTranslationSource && $languageUid !== null && $languageUid > 0) {
@@ -173,7 +188,8 @@ class ReadTableTool extends AbstractRecordTool
         string $condition,
         int $limit,
         int $offset,
-        ?int $languageUid = null
+        ?int $languageUid = null,
+        array $requestedFields = []
     ): array {
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
@@ -333,7 +349,7 @@ class ReadTableTool extends AbstractRecordTool
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
         foreach ($records as $record) {
-            $processedRecord = $this->processRecord($record, $table);
+            $processedRecord = $this->processRecord($record, $table, $requestedFields);
             $processedRecords[] = $processedRecord;
         }
 
@@ -350,9 +366,24 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
-     * Process a record
+     * Process a raw database record into a filtered, converted result.
+     *
+     * Applies two layers of field filtering:
+     * 1. TCA type filtering — fields not in the record type's showitem definition are excluded.
+     *    Essential fields (uid, pid, type, label, timestamps, hidden, sorting) are merged into
+     *    the type-specific set so they always pass this check — TCA showitem doesn't declare them
+     *    because they're ctrl fields not shown in backend forms, but they're valid to read.
+     *    canAccessField() is also enforced here since getFieldNamesForType() already strips
+     *    inaccessible fields (file fields, inline to restricted tables, TSconfig-disabled, etc.).
+     * 2. Requested fields — optional user-provided whitelist that narrows the result further.
+     *    When provided, uid is always added. When empty, all fields from step 1 are returned.
+     *
+     * @param array $record Raw database row
+     * @param string $table Table name
+     * @param array $requestedFields User-provided field whitelist from the "fields" tool parameter.
+     *                               Empty = no additional filtering (default behavior).
      */
-    protected function processRecord(array $record, string $table, array $fields = []): array
+    protected function processRecord(array $record, string $table, array $requestedFields = []): array
     {
         $processedRecord = [];
 
@@ -366,10 +397,15 @@ class ReadTableTool extends AbstractRecordTool
             // No change needed
         }
 
-        // Get essential fields using TableAccessService
-        $essentialFields = $this->tableAccessService->getEssentialFields($table);
+        // Ensure uid is always in the requested fields when a field list is specified
+        if (!empty($requestedFields) && !in_array('uid', $requestedFields)) {
+            $requestedFields[] = 'uid';
+        }
 
-        // Get type-specific fields if a type field exists
+        // Get type-specific fields if a type field exists.
+        // Essential fields (uid, pid, timestamps, etc.) are merged in because TCA showitem
+        // doesn't declare ctrl fields, but they are valid to read.
+        $essentialFields = $this->tableAccessService->getEssentialFields($table);
         $typeField = $this->tableAccessService->getTypeFieldName($table);
         $typeSpecificFields = [];
         $hasValidTypeConfig = false;
@@ -377,27 +413,15 @@ class ReadTableTool extends AbstractRecordTool
         if ($typeField && isset($record[$typeField])) {
             $recordType = (string)$record[$typeField];
             $typeSpecificFields = $this->tableAccessService->getFieldNamesForType($table, $recordType);
-
-            // The TcaSchemaFactory will handle type validation internally
-            // If the type is valid, we'll get the appropriate fields
-            // If not, we'll get a reasonable fallback
             $hasValidTypeConfig = !empty($typeSpecificFields);
+
+            if ($hasValidTypeConfig) {
+                $typeSpecificFields = array_unique(array_merge($typeSpecificFields, $essentialFields));
+            }
         }
 
         // Process each field
         foreach ($record as $field => $value) {
-            // Always include essential fields
-            if (in_array($field, $essentialFields)) {
-                $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
-                continue;
-            }
-
-            // Always include fields that were explicitly requested to be preserved
-            if (!empty($fields) && in_array($field, $fields)) {
-                $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
-                continue;
-            }
-
             // Special handling for pi_flexform in list content elements
             if ($field === 'pi_flexform' && $table === 'tt_content' &&
                 isset($record['CType']) && $record['CType'] === 'list' &&
@@ -419,7 +443,12 @@ class ReadTableTool extends AbstractRecordTool
             }
 
             // Skip fields not relevant to this record type (only if we have a valid type configuration)
-            if ($hasValidTypeConfig && !empty($typeSpecificFields) && !in_array($field, $typeSpecificFields)) {
+            if ($hasValidTypeConfig && !in_array($field, $typeSpecificFields)) {
+                continue;
+            }
+
+            // Skip fields not in the requested field list
+            if (!empty($requestedFields) && !in_array($field, $requestedFields)) {
                 continue;
             }
 
@@ -550,6 +579,38 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
+     * Normalize user-provided field names to their correct case.
+     *
+     * Field names in TYPO3 are case-sensitive in PHP arrays but users may enter
+     * them case-insensitively (e.g. "ctype" instead of "CType"). This maps each
+     * requested name to the actual TCA column name or essential field name.
+     * Unrecognized names are kept as-is (they simply won't match anything).
+     */
+    protected function normalizeFieldNames(string $table, array $requestedFields): array
+    {
+        if (empty($requestedFields)) {
+            return [];
+        }
+
+        // Build a lowercase → actual name map from TCA columns and essential fields
+        $knownFields = [];
+        foreach (array_keys($GLOBALS['TCA'][$table]['columns'] ?? []) as $columnName) {
+            $knownFields[strtolower($columnName)] = $columnName;
+        }
+        foreach ($this->tableAccessService->getEssentialFields($table) as $essentialName) {
+            $knownFields[strtolower($essentialName)] = $essentialName;
+        }
+
+        $normalized = [];
+        foreach ($requestedFields as $field) {
+            $lower = strtolower($field);
+            $normalized[] = $knownFields[$lower] ?? $field;
+        }
+
+        return $normalized;
+    }
+
+    /**
      * Apply default sorting from TCA
      */
     protected function applyDefaultSorting(QueryBuilder $queryBuilder, string $table): void
@@ -577,7 +638,7 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Include related records in the result
      */
-    protected function includeRelations(array $result, string $table): array
+    protected function includeRelations(array $result, string $table, array $requestedFields = []): array
     {
         if (empty($result['records'])) {
             return $result;
@@ -593,6 +654,11 @@ class ReadTableTool extends AbstractRecordTool
 
         // Process each field that might contain relations
         foreach ($tca['columns'] as $fieldName => $fieldConfig) {
+            // Skip relations for fields not in the requested field list
+            if (!empty($requestedFields) && !in_array($fieldName, $requestedFields)) {
+                continue;
+            }
+
             $fieldType = $fieldConfig['config']['type'] ?? '';
 
             match ($fieldType) {
@@ -825,12 +891,9 @@ class ReadTableTool extends AbstractRecordTool
 
 
         // Process records for workspace transparency
-        // For inline relations, we need to ensure the foreign field is preserved
-        $fieldsToPreserve = [$foreignField];
-
         $processedRecords = [];
         foreach ($records as $record) {
-            $processed = $this->processRecord($record, $table, $fieldsToPreserve);
+            $processed = $this->processRecord($record, $table);
 
             // Ensure the foreign field is always included if it exists in the raw record
             if (isset($record[$foreignField]) && !isset($processed[$foreignField])) {
