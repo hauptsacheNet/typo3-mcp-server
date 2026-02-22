@@ -441,18 +441,20 @@ class ReadTableToolTest extends AbstractFunctionalTest
         $data = $this->extractJsonFromResult($result);
         $record = $data['records'][0];
 
-        // Essential fields should always be present
+        // With fields parameter, only uid + type field are forced essential
         $this->assertArrayHasKey('uid', $record);
-        $this->assertArrayHasKey('pid', $record);
-        $this->assertArrayHasKey('CType', $record);
+        $this->assertArrayHasKey('CType', $record); // type field for tt_content
 
         // Requested fields should be present
         $this->assertArrayHasKey('header', $record);
         $this->assertArrayHasKey('bodytext', $record);
 
-        // Non-requested, non-essential fields should be absent
+        // Non-requested fields should be absent — including fields that are
+        // normally essential (pid, sorting, timestamps) but weren't requested
         $this->assertArrayNotHasKey('colPos', $record, 'Non-requested field colPos should be excluded');
-        $this->assertArrayNotHasKey('imagewidth', $record, 'Non-requested field imagewidth should be excluded');
+        $this->assertArrayNotHasKey('pid', $record, 'Non-requested field pid should be excluded');
+        $this->assertArrayNotHasKey('sorting', $record, 'Non-requested field sorting should be excluded');
+        $this->assertArrayNotHasKey('tstamp', $record, 'Non-requested field tstamp should be excluded');
     }
 
     /**
@@ -516,12 +518,15 @@ class ReadTableToolTest extends AbstractFunctionalTest
         $data = $this->extractJsonFromResult($result);
         $record = $data['records'][0];
 
-        // Essential fields always included
+        // With fields parameter, only uid + type field are forced
         $this->assertArrayHasKey('uid', $record);
-        $this->assertArrayHasKey('pid', $record);
+        $this->assertArrayHasKey('doktype', $record); // type field for pages
+
+        // Requested field should be present
         $this->assertArrayHasKey('title', $record);
 
         // Non-requested fields should be absent
+        $this->assertArrayNotHasKey('pid', $record, 'Non-requested field pid should be excluded');
         $this->assertArrayNotHasKey('description', $record, 'Non-requested field description should be excluded');
         $this->assertArrayNotHasKey('slug', $record, 'Non-requested field slug should be excluded');
     }

@@ -74,7 +74,7 @@ class ReadTableTool extends AbstractRecordTool
             'fields' => [
                 'type' => 'array',
                 'items' => ['type' => 'string'],
-                'description' => 'Optional list of field names to include in the result. Essential fields (uid, pid, type, label) are always included. When omitted, all type-relevant fields are returned. Use GetTableSchema to discover available fields.',
+                'description' => 'Optional list of field names to include in the result. Only uid and the type field are always included. When omitted, all type-relevant fields are returned. Use GetTableSchema to discover available fields.',
             ],
         ];
 
@@ -369,7 +369,10 @@ class ReadTableTool extends AbstractRecordTool
      * Process a raw database record into a filtered, converted result.
      *
      * Applies three layers of field filtering in order:
-     * 1. Essential fields (uid, pid, type, label, timestamps, hidden, sorting) — always included.
+     * 1. Essential fields — always included so the record can be identified.
+     *    When requestedFields is empty (default): full set (uid, pid, type, label, timestamps, etc.).
+     *    When requestedFields is provided: minimal set (uid + type field only) to maximize
+     *    context savings — the caller explicitly chose what they need.
      * 2. TCA type filtering — fields not in the record type's showitem definition are excluded.
      *    This also enforces canAccessField() since getFieldNamesForType() already strips
      *    inaccessible fields (file fields, inline to restricted tables, TSconfig-disabled, etc.).
@@ -378,10 +381,8 @@ class ReadTableTool extends AbstractRecordTool
      *
      * @param array $record Raw database row
      * @param string $table Table name
-     * @param array $requestedFields User-provided field whitelist from the "fields" tool parameter,
-     *                               or internal callers that need specific fields preserved
-     *                               (e.g. inline relation processing adds the foreign_field here
-     *                               to ensure it survives filtering). Empty = no additional filtering.
+     * @param array $requestedFields User-provided field whitelist from the "fields" tool parameter.
+     *                               Empty = no additional filtering (default behavior).
      */
     protected function processRecord(array $record, string $table, array $requestedFields = []): array
     {
@@ -397,8 +398,18 @@ class ReadTableTool extends AbstractRecordTool
             // No change needed
         }
 
-        // Get essential fields using TableAccessService
-        $essentialFields = $this->tableAccessService->getEssentialFields($table);
+        // When the caller explicitly requests specific fields, only force uid + type field.
+        // Everything else (pid, label, timestamps, hidden, sorting) can be requested explicitly.
+        // When no fields are specified, include the full essential set for browsing context.
+        if (!empty($requestedFields)) {
+            $essentialFields = ['uid'];
+            $typeField = $this->tableAccessService->getTypeFieldName($table);
+            if ($typeField) {
+                $essentialFields[] = $typeField;
+            }
+        } else {
+            $essentialFields = $this->tableAccessService->getEssentialFields($table);
+        }
 
         // Get type-specific fields if a type field exists
         $typeField = $this->tableAccessService->getTypeFieldName($table);
