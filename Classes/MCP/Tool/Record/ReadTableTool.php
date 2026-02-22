@@ -349,7 +349,7 @@ class ReadTableTool extends AbstractRecordTool
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
         foreach ($records as $record) {
-            $processedRecord = $this->processRecord($record, $table, [], $requestedFields);
+            $processedRecord = $this->processRecord($record, $table, $requestedFields);
             $processedRecords[] = $processedRecord;
         }
 
@@ -366,9 +366,24 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
-     * Process a record
+     * Process a raw database record into a filtered, converted result.
+     *
+     * Applies three layers of field filtering in order:
+     * 1. Essential fields (uid, pid, type, label, timestamps, hidden, sorting) — always included.
+     * 2. TCA type filtering — fields not in the record type's showitem definition are excluded.
+     *    This also enforces canAccessField() since getFieldNamesForType() already strips
+     *    inaccessible fields (file fields, inline to restricted tables, TSconfig-disabled, etc.).
+     * 3. Requested fields — optional user-provided whitelist that narrows the result further.
+     *    Only applied when non-empty; an empty array means "return everything that passes 1+2".
+     *
+     * @param array $record Raw database row
+     * @param string $table Table name
+     * @param array $requestedFields User-provided field whitelist from the "fields" tool parameter,
+     *                               or internal callers that need specific fields preserved
+     *                               (e.g. inline relation processing adds the foreign_field here
+     *                               to ensure it survives filtering). Empty = no additional filtering.
      */
-    protected function processRecord(array $record, string $table, array $fields = [], array $requestedFields = []): array
+    protected function processRecord(array $record, string $table, array $requestedFields = []): array
     {
         $processedRecord = [];
 
@@ -408,12 +423,6 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
 
-            // Always include fields that were explicitly requested to be preserved
-            if (!empty($fields) && in_array($field, $fields)) {
-                $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
-                continue;
-            }
-
             // Special handling for pi_flexform in list content elements
             if ($field === 'pi_flexform' && $table === 'tt_content' &&
                 isset($record['CType']) && $record['CType'] === 'list' &&
@@ -439,7 +448,7 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
 
-            // Skip fields not in the user-requested field list
+            // Skip fields not in the requested field list
             if (!empty($requestedFields) && !in_array($field, $requestedFields)) {
                 continue;
             }
@@ -851,12 +860,9 @@ class ReadTableTool extends AbstractRecordTool
 
 
         // Process records for workspace transparency
-        // For inline relations, we need to ensure the foreign field is preserved
-        $fieldsToPreserve = [$foreignField];
-
         $processedRecords = [];
         foreach ($records as $record) {
-            $processed = $this->processRecord($record, $table, $fieldsToPreserve);
+            $processed = $this->processRecord($record, $table);
 
             // Ensure the foreign field is always included if it exists in the raw record
             if (isset($record[$foreignField]) && !isset($processed[$foreignField])) {
