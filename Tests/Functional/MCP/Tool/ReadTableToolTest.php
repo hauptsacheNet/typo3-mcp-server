@@ -441,16 +441,15 @@ class ReadTableToolTest extends AbstractFunctionalTest
         $data = $this->extractJsonFromResult($result);
         $record = $data['records'][0];
 
-        // With fields parameter, only uid + type field are forced essential
+        // uid is always included
         $this->assertArrayHasKey('uid', $record);
-        $this->assertArrayHasKey('CType', $record); // type field for tt_content
 
         // Requested fields should be present
         $this->assertArrayHasKey('header', $record);
         $this->assertArrayHasKey('bodytext', $record);
 
-        // Non-requested fields should be absent — including fields that are
-        // normally essential (pid, sorting, timestamps) but weren't requested
+        // Everything else should be absent — only uid + requested fields
+        $this->assertArrayNotHasKey('CType', $record, 'Non-requested field CType should be excluded');
         $this->assertArrayNotHasKey('colPos', $record, 'Non-requested field colPos should be excluded');
         $this->assertArrayNotHasKey('pid', $record, 'Non-requested field pid should be excluded');
         $this->assertArrayNotHasKey('sorting', $record, 'Non-requested field sorting should be excluded');
@@ -518,16 +517,49 @@ class ReadTableToolTest extends AbstractFunctionalTest
         $data = $this->extractJsonFromResult($result);
         $record = $data['records'][0];
 
-        // With fields parameter, only uid + type field are forced
+        // uid is always included
         $this->assertArrayHasKey('uid', $record);
-        $this->assertArrayHasKey('doktype', $record); // type field for pages
 
         // Requested field should be present
         $this->assertArrayHasKey('title', $record);
 
-        // Non-requested fields should be absent
+        // Everything else should be absent
+        $this->assertArrayNotHasKey('doktype', $record, 'Non-requested field doktype should be excluded');
         $this->assertArrayNotHasKey('pid', $record, 'Non-requested field pid should be excluded');
         $this->assertArrayNotHasKey('description', $record, 'Non-requested field description should be excluded');
         $this->assertArrayNotHasKey('slug', $record, 'Non-requested field slug should be excluded');
+    }
+
+    /**
+     * Test that ctrl fields (tstamp, crdate, etc.) can be requested even though
+     * they are not in the TCA showitem definition for any type.
+     */
+    public function testFieldsParameterCanRequestCtrlFields(): void
+    {
+        $result = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+            'fields' => ['tstamp', 'crdate', 'pid'],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = $this->extractJsonFromResult($result);
+        $record = $data['records'][0];
+
+        // uid always included
+        $this->assertArrayHasKey('uid', $record);
+
+        // Requested ctrl fields should be present
+        $this->assertArrayHasKey('tstamp', $record, 'Requested ctrl field tstamp should be included');
+        $this->assertArrayHasKey('crdate', $record, 'Requested ctrl field crdate should be included');
+        $this->assertArrayHasKey('pid', $record, 'Requested ctrl field pid should be included');
+
+        // Dates should still be converted to ISO format
+        $this->assertDateFormat($record['tstamp'], 'tstamp');
+        $this->assertDateFormat($record['crdate'], 'crdate');
+
+        // Non-requested fields should be absent
+        $this->assertArrayNotHasKey('header', $record, 'Non-requested field header should be excluded');
+        $this->assertArrayNotHasKey('bodytext', $record, 'Non-requested field bodytext should be excluded');
     }
 }
