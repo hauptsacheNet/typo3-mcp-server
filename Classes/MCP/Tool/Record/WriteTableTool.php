@@ -80,7 +80,7 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'search_replace' => [
                         'type' => 'object',
-                        'description' => 'Targeted modifications using search-and-replace (only for "update" action). Keys are field names, values are arrays of {search, replace, replaceAll?} operations applied sequentially. Each search string must match exactly once unless replaceAll is true. Use this instead of sending the entire field value in data for large text fields. A field must not appear in both data and search_replace.',
+                        'description' => 'Targeted modifications using search-and-replace (only for "update" action). Keys are field names, values are lists of operation objects with keys: search, replace, and optionally replaceAll. Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true. Use this instead of sending the entire field value in data for large text fields. A field must not appear in both data and search_replace.',
                         'additionalProperties' => [
                             'type' => 'array',
                             'items' => [
