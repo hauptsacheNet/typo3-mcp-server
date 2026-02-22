@@ -562,4 +562,29 @@ class ReadTableToolTest extends AbstractFunctionalTest
         $this->assertArrayNotHasKey('header', $record, 'Non-requested field header should be excluded');
         $this->assertArrayNotHasKey('bodytext', $record, 'Non-requested field bodytext should be excluded');
     }
+
+    /**
+     * Test that field names are matched case-insensitively.
+     * The output should use the correct TCA case.
+     */
+    public function testFieldsParameterIsCaseInsensitive(): void
+    {
+        $result = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+            'fields' => ['ctype', 'HEADER', 'Bodytext'],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = $this->extractJsonFromResult($result);
+        $record = $data['records'][0];
+
+        // Fields should be returned in their correct TCA case
+        $this->assertArrayHasKey('CType', $record, '"ctype" should match CType');
+        $this->assertArrayHasKey('header', $record, '"HEADER" should match header');
+        $this->assertArrayHasKey('bodytext', $record, '"Bodytext" should match bodytext');
+
+        // Non-requested fields should still be excluded
+        $this->assertArrayNotHasKey('colPos', $record);
+    }
 }

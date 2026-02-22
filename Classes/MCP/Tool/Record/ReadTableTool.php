@@ -127,7 +127,7 @@ class ReadTableTool extends AbstractRecordTool
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
         $language = $params['language'] ?? null;
         $includeTranslationSource = $params['includeTranslationSource'] ?? false;
-        $requestedFields = $params['fields'] ?? [];
+        $requestedFields = $this->normalizeFieldNames($table, $params['fields'] ?? []);
 
         // Ensure translation parent field is included when translation source is requested
         if ($includeTranslationSource && !empty($requestedFields)) {
@@ -576,6 +576,38 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         return $value;
+    }
+
+    /**
+     * Normalize user-provided field names to their correct case.
+     *
+     * Field names in TYPO3 are case-sensitive in PHP arrays but users may enter
+     * them case-insensitively (e.g. "ctype" instead of "CType"). This maps each
+     * requested name to the actual TCA column name or essential field name.
+     * Unrecognized names are kept as-is (they simply won't match anything).
+     */
+    protected function normalizeFieldNames(string $table, array $requestedFields): array
+    {
+        if (empty($requestedFields)) {
+            return [];
+        }
+
+        // Build a lowercase → actual name map from TCA columns and essential fields
+        $knownFields = [];
+        foreach (array_keys($GLOBALS['TCA'][$table]['columns'] ?? []) as $columnName) {
+            $knownFields[strtolower($columnName)] = $columnName;
+        }
+        foreach ($this->tableAccessService->getEssentialFields($table) as $essentialName) {
+            $knownFields[strtolower($essentialName)] = $essentialName;
+        }
+
+        $normalized = [];
+        foreach ($requestedFields as $field) {
+            $lower = strtolower($field);
+            $normalized[] = $knownFields[$lower] ?? $field;
+        }
+
+        return $normalized;
     }
 
     /**
