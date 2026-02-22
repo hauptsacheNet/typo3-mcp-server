@@ -55,7 +55,8 @@ class GetPageTreeToolTest extends FunctionalTestCase
             'startPage' => 0,
             'depth' => 2
         ]);
-        
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
         // Verify result structure
         $this->assertCount(1, $result->content);
         $this->assertInstanceOf(TextContent::class, $result->content[0]);
@@ -373,6 +374,187 @@ class GetPageTreeToolTest extends FunctionalTestCase
         $this->assertArrayHasKey('depth', $schema['inputSchema']['properties']);
     }
     
+    /**
+     * Test that adaptive depth limits the tree when page count exceeds budget.
+     *
+     * Creates a wide tree: root → 60 children → 2 grandchildren each (120).
+     * Level 1 = 60 pages (under 100 budget), Level 2 = +120 = 180 total (over 100).
+     * Expected: both levels shown (level that pushes over budget is included),
+     * but no further expansion. A depth-limited note should appear.
+     */
+    public function testAdaptiveDepthLimitsOnLargeTree(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
+
+        $this->createWidePageTree();
+
+        // Request deep depth (default would be 10), but the adaptive algorithm should limit it
+        $result = $tool->execute([
+            'startPage' => 2000,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+
+        // Level 1 pages should be shown
+        $this->assertStringContainsString('[2001]', $content, 'First level-1 page should be shown');
+        $this->assertStringContainsString('[2060]', $content, 'Last level-1 page should be shown');
+
+        // Level 2 pages should also be shown (the level that pushed us over budget is included)
+        $this->assertStringContainsString('[3001]', $content, 'First level-2 page should be shown');
+        $this->assertStringContainsString('[3120]', $content, 'Last level-2 page should be shown');
+
+        // Level 3 pages should NOT be shown (budget exceeded, no further expansion)
+        $this->assertStringNotContainsString('[4001]', $content, 'Level-3 pages should not be shown');
+
+        // The depth-limited note should be present
+        $this->assertStringContainsString('Tree depth limited to', $content, 'Should show depth limitation note');
+        $this->assertStringContainsString('Use startPage to explore specific subtrees', $content);
+
+        // Level 2 pages should show subpage counts (they have children we didn't expand)
+        $this->assertStringContainsString('(1 subpages)', $content, 'Level-2 pages should show subpage counts');
+    }
+
+    /**
+     * Test that small trees are NOT depth-limited even with high default depth.
+     */
+    public function testAdaptiveDepthDoesNotLimitSmallTree(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
+
+        $this->createTestPageStructure();
+
+        // Use default depth (no depth parameter) — should show entire tree without limitation
+        $result = $tool->execute([
+            'startPage' => 1000,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+
+        // All levels should be shown
+        $this->assertStringContainsString('[1001] Level 1 - Page A', $content);
+        $this->assertStringContainsString('[1003] Level 2 - Page A1', $content);
+        $this->assertStringContainsString('[1006] Level 3 - Page A1a', $content);
+
+        // No depth limitation note
+        $this->assertStringNotContainsString('Tree depth limited', $content, 'Small tree should not show depth limitation note');
+    }
+
+    /**
+     * Test that explicit depth parameter is respected as upper bound.
+     */
+    public function testExplicitDepthIsRespectedAsUpperBound(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTreeTool($siteInformationService, $languageService);
+
+        $this->createTestPageStructure();
+
+        // Request depth=2 explicitly for a small tree — should stop at depth 2 without budget note
+        $result = $tool->execute([
+            'startPage' => 1000,
+            'depth' => 2,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+
+        // Level 1 and 2 shown
+        $this->assertStringContainsString('[1001] Level 1 - Page A', $content);
+        $this->assertStringContainsString('[1003] Level 2 - Page A1', $content);
+
+        // Level 3 NOT shown (depth limit, not budget limit)
+        $this->assertStringNotContainsString('[1006] Level 3 - Page A1a', $content);
+
+        // No budget limitation note (stopped by explicit depth, not budget)
+        $this->assertStringNotContainsString('Tree depth limited', $content);
+    }
+
+    /**
+     * Create a wide page tree for adaptive depth testing.
+     *
+     * Structure:
+     * - [2000] Wide Root (pid=0)
+     *   - [2001..2060] 60 level-1 pages (pid=2000)
+     *     - [3001..3120] 2 level-2 pages each (pid=200X), 120 total
+     *       - [4001..4120] 1 level-3 page each (pid=300X), 120 total
+     */
+    private function createWidePageTree(): void
+    {
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('pages');
+
+        $connection->insert('pages', [
+            'uid' => 2000,
+            'pid' => 0,
+            'title' => 'Wide Root',
+            'deleted' => 0,
+            'hidden' => 0,
+            'doktype' => 1,
+            'slug' => '/wide-root',
+            'tstamp' => time(),
+            'crdate' => time(),
+        ]);
+
+        // 60 level-1 pages
+        for ($i = 1; $i <= 60; $i++) {
+            $connection->insert('pages', [
+                'uid' => 2000 + $i,
+                'pid' => 2000,
+                'title' => 'L1 Page ' . $i,
+                'deleted' => 0,
+                'hidden' => 0,
+                'doktype' => 1,
+                'slug' => '/wide-root/l1-page-' . $i,
+                'tstamp' => time(),
+                'crdate' => time(),
+                'sorting' => $i * 10,
+            ]);
+        }
+
+        // 2 level-2 pages per level-1 page (120 total)
+        $l2Uid = 3001;
+        for ($parent = 1; $parent <= 60; $parent++) {
+            for ($child = 1; $child <= 2; $child++) {
+                $connection->insert('pages', [
+                    'uid' => $l2Uid,
+                    'pid' => 2000 + $parent,
+                    'title' => 'L2 Page ' . $l2Uid,
+                    'deleted' => 0,
+                    'hidden' => 0,
+                    'doktype' => 1,
+                    'slug' => '/wide-root/l1-page-' . $parent . '/l2-page-' . $l2Uid,
+                    'tstamp' => time(),
+                    'crdate' => time(),
+                    'sorting' => $child * 10,
+                ]);
+                $l2Uid++;
+            }
+        }
+
+        // 1 level-3 page per level-2 page (120 total) — these should NOT be shown
+        for ($l2 = 3001; $l2 <= 3120; $l2++) {
+            $connection->insert('pages', [
+                'uid' => $l2 + 1000, // 4001..4120
+                'pid' => $l2,
+                'title' => 'L3 Page ' . ($l2 + 1000),
+                'deleted' => 0,
+                'hidden' => 0,
+                'doktype' => 1,
+                'slug' => '/deep/l3-page-' . ($l2 + 1000),
+                'tstamp' => time(),
+                'crdate' => time(),
+                'sorting' => 10,
+            ]);
+        }
+    }
+
     /**
      * Test enhanced output with doktype labels
      */

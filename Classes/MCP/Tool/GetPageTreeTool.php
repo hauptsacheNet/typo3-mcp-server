@@ -23,6 +23,12 @@ use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
  */
 class GetPageTreeTool extends AbstractRecordTool
 {
+    /**
+     * Maximum number of pages before stopping deeper expansion.
+     * Once a level pushes the total over this threshold, no further levels are fetched.
+     */
+    protected const MAX_PAGES_BUDGET = 100;
+
     protected SiteInformationService $siteInformationService;
     protected LanguageService $languageService;
 
@@ -41,7 +47,7 @@ class GetPageTreeTool extends AbstractRecordTool
     public function getSchema(): array
     {
         $schema = [
-            'description' => 'Get the TYPO3 page tree structure as a readable text tree.Essential for understanding page hierarchy before creating new pages, finding pages by their position, and verifying parent-child relationships.',
+            'description' => 'Get the TYPO3 page tree structure as a readable text tree. Essential for understanding page hierarchy before creating new pages, finding pages by their position, and verifying parent-child relationships. The tree automatically limits depth on large sites to keep the response manageable. Use startPage to explore specific subtrees in detail.',
             'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
@@ -51,7 +57,7 @@ class GetPageTreeTool extends AbstractRecordTool
                     ],
                     'depth' => [
                         'type' => 'integer',
-                        'description' => 'The depth of pages to retrieve (default: 3)',
+                        'description' => 'Maximum depth of pages to retrieve (default: 10). The tree stops expanding earlier if it reaches approximately ' . self::MAX_PAGES_BUDGET . ' pages.',
                     ],
                 ],
                 'required' => ['startPage'],
@@ -82,9 +88,8 @@ class GetPageTreeTool extends AbstractRecordTool
      */
     protected function doExecute(array $params): CallToolResult
     {
-        
         $startPage = (int)($params['startPage'] ?? 0);
-        $depth = (int)($params['depth'] ?? 3);
+        $maxDepth = (int)($params['depth'] ?? 10);
         $languageUid = null;
 
         // Handle language parameter if provided
@@ -95,15 +100,18 @@ class GetPageTreeTool extends AbstractRecordTool
             }
         }
 
-        // Get page tree with the specified parameters
-        $pageTree = $this->getPageTree($startPage, $depth, $languageUid);
-        
+        // Get page tree with adaptive depth
+        $depthLimited = false;
+        $totalPageCount = 0;
+        $effectiveDepth = 0;
+        $pageTree = $this->getPageTree($startPage, $maxDepth, $languageUid, $depthLimited, $totalPageCount, $effectiveDepth);
+
         // Collect all page UIDs from the tree
         $pageUids = $this->collectPageUids($pageTree);
-        
+
         // Get record counts for all pages
         $recordCounts = $this->getRecordCounts($pageUids);
-        
+
         // Get plugin hints for all pages
         $pluginHints = [];
         foreach ($pageUids as $uid) {
@@ -112,57 +120,31 @@ class GetPageTreeTool extends AbstractRecordTool
                 $pluginHints[$uid] = $hint;
             }
         }
-        
+
         // Convert the page tree to a text-based tree with indentation
         $textTree = $this->renderTextTree($pageTree, 0, $languageUid, $recordCounts, $pluginHints);
-        
+
+        // Add depth limitation note if applicable
+        if ($depthLimited) {
+            $textTree .= PHP_EOL . '(Tree depth limited to ' . $effectiveDepth . ' levels because the page tree contains ' . $totalPageCount . ' pages at this depth. Use startPage to explore specific subtrees.)' . PHP_EOL;
+        }
+
         return new CallToolResult([new TextContent($textTree)]);
     }
 
     /**
-     * Get the page tree
+     * Get the page tree using efficient level-by-level bulk queries.
+     *
+     * Instead of one query per page (N+1 problem), this fetches all pages at each
+     * depth level with a single WHERE pid IN (...) query. It stops expanding when
+     * the total page count exceeds MAX_PAGES_BUDGET.
      */
-    protected function getPageTree(int $startPage, int $depth, ?int $languageUid = null): array
+    protected function getPageTree(int $startPage, int $maxDepth, ?int $languageUid, bool &$depthLimited, int &$totalPageCount, int &$effectiveDepth): array
     {
-        // Get database connection for pages table
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('pages');
-
-        // Only apply the DeletedRestriction to filter out deleted pages
-        $queryBuilder->getRestrictions()
-            ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-
-        // Build the query
-        $query = $queryBuilder->select('*')
-            ->from('pages');
-
-        // Filter by pid (parent ID) for the starting page
-        if ($startPage === 0) {
-            // Root level pages have pid=0
-            $query->where(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER)),
-                $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
-            );
-        } else {
-            // Get subpages of the specified page
-            $query->where(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($startPage, ParameterType::INTEGER)),
-                $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
-            );
-        }
-
-        // Order by sorting
-        $query->orderBy('sorting');
-
-        // Execute the query
-        $pages = $query->executeQuery()->fetchAllAssociative();
-
-        // Set up context for language and visibility
-        $context = GeneralUtility::makeInstance(Context::class);
-
-        // Set up language aspect if needed
+        // Set up PageRepository for language overlays (once, not per recursion)
+        $pageRepository = null;
         if ($languageUid !== null && $languageUid > 0) {
+            $context = GeneralUtility::makeInstance(Context::class);
             $languageAspect = new LanguageAspect(
                 $languageUid,
                 $languageUid,
@@ -170,13 +152,90 @@ class GetPageTreeTool extends AbstractRecordTool
                 [$languageUid]
             );
             $context->setAspect('language', $languageAspect);
+            $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
         }
 
-        // Create PageRepository with context
-        $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
+        // Fetch pages level by level
+        $levels = []; // $levels[i] = flat array of processed page data at depth i
+        $parentIds = [$startPage];
+        $totalPageCount = 0;
+        $depthLimited = false;
 
-        // Process the result
-        $pageTree = [];
+        for ($depth = 0; $depth < $maxDepth; $depth++) {
+            $pagesAtLevel = $this->fetchPagesForParents($parentIds, $languageUid, $pageRepository);
+
+            if (empty($pagesAtLevel)) {
+                break;
+            }
+
+            $totalPageCount += count($pagesAtLevel);
+            $levels[] = $pagesAtLevel;
+
+            // If this level pushed us over budget, include it but don't go deeper
+            if ($totalPageCount >= self::MAX_PAGES_BUDGET) {
+                $depthLimited = true;
+                break;
+            }
+
+            // If we've reached the requested max depth, stop
+            if ($depth + 1 >= $maxDepth) {
+                break;
+            }
+
+            // Collect UIDs for the next level's parent lookup
+            $parentIds = array_map(fn(array $p): int => $p['uid'], $pagesAtLevel);
+        }
+
+        $effectiveDepth = count($levels);
+
+        // Add subpage counts for the last level (bulk query)
+        if (!empty($levels)) {
+            $lastLevelIndex = count($levels) - 1;
+            $lastLevelUids = array_map(fn(array $p): int => $p['uid'], $levels[$lastLevelIndex]);
+            $subpageCounts = $this->countSubpagesForParents($lastLevelUids);
+
+            foreach ($levels[$lastLevelIndex] as &$page) {
+                $page['subpageCount'] = $subpageCounts[$page['uid']] ?? 0;
+                $page['subpages'] = [];
+            }
+            unset($page);
+        }
+
+        // Assemble the flat levels into a nested tree
+        return $this->assembleTree($levels);
+    }
+
+    /**
+     * Fetch all pages whose parent is in the given list of IDs.
+     * Single bulk query per level instead of one query per page.
+     */
+    protected function fetchPagesForParents(array $parentIds, ?int $languageUid, ?PageRepository $pageRepository): array
+    {
+        if (empty($parentIds)) {
+            return [];
+        }
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+
+        $pages = $queryBuilder->select('*')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->in(
+                    'pid',
+                    $queryBuilder->createNamedParameter($parentIds, ArrayParameterType::INTEGER)
+                ),
+                $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->orderBy('sorting')
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        $result = [];
         foreach ($pages as $page) {
             $pageData = [
                 'uid' => (int)$page['uid'],
@@ -186,15 +245,15 @@ class GetPageTreeTool extends AbstractRecordTool
                 'hidden' => (bool)$page['hidden'],
                 'doktype' => (int)$page['doktype'],
                 'subpageCount' => 0,
+                'subpages' => [],
                 'url' => $this->siteInformationService->generatePageUrl((int)$page['uid']),
             ];
 
-            // Get language overlay if language specified
-            if ($languageUid !== null && $languageUid > 0) {
+            // Apply language overlay if needed
+            if ($languageUid !== null && $languageUid > 0 && $pageRepository !== null) {
                 $overlaidPage = $pageRepository->getPageOverlay($page, $languageUid);
 
                 if ($overlaidPage !== $page) {
-                    // Apply overlay data
                     $pageData['title'] = $overlaidPage['title'] ?: $pageData['title'];
                     $pageData['nav_title'] = $overlaidPage['nav_title'] ?: $pageData['nav_title'];
                     $pageData['hidden'] = (bool)$overlaidPage['hidden'];
@@ -204,27 +263,23 @@ class GetPageTreeTool extends AbstractRecordTool
                 }
             }
 
-            // Check if there are subpages if depth > 1
-            if ($depth > 1) {
-                $subpages = $this->getPageTree((int)$page['uid'], $depth - 1, $languageUid);
-                $pageData['subpages'] = $subpages;
-                $pageData['subpageCount'] = count($subpages);
-            } else {
-                // We're at max depth, count the number of subpages
-                $pageData['subpageCount'] = $this->countSubpages((int)$page['uid']);
-            }
-
-            $pageTree[] = $pageData;
+            $result[] = $pageData;
         }
 
-        return $pageTree;
+        return $result;
     }
-    
+
     /**
-     * Count the number of subpages for a page
+     * Count subpages for multiple parent pages in a single bulk query.
+     *
+     * @return array<int, int> Map of parent UID => subpage count
      */
-    protected function countSubpages(int $pageId): int
+    protected function countSubpagesForParents(array $parentIds): array
     {
+        if (empty($parentIds)) {
+            return [];
+        }
+
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
 
@@ -232,16 +287,59 @@ class GetPageTreeTool extends AbstractRecordTool
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
 
-        $query = $queryBuilder->count('uid')
+        $rows = $queryBuilder
+            ->select('pid')
+            ->addSelectLiteral('COUNT(*) AS count')
             ->from('pages')
             ->where(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
+                $queryBuilder->expr()->in(
+                    'pid',
+                    $queryBuilder->createNamedParameter($parentIds, ArrayParameterType::INTEGER)
+                ),
                 $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
-            );
+            )
+            ->groupBy('pid')
+            ->executeQuery()
+            ->fetchAllAssociative();
 
-        return (int)$query->executeQuery()->fetchOne();
+        $counts = [];
+        foreach ($rows as $row) {
+            $counts[(int)$row['pid']] = (int)$row['count'];
+        }
+        return $counts;
     }
-    
+
+    /**
+     * Assemble flat level arrays into a nested tree structure.
+     *
+     * Works bottom-up: the last level's pages become children of the previous level's
+     * pages, and so on up to the root level.
+     */
+    protected function assembleTree(array $levels): array
+    {
+        if (empty($levels)) {
+            return [];
+        }
+
+        // Process from bottom to top, assigning children to parents
+        for ($i = count($levels) - 1; $i > 0; $i--) {
+            // Group pages at this level by their parent ID
+            $childrenByPid = [];
+            foreach ($levels[$i] as $page) {
+                $childrenByPid[$page['pid']][] = $page;
+            }
+
+            // Assign children to the parent level
+            foreach ($levels[$i - 1] as &$parentPage) {
+                $children = $childrenByPid[$parentPage['uid']] ?? [];
+                $parentPage['subpages'] = $children;
+                $parentPage['subpageCount'] = count($children);
+            }
+            unset($parentPage);
+        }
+
+        return $levels[0];
+    }
 
     /**
      * Collect all page UIDs from the tree structure
@@ -249,18 +347,18 @@ class GetPageTreeTool extends AbstractRecordTool
     protected function collectPageUids(array $pageTree): array
     {
         $uids = [];
-        
+
         foreach ($pageTree as $page) {
             $uids[] = $page['uid'];
-            
+
             if (!empty($page['subpages'])) {
                 $uids = array_merge($uids, $this->collectPageUids($page['subpages']));
             }
         }
-        
+
         return $uids;
     }
-    
+
     /**
      * Get record counts for given page UIDs
      */
@@ -269,26 +367,26 @@ class GetPageTreeTool extends AbstractRecordTool
         if (empty($pageUids)) {
             return [];
         }
-        
+
         $recordCounts = [];
-        
+
         // Get accessible tables (exclude read-only system tables)
         $accessibleTables = $this->tableAccessService->getAccessibleTables(false);
-        
+
         foreach ($accessibleTables as $table => $accessInfo) {
             // Skip pages table itself
             if ($table === 'pages') {
                 continue;
             }
-            
+
             $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
                 ->getQueryBuilderForTable($table);
-            
+
             // Only apply DeletedRestriction
             $queryBuilder->getRestrictions()
                 ->removeAll()
                 ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-            
+
             // Count records grouped by pid
             $counts = $queryBuilder
                 ->select('pid')
@@ -296,9 +394,9 @@ class GetPageTreeTool extends AbstractRecordTool
                 ->from($table)
                 ->where(
                     $queryBuilder->expr()->in(
-                        'pid', 
+                        'pid',
                         $queryBuilder->createNamedParameter(
-                            $pageUids, 
+                            $pageUids,
                             ArrayParameterType::INTEGER
                         )
                     )
@@ -306,20 +404,20 @@ class GetPageTreeTool extends AbstractRecordTool
                 ->groupBy('pid')
                 ->executeQuery()
                 ->fetchAllAssociative();
-            
+
             // Store counts
             foreach ($counts as $row) {
                 $pid = (int)$row['pid'];
                 $count = (int)$row['count'];
-                
+
                 if (!isset($recordCounts[$pid])) {
                     $recordCounts[$pid] = [];
                 }
-                
+
                 $recordCounts[$pid][$table] = $count;
             }
         }
-        
+
         return $recordCounts;
     }
 
@@ -329,15 +427,15 @@ class GetPageTreeTool extends AbstractRecordTool
     protected function getPluginStorageHints(int $pageId): string
     {
         $hints = '';
-        
+
         // Query for plugins on this page
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('tt_content');
-        
+
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-        
+
         $plugins = $queryBuilder
             ->select('*')
             ->from('tt_content')
@@ -347,7 +445,7 @@ class GetPageTreeTool extends AbstractRecordTool
             )
             ->executeQuery()
             ->fetchAllAssociative();
-        
+
         foreach ($plugins as $plugin) {
             // Check for news plugin with startingpoint configuration
             if (isset($plugin['list_type']) && $plugin['list_type'] === 'news_pi1' && !empty($plugin['pi_flexform'])) {
@@ -358,10 +456,7 @@ class GetPageTreeTool extends AbstractRecordTool
                 }
             }
         }
-        
-        // Debug: Remove debug for now
-        // The issue seems to be with the condition or regex
-        
+
         return $hints;
     }
 
@@ -389,15 +484,15 @@ class GetPageTreeTool extends AbstractRecordTool
     {
         $result = '';
         $indent = str_repeat('  ', $level);
-        
+
         foreach ($pageTree as $page) {
             $title = $page['nav_title'] ?: $page['title'];
             $hiddenMark = $page['hidden'] ? ' [HIDDEN]' : '';
             $doktypeLabel = $this->getDoktypeLabel($page['doktype']);
-            
+
             // Start building the line: [uid] Title [Type]
             $result .= $indent . '- [' . $page['uid'] . '] ' . $title . ' [' . $doktypeLabel . ']' . $hiddenMark;
-            
+
             // Add translation status if language specified
             if ($languageUid !== null && $languageUid > 0) {
                 if (isset($page['_translated'])) {
@@ -416,25 +511,24 @@ class GetPageTreeTool extends AbstractRecordTool
             if (!empty($page['url'])) {
                 $result .= ' - ' . $page['url'];
             }
-            
+
             // If the page has subpages but we've reached max depth, show the count
             if (empty($page['subpages']) && $page['subpageCount'] > 0) {
                 $result .= ' (' . $page['subpageCount'] . ' subpages)';
             }
-            
+
             // Add plugin hints if available
             if (!empty($pluginHints[$page['uid']])) {
                 $result .= $pluginHints[$page['uid']];
             }
-            
+
             $result .= PHP_EOL;
-            
+
             if (!empty($page['subpages'])) {
                 $result .= $this->renderTextTree($page['subpages'], $level + 1, $languageUid, $recordCounts, $pluginHints);
             }
         }
-        
+
         return $result;
     }
-
 }
