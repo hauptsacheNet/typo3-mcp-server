@@ -40,7 +40,8 @@ class WriteTableTool extends AbstractRecordTool
         sort($tableNames); // Sort alphabetically for better readability
         
         return [
-            'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live. Language fields (sys_language_uid) can be provided as ISO codes (e.g., "de", "fr") instead of numeric IDs.' .
+            'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live. Language fields (sys_language_uid) can be provided as ISO codes (e.g., "de", "fr") instead of numeric IDs. ' .
+                'For updating large text fields, use the search_replace parameter instead of sending the entire field value in data. ' .
                 'Before creating or updating content, always use GetPage to understand the page structure, existing content, and writing style. ' .
                 'Check existing content elements with ReadTable to ensure new content fits the page\'s tone and doesn\'t duplicate existing elements. ' .
                 'For content creation, verify the appropriate colPos by examining existing content layout. ' .
@@ -77,6 +78,31 @@ class WriteTableTool extends AbstractRecordTool
                             ['sys_language_uid' => 'de', 'title' => 'German translation']
                         ]
                     ],
+                    'search_replace' => [
+                        'type' => 'object',
+                        'description' => 'Targeted modifications using search-and-replace (only for "update" action). Keys are field names, values are arrays of {search, replace, replaceAll?} operations applied sequentially. Each search string must match exactly once unless replaceAll is true. Use this instead of sending the entire field value in data for large text fields. A field must not appear in both data and search_replace.',
+                        'additionalProperties' => [
+                            'type' => 'array',
+                            'items' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'search' => [
+                                        'type' => 'string',
+                                        'description' => 'Text to find (must match exactly once unless replaceAll is true)',
+                                    ],
+                                    'replace' => [
+                                        'type' => 'string',
+                                        'description' => 'Replacement text (use empty string to delete matched text)',
+                                    ],
+                                    'replaceAll' => [
+                                        'type' => 'boolean',
+                                        'description' => 'Replace all occurrences instead of requiring a unique match. Default: false',
+                                    ],
+                                ],
+                                'required' => ['search', 'replace'],
+                            ],
+                        ],
+                    ],
                     'position' => [
                         'type' => 'string',
                         'description' => 'Position for new records: "top", "bottom", "after:UID", or "before:UID"',
@@ -104,8 +130,9 @@ class WriteTableTool extends AbstractRecordTool
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
         $data = $params['data'] ?? [];
+        $searchReplace = $params['search_replace'] ?? [];
         $position = $params['position'] ?? 'bottom';
-        
+
         // Validate parameters
         if (empty($action)) {
             throw new ValidationException(['Action is required (create, update, translate, or delete)']);
@@ -127,6 +154,42 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         
+        // Validate search_replace parameter
+        if (!empty($searchReplace)) {
+            if (!is_array($searchReplace)) {
+                throw new ValidationException(['Invalid search_replace parameter: Expected an object with field names as keys']);
+            }
+            if ($action !== 'update') {
+                throw new ValidationException(['search_replace is only supported for the "update" action']);
+            }
+            // Check no field appears in both data and search_replace
+            $overlapping = array_intersect_key($data, $searchReplace);
+            if (!empty($overlapping)) {
+                $fields = implode(', ', array_keys($overlapping));
+                throw new ValidationException(["Field(s) {$fields} cannot appear in both data and search_replace"]);
+            }
+            // Validate structure of each search_replace entry
+            foreach ($searchReplace as $fieldName => $operations) {
+                if (!is_array($operations)) {
+                    throw new ValidationException(["search_replace field '{$fieldName}' must be an array of operations"]);
+                }
+                foreach ($operations as $index => $operation) {
+                    if (!is_array($operation)) {
+                        throw new ValidationException(["search_replace field '{$fieldName}' operation at index {$index} must be an object"]);
+                    }
+                    if (!isset($operation['search']) || !is_string($operation['search'])) {
+                        throw new ValidationException(["search_replace field '{$fieldName}' operation at index {$index} must have a 'search' string"]);
+                    }
+                    if (!array_key_exists('replace', $operation) || !is_string($operation['replace'])) {
+                        throw new ValidationException(["search_replace field '{$fieldName}' operation at index {$index} must have a 'replace' string"]);
+                    }
+                    if ($operation['search'] === '') {
+                        throw new ValidationException(["search_replace field '{$fieldName}' operation at index {$index} has an empty search string"]);
+                    }
+                }
+            }
+        }
+
         /**
          * IMPORTANT FEATURE: ISO Code Support for sys_language_uid
          *
@@ -168,9 +231,9 @@ class WriteTableTool extends AbstractRecordTool
                 if ($uid === null) {
                     throw new ValidationException(['Record UID is required for update action']);
                 }
-                
-                if (empty($data)) {
-                    throw new ValidationException(['Data is required for update action']);
+
+                if (empty($data) && empty($searchReplace)) {
+                    throw new ValidationException(['Either data or search_replace is required for update action']);
                 }
                 break;
                 
@@ -204,6 +267,11 @@ class WriteTableTool extends AbstractRecordTool
                 return $this->createRecord($table, $pid, $data, $position);
                 
             case 'update':
+                // Resolve search_replace into concrete field values and merge into data
+                if (!empty($searchReplace)) {
+                    $resolvedFields = $this->resolveSearchReplace($table, $uid, $searchReplace);
+                    $data = array_merge($data, $resolvedFields);
+                }
                 return $this->updateRecord($table, $uid, $data);
                 
             case 'delete':
@@ -1091,6 +1159,82 @@ class WriteTableTool extends AbstractRecordTool
         return $this->tableAccessService->isFlexFormField($table, $fieldName);
     }
     
+    /**
+     * Resolve search_replace operations into concrete field values.
+     *
+     * Fetches the current record (workspace-aware), validates field types,
+     * applies search-and-replace operations sequentially, and returns
+     * the resolved field values ready to merge into the data array.
+     *
+     * @param string $table Table name
+     * @param int $uid Live record UID
+     * @param array $searchReplace Map of field name => array of operations
+     * @return array Resolved field values (field name => new value)
+     * @throws ValidationException If a field is not a string type or search string is not found/ambiguous
+     */
+    protected function resolveSearchReplace(string $table, int $uid, array $searchReplace): array
+    {
+        // String-storable TCA field types that support search_replace
+        $stringFieldTypes = ['input', 'text', 'email', 'link', 'slug', 'color'];
+
+        // Collect all field names we need to fetch
+        $fieldNames = array_keys($searchReplace);
+
+        // Validate all fields are string-type before fetching the record
+        foreach ($fieldNames as $fieldName) {
+            $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
+            if (!$fieldConfig) {
+                throw new ValidationException(["search_replace field '{$fieldName}' does not exist in table '{$table}'"]);
+            }
+            $fieldType = $fieldConfig['config']['type'] ?? '';
+            if (!in_array($fieldType, $stringFieldTypes, true)) {
+                throw new ValidationException(["search_replace is not supported for field '{$fieldName}' (type: {$fieldType}). Only string fields (text, input, etc.) are supported."]);
+            }
+        }
+
+        // Fetch full record with workspace overlay to get the current workspace version data,
+        // which is what the LLM sees from ReadTable output.
+        // We fetch all fields because workspaceOL needs uid and workspace metadata fields.
+        $record = BackendUtility::getRecord($table, $uid);
+        if (!$record) {
+            throw new ValidationException(["Record {$uid} not found in table '{$table}'"]);
+        }
+        BackendUtility::workspaceOL($table, $record);
+
+        $resolved = [];
+        foreach ($searchReplace as $fieldName => $operations) {
+            $currentValue = (string)($record[$fieldName] ?? '');
+
+            foreach ($operations as $index => $operation) {
+                $search = $operation['search'];
+                $replaceAll = !empty($operation['replaceAll']);
+                $replace = $operation['replace'];
+
+                $count = substr_count($currentValue, $search);
+
+                if ($count === 0) {
+                    throw new ValidationException(["search_replace field '{$fieldName}' operation {$index}: Search string not found in current field value"]);
+                }
+
+                if ($count > 1 && !$replaceAll) {
+                    throw new ValidationException(["search_replace field '{$fieldName}' operation {$index}: Search string found {$count} times, must be unique. Set replaceAll to true to replace all occurrences."]);
+                }
+
+                if ($replaceAll) {
+                    $currentValue = str_replace($search, $replace, $currentValue);
+                } else {
+                    // Replace only the first (and only) occurrence
+                    $pos = strpos($currentValue, $search);
+                    $currentValue = substr_replace($currentValue, $replace, $pos, strlen($search));
+                }
+            }
+
+            $resolved[$fieldName] = $currentValue;
+        }
+
+        return $resolved;
+    }
+
     /**
      * Convert data for storage
      */

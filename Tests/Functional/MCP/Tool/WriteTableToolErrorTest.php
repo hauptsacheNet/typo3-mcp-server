@@ -111,14 +111,14 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         $this->assertTrue($result->isError);
         $this->assertStringContainsString('Page ID (pid) is required for create action', $result->content[0]->text);
         
-        // Missing data for update
+        // Missing data and search_replace for update
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'pages',
             'uid' => 1
         ]);
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Data is required for update action', $result->content[0]->text);
+        $this->assertStringContainsString('Either data or search_replace is required for update action', $result->content[0]->text);
     }
     
     /**
@@ -447,11 +447,11 @@ class WriteTableToolErrorTest extends FunctionalTestCase
                 // Missing required 'title' field
             ]
         ]);
-        
+
         // TYPO3 DataHandler might handle this differently
         // The tool itself doesn't enforce required fields, DataHandler does
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
-        
+
         // But the page shouldn't be properly created without title
         $data = json_decode($result->content[0]->text, true);
         if (isset($data['uid']) && $data['uid'] > 0) {
@@ -459,5 +459,159 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             // Record might be created but with empty title
             $this->assertIsArray($record);
         }
+    }
+
+    // ========================================================================
+    // search_replace error tests
+    // ========================================================================
+
+    /**
+     * Test search_replace with search string not found
+     */
+    public function testSearchReplaceNotFoundError(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'search_replace' => [
+                'bodytext' => [
+                    ['search' => 'nonexistent text that is not in the content', 'replace' => 'replacement'],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Should fail when search string not found');
+        $this->assertStringContainsString('not found', $result->content[0]->text);
+    }
+
+    /**
+     * Test search_replace with ambiguous search string (multiple matches)
+     */
+    public function testSearchReplaceAmbiguousError(): void
+    {
+        // Record 100 has bodytext "Welcome to our homepage"
+        // The word "o" appears multiple times in it
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'search_replace' => [
+                'bodytext' => [
+                    ['search' => 'o', 'replace' => 'X'],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Should fail when search string matches multiple times');
+        $this->assertStringContainsString('times', $result->content[0]->text);
+        $this->assertStringContainsString('replaceAll', $result->content[0]->text);
+    }
+
+    /**
+     * Test field appearing in both data and search_replace
+     */
+    public function testSearchReplaceFieldInBothDataAndSearchReplace(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => [
+                'bodytext' => 'Full replacement',
+            ],
+            'search_replace' => [
+                'bodytext' => [
+                    ['search' => 'Welcome', 'replace' => 'Hello'],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Should fail when field in both data and search_replace');
+        $this->assertStringContainsString('cannot appear in both', $result->content[0]->text);
+    }
+
+    /**
+     * Test search_replace on create action (not supported)
+     */
+    public function testSearchReplaceOnCreateAction(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => 1,
+            'data' => [
+                'CType' => 'textmedia',
+                'header' => 'Test',
+            ],
+            'search_replace' => [
+                'bodytext' => [
+                    ['search' => 'old', 'replace' => 'new'],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'search_replace should not work with create action');
+        $this->assertStringContainsString('only supported for the "update" action', $result->content[0]->text);
+    }
+
+    /**
+     * Test search_replace with empty search string
+     */
+    public function testSearchReplaceEmptySearch(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'search_replace' => [
+                'bodytext' => [
+                    ['search' => '', 'replace' => 'something'],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Should fail with empty search string');
+        $this->assertStringContainsString('empty search string', $result->content[0]->text);
+    }
+
+    /**
+     * Test search_replace on a non-string field type
+     */
+    public function testSearchReplaceOnNonStringField(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'search_replace' => [
+                'colPos' => [
+                    ['search' => '0', 'replace' => '1'],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Should fail on non-string field');
+        $this->assertStringContainsString('not supported for field', $result->content[0]->text);
+    }
+
+    /**
+     * Test search_replace on non-existent field
+     */
+    public function testSearchReplaceOnNonExistentField(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'search_replace' => [
+                'nonexistent_field' => [
+                    ['search' => 'old', 'replace' => 'new'],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Should fail on non-existent field');
+        $this->assertStringContainsString('does not exist', $result->content[0]->text);
     }
 }
