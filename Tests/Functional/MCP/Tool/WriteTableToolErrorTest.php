@@ -111,14 +111,14 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         $this->assertTrue($result->isError);
         $this->assertStringContainsString('Page ID (pid) is required for create action', $result->content[0]->text);
         
-        // Missing data and search_replace for update
+        // Missing data for update
         $result = $this->tool->execute([
             'action' => 'update',
             'table' => 'pages',
             'uid' => 1
         ]);
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Either data or search_replace is required for update action', $result->content[0]->text);
+        $this->assertStringContainsString('Data is required for update action', $result->content[0]->text);
     }
     
     /**
@@ -462,11 +462,12 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     }
 
     // ========================================================================
-    // search_replace error tests
+    // ========================================================================
+    // search-and-replace (embedded in data) error tests
     // ========================================================================
 
     /**
-     * Test search_replace with search string not found
+     * Test search-and-replace with search string not found
      */
     public function testSearchReplaceNotFoundError(): void
     {
@@ -474,7 +475,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => 100,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
                     ['search' => 'nonexistent text that is not in the content', 'replace' => 'replacement'],
                 ],
@@ -486,7 +487,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     }
 
     /**
-     * Test search_replace with ambiguous search string (multiple matches)
+     * Test search-and-replace with ambiguous search string (multiple matches)
      */
     public function testSearchReplaceAmbiguousError(): void
     {
@@ -496,7 +497,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => 100,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
                     ['search' => 'o', 'replace' => 'X'],
                 ],
@@ -509,30 +510,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     }
 
     /**
-     * Test field appearing in both data and search_replace
-     */
-    public function testSearchReplaceFieldInBothDataAndSearchReplace(): void
-    {
-        $result = $this->tool->execute([
-            'action' => 'update',
-            'table' => 'tt_content',
-            'uid' => 100,
-            'data' => [
-                'bodytext' => 'Full replacement',
-            ],
-            'search_replace' => [
-                'bodytext' => [
-                    ['search' => 'Welcome', 'replace' => 'Hello'],
-                ],
-            ],
-        ]);
-
-        $this->assertTrue($result->isError, 'Should fail when field in both data and search_replace');
-        $this->assertStringContainsString('cannot appear in both', $result->content[0]->text);
-    }
-
-    /**
-     * Test search_replace on create action (not supported)
+     * Test search-and-replace on create action (not supported)
      */
     public function testSearchReplaceOnCreateAction(): void
     {
@@ -543,20 +521,18 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             'data' => [
                 'CType' => 'textmedia',
                 'header' => 'Test',
-            ],
-            'search_replace' => [
                 'bodytext' => [
                     ['search' => 'old', 'replace' => 'new'],
                 ],
             ],
         ]);
 
-        $this->assertTrue($result->isError, 'search_replace should not work with create action');
+        $this->assertTrue($result->isError, 'search-and-replace should not work with create action');
         $this->assertStringContainsString('only supported for the "update" action', $result->content[0]->text);
     }
 
     /**
-     * Test search_replace with empty search string
+     * Test search-and-replace with empty search string
      */
     public function testSearchReplaceEmptySearch(): void
     {
@@ -564,7 +540,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => 100,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
                     ['search' => '', 'replace' => 'something'],
                 ],
@@ -576,7 +552,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     }
 
     /**
-     * Test search_replace on a non-string field type
+     * Test search-and-replace on a non-string field type
      */
     public function testSearchReplaceOnNonStringField(): void
     {
@@ -584,7 +560,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => 100,
-            'search_replace' => [
+            'data' => [
                 'colPos' => [
                     ['search' => '0', 'replace' => '1'],
                 ],
@@ -596,7 +572,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     }
 
     /**
-     * Test search_replace on non-existent field
+     * Test search-and-replace on non-existent field
      */
     public function testSearchReplaceOnNonExistentField(): void
     {
@@ -604,7 +580,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => 100,
-            'search_replace' => [
+            'data' => [
                 'nonexistent_field' => [
                     ['search' => 'old', 'replace' => 'new'],
                 ],

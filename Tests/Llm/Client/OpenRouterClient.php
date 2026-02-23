@@ -167,6 +167,21 @@ class OpenRouterClient implements LlmClientInterface
                     $e
                 );
                 continue;
+            } catch (\GuzzleHttp\Exception\ClientException $e) {
+                // Retry on 429 Too Many Requests (rate limiting)
+                if ($e->getResponse() && $e->getResponse()->getStatusCode() === 429) {
+                    $lastException = new \RuntimeException(
+                        'OpenRouter API rate limited: ' . $e->getMessage(),
+                        0,
+                        $e
+                    );
+                    continue;
+                }
+                throw new \RuntimeException(
+                    'OpenRouter API client error: ' . $e->getMessage(),
+                    0,
+                    $e
+                );
             } catch (\GuzzleHttp\Exception\ConnectException $e) {
                 $lastException = new \RuntimeException(
                     'OpenRouter API connection error: ' . $e->getMessage(),

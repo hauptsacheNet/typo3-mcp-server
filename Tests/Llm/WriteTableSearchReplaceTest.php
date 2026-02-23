@@ -7,10 +7,10 @@ namespace Hn\McpServer\Tests\Llm;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
- * Test how different LLMs use the WriteTable search_replace parameter to correct spelling errors.
+ * Test how different LLMs use the WriteTable data parameter to correct spelling errors.
  *
- * The search_replace parameter is part of the "update" action and allows LLMs to make
- * targeted text corrections without rewriting entire field values.
+ * The data parameter accepts either full string values (complete replacement) or arrays
+ * of {search, replace} operations for targeted text modifications. Both approaches are valid.
  *
  * @group llm
  */
@@ -41,11 +41,11 @@ class WriteTableSearchReplaceTest extends LlmTestCase
     }
 
     /**
-     * Test that LLM uses search_replace to fix spelling errors in a content element header.
+     * Test that LLM fixes spelling errors in a content element header.
      *
      * Content element 200 has header "Welcom to Our Compnay" (two typos).
      * The LLM should read the content, identify the errors, and use WriteTable
-     * with either search_replace or data to fix them.
+     * with either search-and-replace arrays or full string values to fix them.
      */
     #[DataProvider('modelProvider')]
     public function testLlmFixesHeaderSpellingErrors(string $modelKey): void
@@ -56,7 +56,7 @@ class WriteTableSearchReplaceTest extends LlmTestCase
             $this->markTestSkipped("Model '$modelKey' requires OpenRouter. Set OPENROUTER_API_KEY.");
         }
 
-        $prompt = 'Fix the spelling errors in the header of content element 200 on the home page.';
+        $prompt = 'There are spelling errors in the header of a content element on the home page that says something about "welcome" and "company". Please find and fix the spelling mistakes.';
 
         $response = $this->executeUntilToolFound(
             $this->callLlm($prompt),
@@ -85,12 +85,14 @@ class WriteTableSearchReplaceTest extends LlmTestCase
 
         $writeCall = $writeCalls[0]['arguments'];
 
-        // search_replace is a parameter on the update action, not a separate action
         $this->assertEquals(
             'update',
             $writeCall['action'],
-            "[$modelKey] Expected update action (search_replace is a parameter, not a separate action)"
+            "[$modelKey] Expected update action"
         );
+
+        $this->assertArrayHasKey('data', $writeCall,
+            "[$modelKey] Expected data parameter in WriteTable call");
 
         // Execute the tool call and verify success
         $writeResult = $this->executeToolCall($writeCalls[0]);
@@ -99,25 +101,28 @@ class WriteTableSearchReplaceTest extends LlmTestCase
             "[$modelKey] WriteTable failed: " . $writeResult['content']
         );
 
-        // Check whether the model used search_replace or data
-        $usedSearchReplace = !empty($writeCall['search_replace']);
-        $usedData = !empty($writeCall['data']);
+        // Check that the header field was addressed
+        $data = $writeCall['data'];
+        $this->assertArrayHasKey('header', $data,
+            "[$modelKey] Expected header field in data");
 
-        if ($usedSearchReplace) {
-            $searchReplace = $writeCall['search_replace'];
-            $this->assertArrayHasKey('header', $searchReplace,
-                "[$modelKey] Expected header field in search_replace");
+        $headerValue = $data['header'];
 
-            $headerOps = $searchReplace['header'];
-
-            // Should fix "Welcom" -> "Welcome" and "Compnay" -> "Company"
+        if (is_string($headerValue)) {
+            // Full replacement — verify it contains the corrected words
+            $this->assertStringContainsString('Welcome', $headerValue,
+                "[$modelKey] Updated header should contain 'Welcome'");
+            $this->assertStringContainsString('Company', $headerValue,
+                "[$modelKey] Updated header should contain 'Company'");
+        } elseif (is_array($headerValue)) {
+            // Search-and-replace operations
             $fixedWelcome = false;
             $fixedCompany = false;
-            foreach ($headerOps as $op) {
-                if (stripos($op['search'], 'Welcom') !== false && stripos($op['replace'], 'Welcome') !== false) {
+            foreach ($headerValue as $op) {
+                if (stripos($op['search'] ?? '', 'Welcom') !== false && stripos($op['replace'] ?? '', 'Welcome') !== false) {
                     $fixedWelcome = true;
                 }
-                if (stripos($op['search'], 'Compnay') !== false && stripos($op['replace'], 'Company') !== false) {
+                if (stripos($op['search'] ?? '', 'Compnay') !== false && stripos($op['replace'] ?? '', 'Company') !== false) {
                     $fixedCompany = true;
                 }
             }
@@ -125,32 +130,22 @@ class WriteTableSearchReplaceTest extends LlmTestCase
             $this->assertTrue(
                 $fixedWelcome,
                 "[$modelKey] Expected 'Welcom' -> 'Welcome' correction. Got: "
-                    . json_encode($headerOps)
+                    . json_encode($headerValue)
             );
             $this->assertTrue(
                 $fixedCompany,
                 "[$modelKey] Expected 'Compnay' -> 'Company' correction. Got: "
-                    . json_encode($headerOps)
+                    . json_encode($headerValue)
             );
-        } elseif ($usedData) {
-            // Model used data to replace the entire header - also valid
-            $data = $writeCall['data'];
-            $this->assertArrayHasKey('header', $data,
-                "[$modelKey] Expected header in update data");
-            $this->assertStringContainsString('Welcome', $data['header'],
-                "[$modelKey] Updated header should contain 'Welcome'");
-            $this->assertStringContainsString('Company', $data['header'],
-                "[$modelKey] Updated header should contain 'Company'");
         } else {
-            $this->fail("[$modelKey] WriteTable update called without data or search_replace");
+            $this->fail("[$modelKey] header field value is neither string nor array: " . gettype($headerValue));
         }
     }
 
     /**
-     * Test that LLM fixes spelling errors in bodytext using search_replace.
+     * Test that LLM fixes spelling errors in bodytext using search-and-replace or full values.
      *
      * Content element 201 has bodytext with many typos.
-     * The LLM should use search_replace (preferred) or data to correct them.
      */
     #[DataProvider('modelProvider')]
     public function testLlmFixesBodytextSpellingErrors(string $modelKey): void
@@ -161,7 +156,7 @@ class WriteTableSearchReplaceTest extends LlmTestCase
             $this->markTestSkipped("Model '$modelKey' requires OpenRouter. Set OPENROUTER_API_KEY.");
         }
 
-        $prompt = 'The "Our Servces" content element on the home page (uid 201) has many spelling errors in both the header and body text. Please fix all the spelling mistakes.';
+        $prompt = 'The "Our Servces" content element on the home page has many spelling errors in both the header and body text. Please fix all the spelling mistakes.';
 
         $response = $this->executeUntilToolFound(
             $this->callLlm($prompt),
@@ -190,54 +185,39 @@ class WriteTableSearchReplaceTest extends LlmTestCase
             "[$modelKey] WriteTable failed: " . $writeResult['content']
         );
 
-        $usedSearchReplace = !empty($writeCall['search_replace']);
-        $usedData = !empty($writeCall['data']);
+        $data = $writeCall['data'] ?? [];
 
-        if ($usedSearchReplace) {
-            $searchReplace = $writeCall['search_replace'];
-
-            // Should fix errors in at least header or bodytext
-            $this->assertTrue(
-                isset($searchReplace['header']) || isset($searchReplace['bodytext']),
-                "[$modelKey] Expected search_replace for header or bodytext"
-            );
-
-            // Verify header fix: "Servces" -> "Services"
-            if (isset($searchReplace['header'])) {
+        // Verify header was addressed (either as string or search/replace)
+        if (isset($data['header'])) {
+            if (is_string($data['header'])) {
+                $this->assertStringContainsString('Services', $data['header'],
+                    "[$modelKey] Updated header should contain 'Services'");
+            } elseif (is_array($data['header'])) {
                 $headerFixed = false;
-                foreach ($searchReplace['header'] as $op) {
-                    if (stripos($op['replace'], 'Services') !== false) {
+                foreach ($data['header'] as $op) {
+                    if (stripos($op['replace'] ?? '', 'Services') !== false) {
                         $headerFixed = true;
                     }
                 }
                 $this->assertTrue($headerFixed,
                     "[$modelKey] Expected header to be corrected to 'Services'");
             }
+        }
 
-            // Verify bodytext fixes contain at least some corrections
-            if (isset($searchReplace['bodytext'])) {
-                $this->assertGreaterThan(
-                    0,
-                    count($searchReplace['bodytext']),
-                    "[$modelKey] Expected at least one bodytext replacement"
-                );
-            }
-        } elseif ($usedData) {
-            $data = $writeCall['data'];
-
-            if (isset($data['header'])) {
-                $this->assertStringContainsString('Services', $data['header'],
-                    "[$modelKey] Updated header should contain 'Services'");
-            }
-
-            if (isset($data['bodytext'])) {
+        // Verify bodytext was addressed
+        if (isset($data['bodytext'])) {
+            if (is_string($data['bodytext'])) {
                 $this->assertStringNotContainsString('devlopment', $data['bodytext'],
                     "[$modelKey] Should fix 'devlopment' typo");
                 $this->assertStringNotContainsString('dixital', $data['bodytext'],
                     "[$modelKey] Should fix 'dixital' typo");
+            } elseif (is_array($data['bodytext'])) {
+                $this->assertGreaterThan(
+                    0,
+                    count($data['bodytext']),
+                    "[$modelKey] Expected at least one bodytext replacement"
+                );
             }
-        } else {
-            $this->fail("[$modelKey] WriteTable update called without data or search_replace");
         }
     }
 

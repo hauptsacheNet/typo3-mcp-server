@@ -1333,7 +1333,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => $contentUid,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
                     ['search' => 'original content', 'replace' => 'updated content'],
                 ],
@@ -1341,9 +1341,9 @@ class WriteTableToolTest extends AbstractFunctionalTest
         ]);
 
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
-        $data = $this->extractJsonFromResult($result);
-        $this->assertEquals('update', $data['action']);
-        $this->assertEquals($contentUid, $data['uid']);
+        $resultData = $this->extractJsonFromResult($result);
+        $this->assertEquals('update', $resultData['action']);
+        $this->assertEquals($contentUid, $resultData['uid']);
 
         // Verify the workspace record has the correct content
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
@@ -1379,7 +1379,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => $contentUid,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
                     ['search' => 'quick brown', 'replace' => 'slow red'],
                     ['search' => 'lazy dog', 'replace' => 'energetic cat'],
@@ -1424,8 +1424,6 @@ class WriteTableToolTest extends AbstractFunctionalTest
             'uid' => $contentUid,
             'data' => [
                 'header' => 'New Header',
-            ],
-            'search_replace' => [
                 'bodytext' => [
                     ['search' => 'partially edited', 'replace' => 'surgically updated'],
                 ],
@@ -1468,7 +1466,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => $contentUid,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
                     ['search' => ' Remove this sentence.', 'replace' => ''],
                 ],
@@ -1510,7 +1508,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => $contentUid,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
                     ['search' => 'foo', 'replace' => 'qux', 'replaceAll' => true],
                 ],
@@ -1559,12 +1557,12 @@ class WriteTableToolTest extends AbstractFunctionalTest
         ]);
         $this->assertFalse($result1->isError, json_encode($result1->jsonSerialize()));
 
-        // Second update uses search_replace — should operate on the workspace version
+        // Second update uses search-and-replace — should operate on the workspace version
         $result2 = $this->tool->execute([
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => $contentUid,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
                     ['search' => 'Workspace content', 'replace' => 'Modified workspace content'],
                 ],
@@ -1590,13 +1588,13 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
-     * Test search_replace with only search_replace (no data parameter)
+     * Test search-and-replace as the only field operation (no full-value fields)
      */
     public function testSearchReplaceWithoutData(): void
     {
         $contentUid = $this->data->content()
             ->withHeader('SR No Data')
-            ->withBodytext('Content to modify without data param.')
+            ->withBodytext('Content to modify without full replacement.')
             ->onPage($this->getRootPageUid())
             ->inColumn(0)
             ->create();
@@ -1605,17 +1603,17 @@ class WriteTableToolTest extends AbstractFunctionalTest
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => $contentUid,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
-                    ['search' => 'without data param', 'replace' => 'using only search_replace'],
+                    ['search' => 'without full replacement', 'replace' => 'using only search-and-replace'],
                 ],
             ],
         ]);
 
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
-        $data = $this->extractJsonFromResult($result);
-        $this->assertEquals('update', $data['action']);
-        $this->assertEquals($contentUid, $data['uid']);
+        $resultData = $this->extractJsonFromResult($result);
+        $this->assertEquals('update', $resultData['action']);
+        $this->assertEquals($contentUid, $resultData['uid']);
 
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('tt_content');
@@ -1631,7 +1629,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
             ->fetchAssociative();
 
         $this->assertIsArray($wsRecord, 'Workspace version should exist');
-        $this->assertEquals('Content to modify using only search_replace.', $wsRecord['bodytext']);
+        $this->assertEquals('Content to modify using only search-and-replace.', $wsRecord['bodytext']);
     }
 
     /**
@@ -1650,7 +1648,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => $contentUid,
-            'search_replace' => [
+            'data' => [
                 'bodytext' => [
                     ['search' => '<strong>bold text</strong>', 'replace' => '<em>italic text</em>'],
                 ],

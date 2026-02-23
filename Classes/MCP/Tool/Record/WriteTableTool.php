@@ -41,7 +41,6 @@ class WriteTableTool extends AbstractRecordTool
         
         return [
             'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live. Language fields (sys_language_uid) can be provided as ISO codes (e.g., "de", "fr") instead of numeric IDs. ' .
-                'For updating large text fields, use the search_replace parameter instead of sending the entire field value in data. ' .
                 'Before creating or updating content, always use GetPage to understand the page structure, existing content, and writing style. ' .
                 'Check existing content elements with ReadTable to ensure new content fits the page\'s tone and doesn\'t duplicate existing elements. ' .
                 'For content creation, verify the appropriate colPos by examining existing content layout. ' .
@@ -70,38 +69,19 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'data' => [
                         'type' => 'object',
-                        'description' => 'Record data with field names as keys and their values - uses the same field syntax as ReadTable output (required for "create", "update", and "translate" actions). Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables.',
+                        'description' => 'Record data with field names as keys and their values (required for "create", "update", and "translate" actions). ' .
+                            'Uses the same field syntax as ReadTable output. Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' .
+                            'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
+                            'For text fields in update actions, instead of providing the full text, you can provide an array of search-and-replace operations: ' .
+                            '[{"search": "old text", "replace": "new text"}]. Each operation can optionally include "replaceAll": true. ' .
+                            'Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true.',
                         'additionalProperties' => true,
                         'examples' => [
                             ['title' => 'News Title', 'bodytext' => 'News <b>content</b>', 'datetime' => '2024-01-01 10:00:00'],
                             ['header' => 'Content Element Header', 'bodytext' => 'Content <b>text</b>', 'CType' => 'text'],
-                            ['sys_language_uid' => 'de', 'title' => 'German translation']
+                            ['sys_language_uid' => 'de', 'title' => 'German translation'],
+                            ['header' => [['search' => 'Welcom', 'replace' => 'Welcome'], ['search' => 'Compnay', 'replace' => 'Company']]],
                         ]
-                    ],
-                    'search_replace' => [
-                        'type' => 'object',
-                        'description' => 'Targeted modifications using search-and-replace (only for "update" action). Keys are field names, values are lists of operation objects with keys: search, replace, and optionally replaceAll. Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true. Use this instead of sending the entire field value in data for large text fields. A field must not appear in both data and search_replace.',
-                        'additionalProperties' => [
-                            'type' => 'array',
-                            'items' => [
-                                'type' => 'object',
-                                'properties' => [
-                                    'search' => [
-                                        'type' => 'string',
-                                        'description' => 'Text to find (must match exactly once unless replaceAll is true)',
-                                    ],
-                                    'replace' => [
-                                        'type' => 'string',
-                                        'description' => 'Replacement text (use empty string to delete matched text)',
-                                    ],
-                                    'replaceAll' => [
-                                        'type' => 'boolean',
-                                        'description' => 'Replace all occurrences instead of requiring a unique match. Default: false',
-                                    ],
-                                ],
-                                'required' => ['search', 'replace'],
-                            ],
-                        ],
                     ],
                     'position' => [
                         'type' => 'string',
@@ -130,18 +110,17 @@ class WriteTableTool extends AbstractRecordTool
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
         $data = $params['data'] ?? [];
-        $searchReplace = $params['search_replace'] ?? [];
         $position = $params['position'] ?? 'bottom';
 
         // Validate parameters
         if (empty($action)) {
             throw new ValidationException(['Action is required (create, update, translate, or delete)']);
         }
-        
+
         if (empty($table)) {
             throw new ValidationException(['Table name is required']);
         }
-        
+
         // Validate data parameter type
         if (in_array($action, ['create', 'update', 'translate'], true) && isset($params['data'])) {
             if (!is_array($params['data'])) {
@@ -153,42 +132,10 @@ class WriteTableTool extends AbstractRecordTool
                 ]);
             }
         }
-        
-        // Validate search_replace parameter
-        if (!empty($searchReplace)) {
-            if (!is_array($searchReplace)) {
-                throw new ValidationException(['Invalid search_replace parameter: Expected an object with field names as keys']);
-            }
-            if ($action !== 'update') {
-                throw new ValidationException(['search_replace is only supported for the "update" action']);
-            }
-            // Check no field appears in both data and search_replace
-            $overlapping = array_intersect_key($data, $searchReplace);
-            if (!empty($overlapping)) {
-                $fields = implode(', ', array_keys($overlapping));
-                throw new ValidationException(["Field(s) {$fields} cannot appear in both data and search_replace"]);
-            }
-            // Validate structure of each search_replace entry
-            foreach ($searchReplace as $fieldName => $operations) {
-                if (!is_array($operations)) {
-                    throw new ValidationException(["search_replace field '{$fieldName}' must be an array of operations"]);
-                }
-                foreach ($operations as $index => $operation) {
-                    if (!is_array($operation)) {
-                        throw new ValidationException(["search_replace field '{$fieldName}' operation at index {$index} must be an object"]);
-                    }
-                    if (!isset($operation['search']) || !is_string($operation['search'])) {
-                        throw new ValidationException(["search_replace field '{$fieldName}' operation at index {$index} must have a 'search' string"]);
-                    }
-                    if (!array_key_exists('replace', $operation) || !is_string($operation['replace'])) {
-                        throw new ValidationException(["search_replace field '{$fieldName}' operation at index {$index} must have a 'replace' string"]);
-                    }
-                    if ($operation['search'] === '') {
-                        throw new ValidationException(["search_replace field '{$fieldName}' operation at index {$index} has an empty search string"]);
-                    }
-                }
-            }
-        }
+
+        // Extract search/replace operations from data (arrays of {search, replace} objects
+        // on non-inline fields are treated as search-and-replace operations)
+        $searchReplace = $this->extractSearchReplaceFromData($table, $data, $action);
 
         /**
          * IMPORTANT FEATURE: ISO Code Support for sys_language_uid
@@ -233,7 +180,7 @@ class WriteTableTool extends AbstractRecordTool
                 }
 
                 if (empty($data) && empty($searchReplace)) {
-                    throw new ValidationException(['Either data or search_replace is required for update action']);
+                    throw new ValidationException(['Data is required for update action']);
                 }
                 break;
                 
@@ -1159,6 +1106,91 @@ class WriteTableTool extends AbstractRecordTool
         return $this->tableAccessService->isFlexFormField($table, $fieldName);
     }
     
+    /**
+     * Extract search-and-replace operations from the data array.
+     *
+     * When a non-inline field value is an array of objects with 'search' and 'replace' keys,
+     * it's treated as search-and-replace operations instead of a direct value assignment.
+     * These are extracted from the data array and returned separately.
+     *
+     * @param string $table Table name
+     * @param array &$data Data array (modified in place to remove search/replace entries)
+     * @param string $action Current action (search/replace only valid for 'update')
+     * @return array Map of field name => array of search/replace operations
+     * @throws ValidationException If search/replace used in non-update action or operations are invalid
+     */
+    protected function extractSearchReplaceFromData(string $table, array &$data, string $action): array
+    {
+        $searchReplace = [];
+
+        foreach ($data as $fieldName => $value) {
+            if (!is_array($value)) {
+                continue;
+            }
+
+            // Check if this is an inline relation field — those genuinely use arrays
+            $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
+            if ($fieldConfig && ($fieldConfig['config']['type'] ?? '') === 'inline') {
+                continue;
+            }
+
+            // Check if this looks like search/replace operations:
+            // sequential array of objects with 'search' and 'replace' keys
+            if (!$this->isSearchReplaceArray($value)) {
+                continue;
+            }
+
+            // Validate action — search/replace only works for update
+            if ($action !== 'update') {
+                throw new ValidationException(["Search-and-replace operations in data are only supported for the \"update\" action (field '{$fieldName}')"]);
+            }
+
+            // Validate each operation
+            foreach ($value as $index => $operation) {
+                if ($operation['search'] === '') {
+                    throw new ValidationException(["Field '{$fieldName}' search-and-replace operation at index {$index} has an empty search string"]);
+                }
+            }
+
+            $searchReplace[$fieldName] = $value;
+            unset($data[$fieldName]);
+        }
+
+        return $searchReplace;
+    }
+
+    /**
+     * Check if a value looks like an array of search/replace operations.
+     *
+     * Returns true if the value is a non-empty sequential array where every item
+     * is an associative array with at least 'search' (string) and 'replace' (string) keys.
+     */
+    protected function isSearchReplaceArray(array $value): bool
+    {
+        if (empty($value)) {
+            return false;
+        }
+
+        // Must be a sequential (non-associative) array
+        if (array_keys($value) !== range(0, count($value) - 1)) {
+            return false;
+        }
+
+        foreach ($value as $item) {
+            if (!is_array($item)) {
+                return false;
+            }
+            if (!isset($item['search']) || !is_string($item['search'])) {
+                return false;
+            }
+            if (!array_key_exists('replace', $item) || !is_string($item['replace'])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /**
      * Resolve search_replace operations into concrete field values.
      *
