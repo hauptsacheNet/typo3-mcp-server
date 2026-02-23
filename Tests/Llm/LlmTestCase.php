@@ -9,22 +9,38 @@ use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Tests\Llm\Client\AnthropicClient;
 use Hn\McpServer\Tests\Llm\Client\LlmClientInterface;
 use Hn\McpServer\Tests\Llm\Client\LlmResponse;
+use Hn\McpServer\Tests\Llm\Client\OpenRouterClient;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 
 /**
  * Base class for LLM-based tests
- * 
+ *
+ * Supports both Anthropic (direct) and OpenRouter (multi-provider) clients.
+ * Set OPENROUTER_API_KEY to use OpenRouter, or ANTHROPIC_API_KEY for direct Anthropic access.
+ * OpenRouter is preferred when both are set, since it supports testing with multiple models.
+ *
  * @group llm
  */
 abstract class LlmTestCase extends FunctionalTestCase
 {
+    /**
+     * Models available via OpenRouter for multi-model tests
+     */
+    protected const MODELS = [
+        'haiku' => 'anthropic/claude-3-5-haiku',
+        'gpt-5.2' => 'openai/gpt-5.2',
+        'gpt-oss' => 'openai/gpt-oss-120b',
+        'kimi-k2' => 'moonshotai/kimi-k2',
+        'mistral-medium' => 'mistralai/mistral-medium-3',
+    ];
+
     protected array $coreExtensionsToLoad = [
         'workspaces',
         'frontend',
     ];
-    
+
     protected array $testExtensionsToLoad = [
         'mcp_server',
     ];
@@ -34,27 +50,81 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected ?LlmResponse $lastResponse = null;
     protected array $toolCallHistory = [];
 
+    /** @var string The model to use for LLM calls, set via setModel() or data providers */
+    protected string $llmModel = '';
+
+    /** @var string The provider being used ('openrouter' or 'anthropic') */
+    protected string $llmProvider = '';
+
     protected function setUp(): void
     {
         parent::setUp();
-        
-        // Skip test if no API key is configured
-        $apiKey = getenv('ANTHROPIC_API_KEY');
-        if (empty($apiKey)) {
-            $this->markTestSkipped('ANTHROPIC_API_KEY environment variable not set');
-        }
-        
+
+        $this->initializeLlmClient();
+
         // Import backend user fixture
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/be_users.csv');
-        
+
         // Set up backend user for DataHandler and other tools
         $this->setUpBackendUser(1);
-        
+
         // Initialize language service
         $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('en');
-        
-        // Initialize LLM client
-        $this->llmClient = new AnthropicClient($apiKey);
+    }
+
+    /**
+     * Initialize the LLM client based on available API keys.
+     * Prefers OpenRouter when available since it supports multiple models.
+     */
+    protected function initializeLlmClient(): void
+    {
+        $openRouterKey = getenv('OPENROUTER_API_KEY');
+        $anthropicKey = getenv('ANTHROPIC_API_KEY');
+
+        if (!empty($openRouterKey)) {
+            $this->llmClient = new OpenRouterClient($openRouterKey);
+            $this->llmProvider = 'openrouter';
+            if (empty($this->llmModel)) {
+                $this->llmModel = self::MODELS['haiku'];
+            }
+            return;
+        }
+
+        if (!empty($anthropicKey)) {
+            $this->llmClient = new AnthropicClient($anthropicKey);
+            $this->llmProvider = 'anthropic';
+            if (empty($this->llmModel)) {
+                $this->llmModel = 'claude-3-5-haiku-latest';
+            }
+            return;
+        }
+
+        $this->markTestSkipped('No LLM API key configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY.');
+    }
+
+    /**
+     * Set the model to use for subsequent LLM calls.
+     * Use model keys from MODELS constant or full model IDs.
+     */
+    protected function setModel(string $model): void
+    {
+        // Allow using short keys like 'haiku', 'gpt-5.2', etc.
+        $this->llmModel = self::MODELS[$model] ?? $model;
+    }
+
+    /**
+     * Data provider for multi-model tests.
+     * Returns all configured models to test against.
+     */
+    public static function modelProvider(): array
+    {
+        return [
+            'Haiku' => ['haiku'],
+            'GPT-5.2' => ['gpt-5.2'],
+            'GPT-OSS' => ['gpt-oss'],
+            'Kimi K2' => ['kimi-k2'],
+            'Mistral Medium' => ['mistral-medium'],
+        ];
     }
 
     /**
@@ -85,7 +155,7 @@ abstract class LlmTestCase extends FunctionalTestCase
 
     /**
      * Call LLM with a prompt and available tools
-     * 
+     *
      * @param string $prompt
      * @param array $options Additional options for the LLM call
      * @return LlmResponse
@@ -94,16 +164,23 @@ abstract class LlmTestCase extends FunctionalTestCase
     {
         $this->lastPrompt = $prompt;
         $tools = $this->getMcpToolsAsLlmFunctions();
-        
+
+        $defaults = [
+            'temperature' => 0,
+            'max_tokens' => 4000,
+        ];
+
+        // Inject current model if not explicitly overridden
+        if (!empty($this->llmModel) && !isset($options['model'])) {
+            $defaults['model'] = $this->llmModel;
+        }
+
         $this->lastResponse = $this->llmClient->complete(
             $prompt,
             $tools,
-            array_merge([
-                'temperature' => 0, // Deterministic responses
-                'max_tokens' => 4000,
-            ], $options)
+            array_merge($defaults, $options)
         );
-        
+
         return $this->lastResponse;
     }
 
@@ -312,26 +389,33 @@ abstract class LlmTestCase extends FunctionalTestCase
      * @return LlmResponse
      */
     protected function continueWithToolResult(
-        LlmResponse $previousResponse, 
-        array $toolResults, 
+        LlmResponse $previousResponse,
+        array $toolResults,
         array $options = []
     ): LlmResponse {
         // Wrap single result in array if needed
         if (isset($toolResults['content'])) {
             $toolResults = [$toolResults];
         }
-        
+
+        $defaults = [
+            'temperature' => 0,
+            'max_tokens' => 4000,
+        ];
+
+        // Inject current model if not explicitly overridden
+        if (!empty($this->llmModel) && !isset($options['model'])) {
+            $defaults['model'] = $this->llmModel;
+        }
+
         $this->lastResponse = $this->llmClient->completeWithHistory(
             $this->lastPrompt,
             $previousResponse,
             $toolResults,
             $this->getMcpToolsAsLlmFunctions(),
-            array_merge([
-                'temperature' => 0,
-                'max_tokens' => 4000,
-            ], $options)
+            array_merge($defaults, $options)
         );
-        
+
         return $this->lastResponse;
     }
 

@@ -15,13 +15,20 @@ These tests help ensure that:
 
 ### Prerequisites
 
-1. Set the `ANTHROPIC_API_KEY` environment variable:
+1. Set an API key environment variable. **OpenRouter is recommended** as it allows testing
+   with multiple models (Anthropic, OpenAI, Mistral, Moonshot, etc.) through a single key:
+
    ```bash
-   export ANTHROPIC_API_KEY="your-api-key-here"
+   # Preferred: OpenRouter (supports all models)
+   export OPENROUTER_API_KEY="sk-or-v1-..."
+
+   # Alternative: Anthropic direct (Claude models only)
+   export ANTHROPIC_API_KEY="sk-ant-..."
    ```
-   or create a `.env.local`
+
+   Or create a `.env.local` file:
    ```bash
-   ANTHROPIC_API_KEY="your-api-key-here"
+   OPENROUTER_API_KEY="sk-or-v1-..."
    ```
 
 2. Run the LLM tests:
@@ -29,20 +36,42 @@ These tests help ensure that:
    composer test:llm
    ```
 
+3. Run a specific test with a filter:
+   ```bash
+   composer test:llm -- --filter testLlmFixesHeaderSpellingErrors
+   ```
+
+### Supported Models
+
+When using OpenRouter, the following models are available via `modelProvider()`:
+
+| Key              | OpenRouter Model ID              |
+|------------------|----------------------------------|
+| `haiku`          | `anthropic/claude-3-5-haiku`     |
+| `gpt-5.2`       | `openai/gpt-5.2`                |
+| `gpt-oss`        | `openai/gpt-oss-120b`           |
+| `kimi-k2`        | `moonshotai/kimi-k2`            |
+| `mistral-medium` | `mistralai/mistral-medium-3`     |
+
+Tests using `#[DataProvider('modelProvider')]` run once per model automatically.
+
 ### Cost Considerations
 
 These tests make actual API calls and will incur costs:
 - Each test typically makes 2-5 API calls (due to multi-step conversations)
+- Multi-model tests multiply the cost by the number of models
 - Using Claude 3.5 Haiku (default) is cost-effective
 - Tests are excluded from the default test suite to avoid unexpected charges
 - Consider using environment-specific keys to track costs
+- Use `--filter` to run specific tests when iterating
 
 ### Test Configuration
 
 The tests use:
 - **Temperature**: 0 (for deterministic responses)
-- **Model**: `claude-3-5-haiku-latest` (configurable)
+- **Default Model**: `anthropic/claude-3-5-haiku` via OpenRouter, or `claude-3-5-haiku-latest` via Anthropic
 - **Max Tokens**: 4000 per call
+- **Provider**: Auto-detected from environment variables (OpenRouter preferred)
 
 ## Writing New Tests
 
@@ -57,10 +86,12 @@ The tests use:
 ### Key Methods
 
 - `callLlm($prompt)` - Send initial prompt with all MCP tools available
+- `setModel($key)` - Set the model for subsequent calls (e.g., `'haiku'`, `'gpt-5.2'`)
 - `assertToolCalled($response, $toolName, $expectedParams)` - Verify tool usage
 - `executeToolCall($toolCall)` - Execute a tool and get results
 - `continueWithToolResult($previousResponse, $toolResult)` - Continue conversation
 - `assertFollowsPattern($response, $patterns)` - Assert flexible tool sequences
+- `modelProvider()` - Data provider for multi-model tests
 
 ### Example: Simple Page Creation
 
@@ -136,15 +167,36 @@ public function testLlmCreatesPage(): void
    - ❌ Continue if WriteTable fails
    - ✅ Assert tool execution succeeds
 
-## Switching Providers
+## Multi-Model Testing
 
-To use OpenRouter or another provider:
+Tests can run against multiple LLM providers by using the `#[DataProvider]` attribute:
 
+```php
+use PHPUnit\Framework\Attributes\DataProvider;
+
+#[DataProvider('modelProvider')]
+public function testSomethingWithAllModels(string $modelKey): void
+{
+    $this->setModel($modelKey);
+
+    if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku') {
+        $this->markTestSkipped("Model requires OpenRouter");
+    }
+
+    // Test logic here...
+}
+```
+
+The `LlmTestCase` automatically selects the right client:
+- `OPENROUTER_API_KEY` set: Uses `OpenRouterClient` (all models via OpenAI-compatible API)
+- `ANTHROPIC_API_KEY` set: Uses `AnthropicClient` (Claude models only, non-Claude tests skipped)
+
+### Adding New Providers
+
+To add a new provider:
 1. Create a new client implementing `LlmClientInterface`
-2. Update `LlmTestCase::setUp()` to use the new client
-3. Adjust environment variable checks as needed
-
-The client interface is designed to make provider switching straightforward.
+2. Add initialization logic in `LlmTestCase::initializeLlmClient()`
+3. Add new model keys to the `MODELS` constant
 
 ## Handling Test Failures
 
@@ -186,9 +238,8 @@ This mirrors real-world usage where LLMs explore, act, and verify.
 
 ## Future Enhancements
 
-- Support for multiple providers (OpenRouter, Google, etc.)
 - Test result caching to reduce costs during development
 - More complex multi-step workflow tests
-- Performance benchmarks for different models
-- Automatic retry on transient failures
+- Performance benchmarks and comparison reports across models
 - Cost tracking and reporting per test run
+- Additional providers (Google Gemini, etc.)
