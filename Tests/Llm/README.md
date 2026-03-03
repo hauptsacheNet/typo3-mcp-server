@@ -15,15 +15,11 @@ These tests help ensure that:
 
 ### Prerequisites
 
-1. Set an API key environment variable. **OpenRouter is recommended** as it allows testing
-   with multiple models (Anthropic, OpenAI, Mistral, Moonshot, etc.) through a single key:
+1. Set the OpenRouter API key, which allows testing with multiple models
+   (Anthropic, OpenAI, Mistral, Moonshot, etc.) through a single key:
 
    ```bash
-   # Preferred: OpenRouter (supports all models)
    export OPENROUTER_API_KEY="sk-or-v1-..."
-
-   # Alternative: Anthropic direct (Claude models only)
-   export ANTHROPIC_API_KEY="sk-ant-..."
    ```
 
    Or create a `.env.local` file:
@@ -69,9 +65,9 @@ These tests make actual API calls and will incur costs:
 
 The tests use:
 - **Temperature**: 0 (for deterministic responses)
-- **Default Model**: `anthropic/claude-3-5-haiku` via OpenRouter, or `claude-3-5-haiku-latest` via Anthropic
+- **Default Model**: `anthropic/claude-3-5-haiku` via OpenRouter
 - **Max Tokens**: 4000 per call
-- **Provider**: Auto-detected from environment variables (OpenRouter preferred)
+- **Provider**: OpenRouter
 
 ## Writing New Tests
 
@@ -187,9 +183,7 @@ public function testSomethingWithAllModels(string $modelKey): void
 }
 ```
 
-The `LlmTestCase` automatically selects the right client:
-- `OPENROUTER_API_KEY` set: Uses `OpenRouterClient` (all models via OpenAI-compatible API)
-- `ANTHROPIC_API_KEY` set: Uses `AnthropicClient` (Claude models only, non-Claude tests skipped)
+The `LlmTestCase` uses `OpenRouterClient` when `OPENROUTER_API_KEY` is set, supporting all models via the OpenAI-compatible API.
 
 ### Adding New Providers
 
@@ -224,7 +218,7 @@ The `LlmTestCase` base class handles:
 - Setting up backend user authentication
 - Initializing language service
 - Loading `.env.local` for API keys
-- Converting MCP tool schemas to OpenAI/Anthropic format
+- Converting MCP tool schemas to OpenAI-compatible function format
 
 ### Conversation Continuation
 

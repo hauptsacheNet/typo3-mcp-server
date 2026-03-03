@@ -6,7 +6,6 @@ namespace Hn\McpServer\Tests\Llm;
 
 use Hn\McpServer\MCP\Tool\ToolInterface;
 use Hn\McpServer\MCP\ToolRegistry;
-use Hn\McpServer\Tests\Llm\Client\AnthropicClient;
 use Hn\McpServer\Tests\Llm\Client\LlmClientInterface;
 use Hn\McpServer\Tests\Llm\Client\LlmResponse;
 use Hn\McpServer\Tests\Llm\Client\OpenRouterClient;
@@ -17,9 +16,8 @@ use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 /**
  * Base class for LLM-based tests
  *
- * Supports both Anthropic (direct) and OpenRouter (multi-provider) clients.
- * Set OPENROUTER_API_KEY to use OpenRouter, or ANTHROPIC_API_KEY for direct Anthropic access.
- * OpenRouter is preferred when both are set, since it supports testing with multiple models.
+ * Uses OpenRouter for multi-provider LLM testing.
+ * Set OPENROUTER_API_KEY to enable tests.
  *
  * @group llm
  */
@@ -53,7 +51,7 @@ abstract class LlmTestCase extends FunctionalTestCase
     /** @var string The model to use for LLM calls, set via setModel() or data providers */
     protected string $llmModel = '';
 
-    /** @var string The provider being used ('openrouter' or 'anthropic') */
+    /** @var string The provider being used */
     protected string $llmProvider = '';
 
     protected function setUp(): void
@@ -74,12 +72,10 @@ abstract class LlmTestCase extends FunctionalTestCase
 
     /**
      * Initialize the LLM client based on available API keys.
-     * Prefers OpenRouter when available since it supports multiple models.
      */
     protected function initializeLlmClient(): void
     {
         $openRouterKey = getenv('OPENROUTER_API_KEY');
-        $anthropicKey = getenv('ANTHROPIC_API_KEY');
 
         if (!empty($openRouterKey)) {
             $this->llmClient = new OpenRouterClient($openRouterKey);
@@ -90,16 +86,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             return;
         }
 
-        if (!empty($anthropicKey)) {
-            $this->llmClient = new AnthropicClient($anthropicKey);
-            $this->llmProvider = 'anthropic';
-            if (empty($this->llmModel)) {
-                $this->llmModel = 'claude-3-5-haiku-latest';
-            }
-            return;
-        }
-
-        $this->markTestSkipped('No LLM API key configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY.');
+        $this->markTestSkipped('No LLM API key configured. Set OPENROUTER_API_KEY.');
     }
 
     /**
@@ -128,7 +115,7 @@ abstract class LlmTestCase extends FunctionalTestCase
     }
 
     /**
-     * Convert MCP tool schemas to OpenAI/Anthropic function format
+     * Convert MCP tool schemas to OpenAI-compatible function format
      * 
      * @return array
      */

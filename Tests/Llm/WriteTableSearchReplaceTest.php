@@ -27,7 +27,6 @@ class WriteTableSearchReplaceTest extends LlmTestCase
 
     /**
      * Data provider that returns the models to test.
-     * When only ANTHROPIC_API_KEY is set, only Haiku (direct) is tested.
      */
     public static function modelProvider(): array
     {

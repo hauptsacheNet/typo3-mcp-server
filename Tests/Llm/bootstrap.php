@@ -16,7 +16,6 @@ require_once __DIR__ . '/../../vendor/autoload.php';
 // Load LLM test classes
 require_once __DIR__ . '/Client/LlmClientInterface.php';
 require_once __DIR__ . '/Client/LlmResponse.php';
-require_once __DIR__ . '/Client/AnthropicClient.php';
 require_once __DIR__ . '/Client/OpenRouterClient.php';
 require_once __DIR__ . '/LlmTestCase.php';
 

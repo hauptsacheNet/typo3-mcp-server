@@ -1212,11 +1212,16 @@ class WriteTableTool extends AbstractRecordTool
         // Collect all field names we need to fetch
         $fieldNames = array_keys($searchReplace);
 
-        // Validate all fields are string-type before fetching the record
+        // Validate all fields exist, are accessible, and are string-type before fetching the record.
+        // Field access MUST be checked before any DB read to prevent information disclosure
+        // via search/replace error messages ("not found" / "found N times").
         foreach ($fieldNames as $fieldName) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
             if (!$fieldConfig) {
                 throw new ValidationException(["search_replace field '{$fieldName}' does not exist in table '{$table}'"]);
+            }
+            if (!$this->tableAccessService->canAccessField($table, $fieldName)) {
+                throw new ValidationException(["Field '{$fieldName}' is not accessible"]);
             }
             $fieldType = $fieldConfig['config']['type'] ?? '';
             if (!in_array($fieldType, $stringFieldTypes, true)) {

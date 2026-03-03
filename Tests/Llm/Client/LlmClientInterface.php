@@ -6,7 +6,7 @@ namespace Hn\McpServer\Tests\Llm\Client;
 
 /**
  * Interface for LLM clients
- * Allows easy switching between providers (Anthropic, OpenRouter, etc.)
+ * Allows easy switching between providers
  */
 interface LlmClientInterface
 {
