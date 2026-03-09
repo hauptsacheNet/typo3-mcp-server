@@ -255,11 +255,25 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult($authModeError);
         }
 
+        // Check required fields are present BEFORE validating individual field values
+        $missingFieldsError = $this->validateRequiredFieldsPresent($table, $data);
+        if ($missingFieldsError !== null) {
+            return $this->createErrorResult('Validation error: ' . $missingFieldsError);
+        }
+
         // Validate the data
         $validationResult = $this->validateRecordData($table, $data, 'create');
         if ($validationResult !== true) {
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
+
+        // Validate foreign field values before creating record
+        // This ensures parent records exist and user has access
+        $this->validateForeignFieldValues($table, $data);
+        
+        // Save original data before modifications for foreign field handling
+        // extractInlineRelations and convertDataForStorage modify $data
+        $originalData = $data;
         
         // Extract inline relations before converting data
         $inlineRelations = $this->extractInlineRelations($table, $data);
@@ -322,6 +336,9 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Error creating record: No UID returned');
         }
         
+        // Update foreign field columns that were ignored by DataHandler
+        $this->updateForeignFieldColumns($table, $parentUid, $originalData);
+        
         // Get the live UID for inline relations if we're in a workspace
         $liveParentUid = $this->getLiveUid($table, $parentUid);
         
@@ -358,11 +375,10 @@ class WriteTableTool extends AbstractRecordTool
                         continue;
                     }
                     
-                    // Check if this is an embedded table
-                    $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-                    $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
-                    
-                    if ($isHiddenTable) {
+                    // Check if this is an embedded relation (child stores parent UID via foreign_field)
+                    $hasForeignField = !empty($foreignField);
+
+                    if ($hasForeignField) {
                         // Collect the UIDs of created child records
                         $childUids = [];
                         foreach ($childDataHandler->substNEWwithIDs as $newId => $realId) {
@@ -444,15 +460,23 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
         
+        // Validate foreign field values before updating record
+        // This ensures parent records exist and user has access
+        $this->validateForeignFieldValues($table, $data);
+        
+        // Save original data before modifications for foreign field handling
+        // extractInlineRelations and convertDataForStorage modify $data
+        $originalData = $data;
+        
         // Extract inline relations before converting data
         $inlineRelations = $this->extractInlineRelations($table, $data);
-        
+
         // Convert data for storage
         $data = $this->convertDataForStorage($table, $data);
         
         // Resolve the live UID to workspace UID
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
-        
+
         // First, update the parent record without inline relations
         $dataMap = [$table => [$workspaceUid => $data]];
         
@@ -466,6 +490,10 @@ class WriteTableTool extends AbstractRecordTool
         if (!empty($dataHandler->errorLog)) {
             return $this->createErrorResult('Error updating record: ' . implode(', ', $dataHandler->errorLog));
         }
+        
+        // Update foreign field columns that were ignored by DataHandler
+        // Use originalData because $data was modified by extractInlineRelations/convertDataForStorage
+        $this->updateForeignFieldColumns($table, $workspaceUid, $originalData);
         
         // Now process inline relations with the resolved parent UID
         if (!empty($inlineRelations)) {
@@ -498,11 +526,10 @@ class WriteTableTool extends AbstractRecordTool
                         continue;
                     }
                     
-                    // Check if this is an embedded table
-                    $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-                    $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
-                    
-                    if ($isHiddenTable) {
+                    // Check if this is an embedded relation (child stores parent UID via foreign_field)
+                    $hasForeignField = !empty($foreignField);
+
+                    if ($hasForeignField) {
                         // Collect the UIDs of created child records
                         $childUids = [];
                         foreach ($childDataHandler->substNEWwithIDs as $newId => $realId) {
@@ -859,11 +886,12 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
             
-            // Check if foreign table is hidden (embedded records)
-            $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-            $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+            // Use foreign_field presence as the indicator for embedded vs independent relations.
+            // Tables with foreign_field store the parent UID in the child record (embedded),
+            // tables without foreign_field use MM or CSV relations (independent).
+            $hasForeignField = !empty($config['foreign_field']);
             
-            if ($isHiddenTable) {
+            if ($hasForeignField) {
                 // Process embedded inline relations (e.g., tx_news_domain_model_link)
                 $this->processEmbeddedInlineRelations($dataMap, $foreignTable, $foreignField, $parentUid, $pid, $value, $config, $liveUid);
             } else {
@@ -1072,14 +1100,15 @@ class WriteTableTool extends AbstractRecordTool
             return 'Invalid inline relation configuration: missing foreign_table';
         }
         
-        // Check if foreign table is hidden (embedded records)
-        $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-        $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+        // Check if this is a foreign_field relation (embedded records where child stores parent UID)
+        // If foreign_field is set, expect record data arrays
+        // If not set, it's an independent relation expecting UIDs
+        $hasForeignField = !empty($fieldConfig['config']['foreign_field']);
         
         // Validate each item
         foreach ($value as $index => $item) {
-            if ($isHiddenTable) {
-                // For hidden tables, expect record data arrays
+            if ($hasForeignField) {
+                // For embedded relations, expect record data arrays
                 if (!is_array($item)) {
                     return 'Embedded inline relations must contain record data arrays';
                 }
@@ -1632,5 +1661,200 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         return implode(' | ', $errors);
+    }
+
+    /**
+     * Check that all required fields are present in data for create action
+     *
+     * @param string $table Table name
+     * @param array $data Record data
+     * @return string|null Error message if validation fails, null if valid
+     */
+    protected function validateRequiredFieldsPresent(string $table, array $data): ?string
+    {
+        // Get type from data if present
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
+        $type = $typeField && isset($data[$typeField]) ? (string)$data[$typeField] : '';
+
+        // Get required fields for this table/type
+        $requiredFields = $this->tableAccessService->getRequiredFields($table, $type);
+
+        // Check which required fields are missing
+        $missingFields = [];
+        foreach ($requiredFields as $fieldName => $fieldConfig) {
+            // Skip fields with defaults
+            if (array_key_exists('default', $fieldConfig['config'] ?? [])) {
+                continue;
+            }
+
+            // Skip control fields that are auto-set
+            if (in_array($fieldName, ['pid', 'uid', 'sorting', 'tstamp', 'crdate', 'sys_language_uid', 'l10n_parent'], true)) {
+                continue;
+            }
+
+            // Check if field is missing or empty
+            if (!isset($data[$fieldName]) || $data[$fieldName] === '' || $data[$fieldName] === []) {
+                $label = $this->tableAccessService::translateLabel($fieldConfig['label'] ?? $fieldName);
+                $missingFields[] = "{$fieldName} ({$label})";
+            }
+        }
+
+        if (!empty($missingFields)) {
+            return 'Missing required fields: ' . implode(', ', $missingFields);
+        }
+
+        return null;
+    }
+
+    /**
+     * Find all foreign_field columns for a table by scanning parent TCA
+     *
+     * This method discovers which columns in the given table are used as foreign_field
+     * by inline relations in other (parent) tables. This is needed because:
+     * 1. DataHandler ignores foreign_field columns during direct create/update
+     * 2. TCA field names may differ from DB column names (e.g., 'contentelement' vs 'content_element')
+     * 3. We need the actual DB column name from the parent's foreign_field config
+     *
+     * @param string $table The child table to find foreign_fields for
+     * @return array<string, array{parentTable: string, parentField: string}>
+     *         Map of foreign_field column name => parent info
+     */
+    protected function findForeignFieldsForTable(string $table): array
+    {
+        static $cache = [];
+
+        if (isset($cache[$table])) {
+            return $cache[$table];
+        }
+
+        $foreignFields = [];
+
+        foreach ($GLOBALS['TCA'] as $parentTable => $tableConfig) {
+            foreach ($tableConfig['columns'] ?? [] as $fieldName => $fieldConfig) {
+                $config = $fieldConfig['config'] ?? [];
+
+                if (($config['type'] ?? '') === 'inline'
+                    && ($config['foreign_table'] ?? '') === $table
+                    && !empty($config['foreign_field'])) {
+
+                    $foreignField = $config['foreign_field'];
+                    $foreignFields[$foreignField] = [
+                        'parentTable' => $parentTable,
+                        'parentField' => $fieldName,
+                    ];
+                }
+            }
+        }
+
+        $cache[$table] = $foreignFields;
+        return $foreignFields;
+    }
+
+    /**
+     * Validate foreign field values in record data
+     *
+     * Ensures:
+     * 1. Parent record exists
+     * 2. Current user has read access to parent record
+     * 3. Workspace consistency (parent in same or live workspace)
+     *
+     * @param string $table Table name
+     * @param array $data Record data containing potential foreign field values
+     * @throws ValidationException if validation fails
+     */
+    protected function validateForeignFieldValues(string $table, array $data): void
+    {
+        $foreignFieldMappings = $this->findForeignFieldsForTable($table);
+
+        foreach ($data as $fieldName => $value) {
+            if (!isset($foreignFieldMappings[$fieldName])) {
+                continue;
+            }
+
+            if (!is_numeric($value) || (int)$value <= 0) {
+                continue; // Null/0 values are allowed (no relation)
+            }
+
+            $parentUid = (int)$value;
+            $parentInfo = $foreignFieldMappings[$fieldName];
+            $parentTable = $parentInfo['parentTable'];
+
+            // 1. Check parent record exists and user has access
+            // BackendUtility::getRecord respects BE_USER permissions
+            $parentRecord = BackendUtility::getRecord($parentTable, $parentUid);
+
+            if (!$parentRecord) {
+                throw new ValidationException([
+                    "Field '{$fieldName}': Cannot link to {$parentTable}:{$parentUid} - " .
+                    "record not found or access denied"
+                ]);
+            }
+
+            // 2. Check table access (read permission on parent table)
+            try {
+                $this->ensureTableAccess($parentTable, 'read');
+            } catch (\Exception $e) {
+                throw new ValidationException([
+                    "Field '{$fieldName}': No read access to table '{$parentTable}'"
+                ]);
+            }
+
+            // 3. Workspace consistency check
+            $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+            if ($currentWorkspace > 0) {
+                $parentWorkspace = $parentRecord['t3ver_wsid'] ?? 0;
+                // Parent must be in live (0) or same workspace
+                if ($parentWorkspace !== 0 && $parentWorkspace !== $currentWorkspace) {
+                    throw new ValidationException([
+                        "Field '{$fieldName}': Parent record {$parentTable}:{$parentUid} " .
+                        "is in a different workspace"
+                    ]);
+                }
+            }
+        }
+    }
+
+    /**
+     * Update foreign field columns directly in database
+     *
+     * Called after DataHandler has created/updated the record.
+     * At this point, validation has already passed via validateForeignFieldValues().
+     *
+     * This is needed because DataHandler ignores foreign_field columns when
+     * creating/updating records directly (not via inline parent).
+     *
+     * @param string $table Table name
+     * @param int $uid Record UID (workspace UID for updates)
+     * @param array $originalData Original data containing foreign field values
+     */
+    protected function updateForeignFieldColumns(string $table, int $uid, array $originalData): void
+    {
+        $foreignFieldMappings = $this->findForeignFieldsForTable($table);
+
+        if (empty($foreignFieldMappings)) {
+            return;
+        }
+
+        $updates = [];
+
+        foreach ($originalData as $fieldName => $value) {
+            if (!isset($foreignFieldMappings[$fieldName])) {
+                continue;
+            }
+
+            // Accept numeric values (including 0 to clear relation)
+            if (is_numeric($value)) {
+                $updates[$fieldName] = (int)$value;
+            }
+        }
+
+        if (empty($updates)) {
+            return;
+        }
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable($table);
+
+        $connection->update($table, $updates, ['uid' => $uid]);
     }
 }
