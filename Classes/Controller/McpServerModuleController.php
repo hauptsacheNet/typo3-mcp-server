@@ -7,6 +7,7 @@ namespace Hn\McpServer\Controller;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Backend\Template\ModuleTemplateFactory;
+use TYPO3\CMS\Backend\Routing\UriBuilder;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -27,7 +28,8 @@ class McpServerModuleController
         private readonly ToolRegistry $toolRegistry,
         private readonly PageRenderer $pageRenderer,
         private readonly OAuthService $oauthService,
-        private readonly WorkspaceContextService $workspaceContextService
+        private readonly WorkspaceContextService $workspaceContextService,
+        private readonly UriBuilder $uriBuilder
     ) {}
 
     public function mainAction(ServerRequestInterface $request): ResponseInterface
@@ -74,6 +76,12 @@ class McpServerModuleController
         // Detect if the server is running on localhost
         $isLocalhost = $this->isLocalhostUrl($baseUrl);
 
+        // Generate URL to create a new workspace record (pid 0 = root level)
+        $createWorkspaceUrl = (string)$this->uriBuilder->buildUriFromRoute('record_edit', [
+            'edit' => ['sys_workspace' => [0 => 'new']],
+            'returnUrl' => (string)$request->getUri(),
+        ]);
+
         // Prepare template variables
         $templateVariables = [
             'tokens' => $tokens,
@@ -88,6 +96,7 @@ class McpServerModuleController
             'siteName' => $this->getSiteName(),
             'hasWorkspace' => $hasWorkspace,
             'isLocalhost' => $isLocalhost,
+            'createWorkspaceUrl' => $createWorkspaceUrl,
         ];
         
         // Include JavaScript for copy functionality
