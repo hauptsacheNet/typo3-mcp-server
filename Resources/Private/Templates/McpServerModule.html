@@ -36,6 +36,22 @@
                             </p>
                         </div>
                     </f:if>
+                    <!-- Authorization Header Warning (shown/hidden by JS after endpoint check) -->
+                    <div class="alert alert-warning mb-3" id="auth-header-warning" style="display: none;">
+                        <h6><strong>Authorization header issue detected</strong></h6>
+                        <p class="mb-2">The MCP endpoint cannot receive Authorization headers. This prevents OAuth authentication from working.</p>
+                        <p class="mb-2"><strong>Common causes and solutions:</strong></p>
+                        <ul class="mb-0">
+                            <li>
+                                <strong>Apache:</strong> Add to your <code>.htaccess</code>:
+                                <pre class="mb-1 mt-1" style="background: #f5f5f5; padding: 8px; border-radius: 4px;"><code>RewriteEngine On
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
+                            </li>
+                            <li><strong>HTTP Basic Auth:</strong> May conflict with OAuth headers. Consider IP-based restrictions instead.</li>
+                            <li><strong>Proxy/CDN:</strong> Some proxies strip Authorization headers. Check your infrastructure settings.</li>
+                        </ul>
+                    </div>
 
                     <!-- Main Navigation Tabs -->
                     <ul class="nav nav-tabs" id="mcpSetupTabs" role="tablist">
@@ -100,27 +116,6 @@
                                         </span>
                                     </small>
                                 </div>
-                            </div>
-
-                            <!-- Authorization Header Warning -->
-                            <div class="alert alert-warning mt-3 mb-3" id="auth-header-warning" style="display: none;">
-                                <h6><strong>⚠️ Authorization Header Issue Detected</strong></h6>
-                                <p class="mb-2">The MCP endpoint cannot receive Authorization headers. This is a common issue that prevents OAuth authentication from working properly.</p>
-                                <p class="mb-2"><strong>Common causes and solutions:</strong></p>
-                                <ul class="mb-0">
-                                    <li>
-                                        <strong>Apache configuration:</strong> Add this to your <code>.htaccess</code> file:
-                                        <pre class="mb-1 mt-1" style="background: #f5f5f5; padding: 8px; border-radius: 4px;"><code>RewriteEngine On
-RewriteCond %{HTTP:Authorization} ^(.*)
-RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
-                                    </li>
-                                    <li>
-                                        <strong>Site-level authentication:</strong> If your site uses HTTP Basic Auth, it may conflict with OAuth headers. Consider using IP-based restrictions instead.
-                                    </li>
-                                    <li>
-                                        <strong>Proxy/CDN configuration:</strong> Some proxies or CDNs strip Authorization headers. Check your infrastructure settings.
-                                    </li>
-                                </ul>
                             </div>
 
                             <!-- Nested tabs for different clients -->
