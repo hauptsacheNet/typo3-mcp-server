@@ -325,19 +325,38 @@ class McpServerModuleController
     }
 
     /**
-     * Check if the base URL points to localhost
+     * Check if the base URL resolves to a private/non-routable network address.
+     * Catches localhost, DDEV domains (*.ddev.site), Docker networks, etc.
      */
     private function isLocalhostUrl(string $baseUrl): bool
     {
         $host = parse_url($baseUrl, PHP_URL_HOST);
-        if ($host === null) {
+        if ($host === null || $host === '') {
             return false;
         }
         $host = strtolower($host);
-        return $host === 'localhost'
-            || $host === '127.0.0.1'
-            || $host === '::1'
-            || str_ends_with($host, '.localhost');
+
+        // Quick check for obvious literals
+        if ($host === 'localhost' || $host === '127.0.0.1' || $host === '::1' || str_ends_with($host, '.localhost')) {
+            return true;
+        }
+
+        // Resolve the hostname and check if all IPs are private/reserved
+        $ips = gethostbynamel($host);
+        if ($ips === false || $ips === []) {
+            // Cannot resolve → likely unreachable from outside too
+            return true;
+        }
+
+        foreach ($ips as $ip) {
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+                // At least one public IP → not localhost-only
+                return false;
+            }
+        }
+
+        // All resolved IPs are private/reserved (127.x, 10.x, 172.16-31.x, 192.168.x, etc.)
+        return true;
     }
 
     /**
