@@ -15,6 +15,7 @@ use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\HtmlResponse;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\OAuthService;
+use Hn\McpServer\Service\WorkspaceContextService;
 
 /**
  * Backend module controller for MCP Server configuration
@@ -25,7 +26,8 @@ class McpServerModuleController
         private readonly ModuleTemplateFactory $moduleTemplateFactory,
         private readonly ToolRegistry $toolRegistry,
         private readonly PageRenderer $pageRenderer,
-        private readonly OAuthService $oauthService
+        private readonly OAuthService $oauthService,
+        private readonly WorkspaceContextService $workspaceContextService
     ) {}
 
     public function mainAction(ServerRequestInterface $request): ResponseInterface
@@ -66,6 +68,12 @@ class McpServerModuleController
         $n8nTokenInfo = $this->getClientTokenInfo($tokens, 'n8n token');
         $manusTokenInfo = $this->getClientTokenInfo($tokens, 'manus token');
 
+        // Check if any workspace exists
+        $hasWorkspace = $this->hasAnyWorkspace();
+
+        // Detect if the server is running on localhost
+        $isLocalhost = $this->isLocalhostUrl($baseUrl);
+
         // Prepare template variables
         $templateVariables = [
             'tokens' => $tokens,
@@ -78,6 +86,8 @@ class McpServerModuleController
             'n8nTokenInfo' => $n8nTokenInfo,
             'manusTokenInfo' => $manusTokenInfo,
             'siteName' => $this->getSiteName(),
+            'hasWorkspace' => $hasWorkspace,
+            'isLocalhost' => $isLocalhost,
         ];
         
         // Include JavaScript for copy functionality
@@ -290,6 +300,44 @@ class McpServerModuleController
             'expires' => $token['expires'] ?? null,
             'clientName' => $clientName,
         ];
+    }
+
+    /**
+     * Check if any TYPO3 workspace exists
+     */
+    private function hasAnyWorkspace(): bool
+    {
+        try {
+            $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+            $queryBuilder = $connectionPool->getQueryBuilderForTable('sys_workspace');
+            $count = $queryBuilder
+                ->count('uid')
+                ->from('sys_workspace')
+                ->where(
+                    $queryBuilder->expr()->eq('deleted', $queryBuilder->createNamedParameter(0, \TYPO3\CMS\Core\Database\Connection::PARAM_INT))
+                )
+                ->executeQuery()
+                ->fetchOne();
+            return (int)$count > 0;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Check if the base URL points to localhost
+     */
+    private function isLocalhostUrl(string $baseUrl): bool
+    {
+        $host = parse_url($baseUrl, PHP_URL_HOST);
+        if ($host === null) {
+            return false;
+        }
+        $host = strtolower($host);
+        return $host === 'localhost'
+            || $host === '127.0.0.1'
+            || $host === '::1'
+            || str_ends_with($host, '.localhost');
     }
 
     /**

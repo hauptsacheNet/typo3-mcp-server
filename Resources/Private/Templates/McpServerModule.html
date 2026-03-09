@@ -14,6 +14,18 @@
                     </p>
                 </div>
                 <div class="card-body pb-0">
+                    <!-- Workspace Hint -->
+                    <f:if condition="!{hasWorkspace}">
+                        <div class="alert alert-info mb-3">
+                            <h6><strong>Workspace recommended</strong></h6>
+                            <p class="mb-0">
+                                The MCP server uses TYPO3 Workspaces to stage all changes before publishing. A workspace will be created automatically on first use, but it is recommended to
+                                <a href="/typo3/module/web/WorkspacesWorkspaces" target="_blank">create one manually</a>
+                                so you can configure permissions and review workflow to your needs.
+                            </p>
+                        </div>
+                    </f:if>
+
                     <!-- Main Navigation Tabs -->
                     <ul class="nav nav-tabs" id="mcpSetupTabs" role="tablist">
                         <li class="nav-item" role="presentation">
@@ -41,6 +53,19 @@
                             <p class="text-muted mb-3">
                                 Connect MCP clients to this TYPO3 instance over the internet using OAuth authentication. This is the recommended method for most use cases.
                             </p>
+
+                            <!-- Localhost Warning -->
+                            <f:if condition="{isLocalhost}">
+                                <div class="alert alert-warning mb-3">
+                                    <h6><strong>Localhost detected</strong></h6>
+                                    <p class="mb-2">
+                                        This TYPO3 instance is running on <code>{baseUrl}</code>. Most remote MCP clients (Claude Desktop, n8n, manus) will not be able to connect because they cannot reach localhost on your machine.
+                                    </p>
+                                    <p class="mb-0">
+                                        <strong>What works on localhost:</strong> The <strong>MCP Inspector</strong> (runs locally in your browser) and the <strong>Local Setup (TYPO3 CLI)</strong> tab. The <strong>Local Setup (mcp-remote)</strong> may also work since mcp-remote runs on your machine.
+                                    </p>
+                                </div>
+                            </f:if>
 
                             <!-- Shared MCP Endpoint URL -->
                             <div class="mb-3">
@@ -134,6 +159,11 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 <!-- Claude Desktop Instructions -->
                                 <div class="tab-pane fade show active" id="claude-desktop" role="tabpanel" aria-labelledby="claude-desktop-pill">
                                     <h5>🚀 Claude Desktop Integration</h5>
+                                    <f:if condition="{isLocalhost}">
+                                        <div class="alert alert-danger mb-3">
+                                            <strong>Not available on localhost.</strong> Claude Desktop connects from Anthropic's servers and cannot reach <code>{baseUrl}</code>. Deploy TYPO3 to a publicly accessible URL or use the <strong>Local Setup (TYPO3 CLI)</strong> tab instead.
+                                        </div>
+                                    </f:if>
                                     <p>To connect Claude Desktop to this TYPO3 instance:</p>
                                     <ol>
                                         <li>In Claude Desktop, go to <strong>Settings → Integrations</strong></li>
@@ -147,6 +177,11 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 <!-- n8n Integration -->
                                 <div class="tab-pane fade" id="n8n" role="tabpanel" aria-labelledby="n8n-pill">
                                     <h5>🔄 n8n Integration</h5>
+                                    <f:if condition="{isLocalhost}">
+                                        <div class="alert alert-warning mb-3">
+                                            <strong>Localhost limitation.</strong> If your n8n instance runs on a remote server (e.g. n8n cloud), it will not be able to reach <code>{baseUrl}</code>. This only works if n8n runs on the same machine.
+                                        </div>
+                                    </f:if>
 
                                     <f:if condition="{n8nTokenInfo.hasToken}">
                                         <f:then>
@@ -197,6 +232,11 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 <!-- manus Integration -->
                                 <div class="tab-pane fade" id="manus" role="tabpanel" aria-labelledby="manus-pill">
                                     <h5>🤖 manus Integration</h5>
+                                    <f:if condition="{isLocalhost}">
+                                        <div class="alert alert-danger mb-3">
+                                            <strong>Not available on localhost.</strong> Manus connects from remote servers and cannot reach <code>{baseUrl}</code>. Deploy TYPO3 to a publicly accessible URL first.
+                                        </div>
+                                    </f:if>
 
                                     <f:if condition="{manusTokenInfo.hasToken}">
                                         <f:then>
