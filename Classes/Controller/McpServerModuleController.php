@@ -336,6 +336,8 @@ class McpServerModuleController
     /**
      * Check if the base URL resolves to a private/non-routable network address.
      * Catches localhost, DDEV domains (*.ddev.site), Docker networks, etc.
+     * Checks both IPv4 (A) and IPv6 (AAAA) records to avoid false positives
+     * on IPv6-only hosts.
      */
     private function isLocalhostUrl(string $baseUrl): bool
     {
@@ -350,11 +352,11 @@ class McpServerModuleController
             return true;
         }
 
-        // Resolve the hostname and check if all IPs are private/reserved
-        $ips = gethostbynamel($host);
-        if ($ips === false || $ips === []) {
-            // Cannot resolve → likely unreachable from outside too
-            return true;
+        // Resolve both A and AAAA records
+        $ips = $this->resolveHostIps($host);
+        if ($ips === []) {
+            // Cannot resolve at all — don't assume private, could be a DNS issue
+            return false;
         }
 
         foreach ($ips as $ip) {
@@ -364,8 +366,36 @@ class McpServerModuleController
             }
         }
 
-        // All resolved IPs are private/reserved (127.x, 10.x, 172.16-31.x, 192.168.x, etc.)
+        // All resolved IPs are private/reserved
         return true;
+    }
+
+    /**
+     * Resolve a hostname to all its IPv4 and IPv6 addresses.
+     *
+     * @return string[]
+     */
+    private function resolveHostIps(string $host): array
+    {
+        $ips = [];
+
+        // IPv4 A records
+        $ipv4 = gethostbynamel($host);
+        if ($ipv4 !== false) {
+            $ips = $ipv4;
+        }
+
+        // IPv6 AAAA records
+        $records = @dns_get_record($host, DNS_AAAA);
+        if ($records !== false) {
+            foreach ($records as $record) {
+                if (isset($record['ipv6'])) {
+                    $ips[] = $record['ipv6'];
+                }
+            }
+        }
+
+        return $ips;
     }
 
     /**
