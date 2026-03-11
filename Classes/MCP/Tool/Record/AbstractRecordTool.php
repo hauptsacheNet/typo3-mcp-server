@@ -9,6 +9,7 @@ use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
+use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
@@ -35,7 +36,24 @@ abstract class AbstractRecordTool extends AbstractTool
     protected function initialize(): void
     {
         parent::initialize();
-        
+
+        // Ensure language service is available - required by DataHandler's localize
+        // command and WorkspaceService. The HTTP endpoint (McpEndpoint) sets this,
+        // but the CLI command (McpServerCommand) does not.
+        if (!isset($GLOBALS['LANG'])) {
+            try {
+                $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
+                if (isset($GLOBALS['BE_USER'])) {
+                    $GLOBALS['LANG'] = $languageServiceFactory->createFromUserPreferences($GLOBALS['BE_USER']);
+                } else {
+                    $GLOBALS['LANG'] = $languageServiceFactory->create('default');
+                }
+            } catch (\Throwable $e) {
+                // Fallback: create a default language service
+                $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('default');
+            }
+        }
+
         if (isset($GLOBALS['BE_USER'])) {
             $this->workspaceContextService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
         }
