@@ -1149,7 +1149,77 @@ class TableAccessService implements SingletonInterface
     {
         return BackendUtility::getRecordTitle($table, $record);
     }
-    
+
+    // =============================================================================
+    // Required Field Detection
+    // =============================================================================
+
+    /**
+     * Check if a field is required in TCA
+     *
+     * Checks multiple TCA patterns that indicate a required field:
+     * - 'required' => true (TYPO3 12+ explicit flag)
+     * - 'eval' => 'required' (legacy eval rule)
+     * - 'minitems' >= 1 (select/relation fields)
+     *
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @return bool True if field is required
+     */
+    public function isFieldRequired(string $table, string $fieldName): bool
+    {
+        $fieldConfig = $this->getFieldConfig($table, $fieldName);
+        if ($fieldConfig === null) {
+            return false;
+        }
+
+        $config = $fieldConfig['config'] ?? [];
+
+        // Check explicit required flag (TYPO3 12+)
+        if (!empty($config['required'])) {
+            return true;
+        }
+
+        // Check eval => 'required' (legacy)
+        if (!empty($config['eval'])) {
+            $evalRules = GeneralUtility::trimExplode(',', $config['eval'], true);
+            if (in_array('required', $evalRules, true)) {
+                return true;
+            }
+        }
+
+        // Check minitems >= 1 (select/relation fields)
+        if ((int)($config['minitems'] ?? 0) >= 1) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Get all required fields for a table/type combination
+     *
+     * Returns field configurations for all fields that are required,
+     * filtered by type-specific field availability when a type is provided.
+     *
+     * @param string $table Table name
+     * @param string $type Record type (optional, uses default type if empty)
+     * @return array<string, array> Field name => field configuration
+     */
+    public function getRequiredFields(string $table, string $type = ''): array
+    {
+        $availableFields = $this->getAvailableFields($table, $type);
+        $requiredFields = [];
+
+        foreach ($availableFields as $fieldName => $fieldConfig) {
+            if ($this->isFieldRequired($table, $fieldName)) {
+                $requiredFields[$fieldName] = $fieldConfig;
+            }
+        }
+
+        return $requiredFields;
+    }
+
     /**
      * Translate a TCA label using TYPO3's language system
      */

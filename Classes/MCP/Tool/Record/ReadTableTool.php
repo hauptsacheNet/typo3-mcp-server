@@ -805,7 +805,7 @@ class ReadTableTool extends AbstractRecordTool
 
         // Check if foreign table is hidden (dependent records that should be embedded)
         $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-        $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+        $isHiddenTable = !empty($foreignTableTCA['ctrl']['hideTable']);
 
         // Get all related records
         $foreignSortBy = $fieldConfig['config']['foreign_sortby'] ?? '';
