@@ -7,6 +7,7 @@ namespace Hn\McpServer\Controller;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Backend\Template\ModuleTemplateFactory;
+use TYPO3\CMS\Backend\Routing\UriBuilder;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -15,6 +16,7 @@ use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\HtmlResponse;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\OAuthService;
+use Hn\McpServer\Service\WorkspaceContextService;
 
 /**
  * Backend module controller for MCP Server configuration
@@ -25,7 +27,9 @@ class McpServerModuleController
         private readonly ModuleTemplateFactory $moduleTemplateFactory,
         private readonly ToolRegistry $toolRegistry,
         private readonly PageRenderer $pageRenderer,
-        private readonly OAuthService $oauthService
+        private readonly OAuthService $oauthService,
+        private readonly WorkspaceContextService $workspaceContextService,
+        private readonly UriBuilder $uriBuilder
     ) {}
 
     public function mainAction(ServerRequestInterface $request): ResponseInterface
@@ -66,6 +70,18 @@ class McpServerModuleController
         $n8nTokenInfo = $this->getClientTokenInfo($tokens, 'n8n token');
         $manusTokenInfo = $this->getClientTokenInfo($tokens, 'manus token');
 
+        // Check if any workspace exists
+        $hasWorkspace = $this->hasAnyWorkspace();
+
+        // Detect if the server is running on localhost
+        $isLocalhost = $this->isLocalhostUrl($baseUrl);
+
+        // Generate URL to create a new workspace record (pid 0 = root level)
+        $createWorkspaceUrl = (string)$this->uriBuilder->buildUriFromRoute('record_edit', [
+            'edit' => ['sys_workspace' => [0 => 'new']],
+            'returnUrl' => (string)$request->getUri(),
+        ]);
+
         // Prepare template variables
         $templateVariables = [
             'tokens' => $tokens,
@@ -78,6 +94,9 @@ class McpServerModuleController
             'n8nTokenInfo' => $n8nTokenInfo,
             'manusTokenInfo' => $manusTokenInfo,
             'siteName' => $this->getSiteName(),
+            'hasWorkspace' => $hasWorkspace,
+            'isLocalhost' => $isLocalhost,
+            'createWorkspaceUrl' => $createWorkspaceUrl,
         ];
         
         // Include JavaScript for copy functionality
@@ -290,6 +309,93 @@ class McpServerModuleController
             'expires' => $token['expires'] ?? null,
             'clientName' => $clientName,
         ];
+    }
+
+    /**
+     * Check if any TYPO3 workspace exists
+     */
+    private function hasAnyWorkspace(): bool
+    {
+        try {
+            $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+            $queryBuilder = $connectionPool->getQueryBuilderForTable('sys_workspace');
+            $count = $queryBuilder
+                ->count('uid')
+                ->from('sys_workspace')
+                ->where(
+                    $queryBuilder->expr()->eq('deleted', $queryBuilder->createNamedParameter(0, \TYPO3\CMS\Core\Database\Connection::PARAM_INT))
+                )
+                ->executeQuery()
+                ->fetchOne();
+            return (int)$count > 0;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Check if the base URL resolves to a private/non-routable network address.
+     * Catches localhost, DDEV domains (*.ddev.site), Docker networks, etc.
+     * Checks both IPv4 (A) and IPv6 (AAAA) records to avoid false positives
+     * on IPv6-only hosts.
+     */
+    private function isLocalhostUrl(string $baseUrl): bool
+    {
+        $host = parse_url($baseUrl, PHP_URL_HOST);
+        if ($host === null || $host === '') {
+            return false;
+        }
+        $host = strtolower($host);
+
+        // Quick check for obvious literals
+        if ($host === 'localhost' || $host === '127.0.0.1' || $host === '::1' || str_ends_with($host, '.localhost')) {
+            return true;
+        }
+
+        // Resolve both A and AAAA records
+        $ips = $this->resolveHostIps($host);
+        if ($ips === []) {
+            // Cannot resolve at all — don't assume private, could be a DNS issue
+            return false;
+        }
+
+        foreach ($ips as $ip) {
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+                // At least one public IP → not localhost-only
+                return false;
+            }
+        }
+
+        // All resolved IPs are private/reserved
+        return true;
+    }
+
+    /**
+     * Resolve a hostname to all its IPv4 and IPv6 addresses.
+     *
+     * @return string[]
+     */
+    private function resolveHostIps(string $host): array
+    {
+        $ips = [];
+
+        // IPv4 A records
+        $ipv4 = gethostbynamel($host);
+        if ($ipv4 !== false) {
+            $ips = $ipv4;
+        }
+
+        // IPv6 AAAA records
+        $records = @dns_get_record($host, DNS_AAAA);
+        if ($records !== false) {
+            foreach ($records as $record) {
+                if (isset($record['ipv6'])) {
+                    $ips[] = $record['ipv6'];
+                }
+            }
+        }
+
+        return $ips;
     }
 
     /**
