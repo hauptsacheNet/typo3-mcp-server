@@ -62,6 +62,6 @@ class LlmResponse
      */
     public function getToolCallsByName(string $toolName): array
     {
-        return array_filter($this->toolCalls, fn($call) => $call['name'] === $toolName);
+        return array_values(array_filter($this->toolCalls, fn($call) => $call['name'] === $toolName));
     }
 }

@@ -1241,6 +1241,466 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
+     * Test that slug fields are normalized: trailing slashes stripped, leading slash ensured.
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
+     */
+    public static function slugNormalizationDataProvider(): array
+    {
+        return [
+            'trailing slash' => ['/trailing-slash-test/', '/trailing-slash-test'],
+            'missing leading slash' => ['no-leading-slash', '/no-leading-slash'],
+            'both issues' => ['both-issues/', '/both-issues'],
+            'already correct' => ['/already-correct', '/already-correct'],
+            'root page slash' => ['/', '/'],
+        ];
+    }
+
+    /**
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('slugNormalizationDataProvider')]
+    public function testCreatePageNormalizesSlug(string $inputSlug, string $expectedSlug): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => $this->getRootPageUid(),
+            'data' => [
+                'title' => 'Slug Normalization Test',
+                'slug' => $inputSlug,
+                'doktype' => 1,
+            ]
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $data = $this->extractJsonFromResult($result);
+        $uid = $data['uid'];
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $record = $queryBuilder->select('slug')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($record, 'Page record should exist');
+        $this->assertEquals($expectedSlug, $record['slug'], "Slug '$inputSlug' should be normalized to '$expectedSlug'");
+    }
+
+    /**
+     * Test that slug normalization also works on update.
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/6
+     */
+    public function testUpdatePageNormalizesSlug(): void
+    {
+        $pageUid = $this->data->page()
+            ->withTitle('Slug Update Test')
+            ->withSlug('/slug-update-test')
+            ->withParent($this->getRootPageUid())
+            ->create();
+
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => $pageUid,
+            'data' => [
+                'slug' => '/updated-slug/',
+            ]
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $record = $queryBuilder->select('slug')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($pageUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($record, 'Workspace version should exist');
+        $this->assertEquals('/updated-slug', $record['slug'], 'Trailing slash should be stripped from slug on update');
+    }
+
+    // ========================================================================
+    // search_replace tests
+    // ========================================================================
+
+    /**
+     * Test basic search_replace on a bodytext field
+     */
+    public function testSearchReplaceBasic(): void
+    {
+        $contentUid = $this->data->content()
+            ->withHeader('SR Basic')
+            ->withBodytext('Hello world, this is original content.')
+            ->onPage($this->getRootPageUid())
+            ->inColumn(0)
+            ->create();
+
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'bodytext' => [
+                    ['search' => 'original content', 'replace' => 'updated content'],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $resultData = $this->extractJsonFromResult($result);
+        $this->assertEquals('update', $resultData['action']);
+        $this->assertEquals($contentUid, $resultData['uid']);
+
+        // Verify the workspace record has the correct content
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $wsRecord = $queryBuilder->select('bodytext')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($contentUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($wsRecord, 'Workspace version should exist');
+        $this->assertEquals('Hello world, this is updated content.', $wsRecord['bodytext']);
+    }
+
+    /**
+     * Test multiple search_replace operations on the same field
+     */
+    public function testSearchReplaceMultipleOperations(): void
+    {
+        $contentUid = $this->data->content()
+            ->withHeader('SR Multiple')
+            ->withBodytext('The quick brown fox jumps over the lazy dog.')
+            ->onPage($this->getRootPageUid())
+            ->inColumn(0)
+            ->create();
+
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'bodytext' => [
+                    ['search' => 'quick brown', 'replace' => 'slow red'],
+                    ['search' => 'lazy dog', 'replace' => 'energetic cat'],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $wsRecord = $queryBuilder->select('bodytext')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($contentUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($wsRecord, 'Workspace version should exist');
+        $this->assertEquals('The slow red fox jumps over the energetic cat.', $wsRecord['bodytext']);
+    }
+
+    /**
+     * Test search_replace combined with data on different fields
+     */
+    public function testSearchReplaceCombinedWithData(): void
+    {
+        $contentUid = $this->data->content()
+            ->withHeader('Old Header')
+            ->withBodytext('Some long content that should be partially edited.')
+            ->onPage($this->getRootPageUid())
+            ->inColumn(0)
+            ->create();
+
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'header' => 'New Header',
+                'bodytext' => [
+                    ['search' => 'partially edited', 'replace' => 'surgically updated'],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $wsRecord = $queryBuilder->select('header', 'bodytext')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($contentUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($wsRecord, 'Workspace version should exist');
+        $this->assertEquals('New Header', $wsRecord['header']);
+        $this->assertEquals('Some long content that should be surgically updated.', $wsRecord['bodytext']);
+    }
+
+    /**
+     * Test search_replace deletion (empty replace string)
+     */
+    public function testSearchReplaceDeletion(): void
+    {
+        $contentUid = $this->data->content()
+            ->withHeader('SR Delete')
+            ->withBodytext('Keep this. Remove this sentence. And keep this too.')
+            ->onPage($this->getRootPageUid())
+            ->inColumn(0)
+            ->create();
+
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'bodytext' => [
+                    ['search' => ' Remove this sentence.', 'replace' => ''],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $wsRecord = $queryBuilder->select('bodytext')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($contentUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($wsRecord, 'Workspace version should exist');
+        $this->assertEquals('Keep this. And keep this too.', $wsRecord['bodytext']);
+    }
+
+    /**
+     * Test search_replace with replaceAll flag
+     */
+    public function testSearchReplaceReplaceAll(): void
+    {
+        $contentUid = $this->data->content()
+            ->withHeader('SR ReplaceAll')
+            ->withBodytext('foo bar foo baz foo')
+            ->onPage($this->getRootPageUid())
+            ->inColumn(0)
+            ->create();
+
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'bodytext' => [
+                    ['search' => 'foo', 'replace' => 'qux', 'replaceAll' => true],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $wsRecord = $queryBuilder->select('bodytext')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($contentUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($wsRecord, 'Workspace version should exist');
+        $this->assertEquals('qux bar qux baz qux', $wsRecord['bodytext']);
+    }
+
+    /**
+     * Test search_replace reads workspace version when one exists
+     */
+    public function testSearchReplacePreservesWorkspaceTransparency(): void
+    {
+        $contentUid = $this->data->content()
+            ->withHeader('SR Workspace')
+            ->withBodytext('Live content here.')
+            ->onPage($this->getRootPageUid())
+            ->inColumn(0)
+            ->create();
+
+        // First update creates a workspace version
+        $result1 = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'bodytext' => 'Workspace content here.',
+            ],
+        ]);
+        $this->assertFalse($result1->isError, json_encode($result1->jsonSerialize()));
+
+        // Second update uses search-and-replace — should operate on the workspace version
+        $result2 = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'bodytext' => [
+                    ['search' => 'Workspace content', 'replace' => 'Modified workspace content'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result2->isError, json_encode($result2->jsonSerialize()));
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $wsRecord = $queryBuilder->select('bodytext')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($contentUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($wsRecord, 'Workspace version should exist');
+        $this->assertEquals('Modified workspace content here.', $wsRecord['bodytext']);
+    }
+
+    /**
+     * Test search-and-replace as the only field operation (no full-value fields)
+     */
+    public function testSearchReplaceWithoutData(): void
+    {
+        $contentUid = $this->data->content()
+            ->withHeader('SR No Data')
+            ->withBodytext('Content to modify without full replacement.')
+            ->onPage($this->getRootPageUid())
+            ->inColumn(0)
+            ->create();
+
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'bodytext' => [
+                    ['search' => 'without full replacement', 'replace' => 'using only search-and-replace'],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $resultData = $this->extractJsonFromResult($result);
+        $this->assertEquals('update', $resultData['action']);
+        $this->assertEquals($contentUid, $resultData['uid']);
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $wsRecord = $queryBuilder->select('bodytext')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($contentUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($wsRecord, 'Workspace version should exist');
+        $this->assertEquals('Content to modify using only search-and-replace.', $wsRecord['bodytext']);
+    }
+
+    /**
+     * Test search_replace with HTML content (richtext field)
+     */
+    public function testSearchReplaceWithHtmlContent(): void
+    {
+        $contentUid = $this->data->content()
+            ->withHeader('SR HTML')
+            ->withBodytext('<p>First paragraph with <strong>bold text</strong>.</p><p>Second paragraph.</p>')
+            ->onPage($this->getRootPageUid())
+            ->inColumn(0)
+            ->create();
+
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'bodytext' => [
+                    ['search' => '<strong>bold text</strong>', 'replace' => '<em>italic text</em>'],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $wsRecord = $queryBuilder->select('bodytext')
+            ->from('tt_content')
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($contentUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->gt('t3ver_wsid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        $this->assertIsArray($wsRecord, 'Workspace version should exist');
+        // The replacement should have been applied; TYPO3's RTE may add whitespace between block elements
+        $this->assertStringContainsString('<em>italic text</em>', $wsRecord['bodytext']);
+        $this->assertStringNotContainsString('<strong>bold text</strong>', $wsRecord['bodytext']);
+    }
+
+    /**
      * Helper method to assert a record is not in live workspace
      */
     protected function assertRecordNotInLive(string $table, int $uid): void
