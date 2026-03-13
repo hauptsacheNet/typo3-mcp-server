@@ -450,12 +450,12 @@ class WriteTableTool extends AbstractRecordTool
         // Convert data for storage
         $data = $this->convertDataForStorage($table, $data);
 
+        // For translation records, add l10n_state overrides so DataHandler treats
+        // explicitly updated fields as "custom" (not synced from parent)
+        $data = $this->ensureL10nStateForTranslation($table, $uid, $data);
+
         // Resolve the live UID to workspace UID (once, used throughout)
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
-
-        // For translation records, ensure l10n_state marks explicitly updated fields as "custom"
-        // so DataHandler doesn't override them with allowLanguageSynchronization
-        $data = $this->ensureL10nStateForTranslation($table, $workspaceUid, $data);
 
         // First, update the parent record without inline relations
         $dataMap = [$table => [$workspaceUid => $data]];
@@ -1348,11 +1348,13 @@ class WriteTableTool extends AbstractRecordTool
      * For translation records, set l10n_state to "custom" for fields that
      * have allowLanguageSynchronization enabled and are being explicitly updated.
      *
-     * Without this, DataHandler would sync these fields from the default language
-     * record and silently discard the values the MCP client sent.
+     * Without this, DataHandler's DataMapProcessor would sync these fields from
+     * the default language record and silently discard the values the MCP client sent.
      *
-     * DataHandler reads l10n_state from the database record (not from incoming data),
-     * so this method writes directly to the database before the DataHandler call.
+     * This uses the same mechanism as TYPO3's FormEngine: passing l10n_state as an
+     * array in the dataMap. DataMapProcessor's DataMapItem::buildState() reads the
+     * persisted l10n_state JSON from the database first, then merges incoming array
+     * values on top (see DataMapItem::buildState step 4).
      */
     protected function ensureL10nStateForTranslation(string $table, int $uid, array $data): array
     {
@@ -1361,67 +1363,27 @@ class WriteTableTool extends AbstractRecordTool
             return $data;
         }
 
-        // $uid is already the workspace UID (resolved by the caller).
-        // Request l10n_state alongside the parent field; if the column doesn't exist
-        // (misconfigured extension), BackendUtility may throw — catch gracefully.
-        try {
-            $record = BackendUtility::getRecord($table, $uid, $translationParentField . ',l10n_state');
-        } catch (\Doctrine\DBAL\Exception $e) {
-            // l10n_state column might not exist; fall back to just the parent field
-            $record = BackendUtility::getRecord($table, $uid, $translationParentField);
-        }
+        // $uid is already the workspace UID (resolved by the caller)
+        $record = BackendUtility::getRecord($table, $uid, $translationParentField);
         if (!$record || empty($record[$translationParentField])) {
             // Not a translation — nothing to do
             return $data;
         }
 
         $columns = $GLOBALS['TCA'][$table]['columns'] ?? [];
-        $syncFields = [];
+        $l10nStateOverrides = [];
 
         foreach ($data as $fieldName => $_value) {
             $behaviour = $columns[$fieldName]['config']['behaviour'] ?? [];
             if (!empty($behaviour['allowLanguageSynchronization'])) {
-                $syncFields[] = $fieldName;
+                $l10nStateOverrides[$fieldName] = 'custom';
             }
         }
 
-        if (empty($syncFields)) {
-            return $data;
-        }
-
-        // Decode existing l10n_state (JSON field on the record)
-        $l10nState = [];
-        if (!empty($record['l10n_state'])) {
-            $decoded = json_decode($record['l10n_state'], true);
-            if (is_array($decoded)) {
-                $l10nState = $decoded;
-            }
-        }
-
-        $changed = false;
-        foreach ($syncFields as $fieldName) {
-            if (($l10nState[$fieldName] ?? '') !== 'custom') {
-                $l10nState[$fieldName] = 'custom';
-                $changed = true;
-            }
-        }
-
-        if ($changed) {
-            // Write l10n_state directly to the database because DataHandler reads it
-            // from the record, not from the incoming dataMap.
-            // The l10n_state column is auto-added by TYPO3 for translatable tables,
-            // but guard against misconfigured extensions with a try-catch.
-            try {
-                $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-                    ->getConnectionForTable($table);
-                $connection->update(
-                    $table,
-                    ['l10n_state' => json_encode($l10nState)],
-                    ['uid' => $uid]
-                );
-            } catch (\Doctrine\DBAL\Exception $e) {
-                // l10n_state column might not exist; skip gracefully
-            }
+        if (!empty($l10nStateOverrides)) {
+            // Pass as array — DataMapProcessor merges this on top of the DB value,
+            // exactly like FormEngine's LocalizationStateSelector does.
+            $data['l10n_state'] = $l10nStateOverrides;
         }
 
         return $data;
