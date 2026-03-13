@@ -1,7 +1,5 @@
 # TYPO3 MCP Server Extension
 
-**⚠️ This extension is a work in progress and under active development.**
-
 This extension provides a Model Context Protocol (MCP) server implementation for TYPO3 that allows
 AI assistants to safely view and manipulate TYPO3 pages and records through TYPO3's workspace system.
 
