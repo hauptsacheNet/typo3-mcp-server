@@ -380,4 +380,166 @@ class MmRelationWorkspaceTest extends FunctionalTestCase
         $translation = json_decode($result->content[0]->text)->records[0];
         $this->assertIsArray($translation->categories, 'Translation should have categories');
     }
+
+    /**
+     * Test updating a live record with BOTH MM relations AND inline relations in workspace.
+     *
+     * Reproduces GitHub issue #19: "WriteTable fails on existing live records
+     * with MM/inline relations (update & translate)".
+     */
+    public function testUpdateLiveRecordWithMmAndInlineInWorkspace(): void
+    {
+        // Create in live with categories (opposite MM) and related_links (inline)
+        $GLOBALS['BE_USER']->workspace = 0;
+
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'title' => 'Live News with MM and Inline',
+                'datetime' => time(),
+                'categories' => [1, 2],
+                'related_links' => [
+                    ['uri' => 'https://example.com', 'title' => 'Example'],
+                ],
+            ]
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $newsUid = json_decode($result->content[0]->text)->uid;
+
+        // Switch to workspace
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+        $this->assertGreaterThan(0, $GLOBALS['BE_USER']->workspace);
+
+        // Update both MM and inline in workspace
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => $newsUid,
+            'data' => [
+                'title' => 'Updated News in Workspace',
+                'categories' => [3, 4, 5],
+                'related_links' => [
+                    ['uri' => 'https://workspace.example.com', 'title' => 'Workspace Link'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Read back — should see workspace data
+        $result = $this->readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => $newsUid,
+            'includeRelations' => true,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $news = json_decode($result->content[0]->text)->records[0];
+
+        $this->assertEquals($newsUid, $news->uid, 'Client should see live UID');
+        $this->assertEquals('Updated News in Workspace', $news->title);
+        $this->assertCount(3, $news->categories, 'Should see 3 workspace categories');
+        $this->assertEquals([3, 4, 5], $news->categories);
+    }
+
+    /**
+     * Test translating a live record in workspace context.
+     *
+     * Part of GitHub issue #19: translating pre-existing live records
+     * should work in workspace context.
+     */
+    public function testTranslateLiveRecordInWorkspace(): void
+    {
+        // Create in live with categories
+        $GLOBALS['BE_USER']->workspace = 0;
+
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'title' => 'Live News to Translate',
+                'datetime' => time(),
+                'categories' => [1, 2, 3],
+            ]
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $newsUid = json_decode($result->content[0]->text)->uid;
+
+        // Switch to workspace
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+        $this->assertGreaterThan(0, $GLOBALS['BE_USER']->workspace);
+
+        // Translate in workspace
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'translate',
+            'uid' => $newsUid,
+            'data' => ['sys_language_uid' => 'de'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $translationUid = json_decode($result->content[0]->text)->translationUid;
+        $this->assertNotEmpty($translationUid, 'Should get a translation UID');
+
+        // Translation should have categories copied from source
+        $result = $this->readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => $translationUid,
+            'includeRelations' => true,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $translation = json_decode($result->content[0]->text)->records[0];
+
+        $this->assertIsArray($translation->categories, 'Translation should have categories');
+        $this->assertCount(3, $translation->categories, 'Translation should have same categories as source');
+        $this->assertEquals([1, 2, 3], $translation->categories);
+    }
+
+    /**
+     * Test updating MM-only on a live record in workspace (no other field changes).
+     *
+     * This verifies DataHandler auto-versioning works when the ONLY
+     * changes are to MM relation fields.
+     */
+    public function testUpdateOnlyMmFieldOnLiveRecordInWorkspace(): void
+    {
+        $GLOBALS['BE_USER']->workspace = 0;
+
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'title' => 'News with only MM update',
+                'datetime' => time(),
+                'categories' => [1],
+            ]
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $newsUid = json_decode($result->content[0]->text)->uid;
+
+        // Switch to workspace
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        // Update ONLY categories (no other fields)
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => $newsUid,
+            'data' => ['categories' => [2, 3, 4, 5]],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Read back
+        $result = $this->readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => $newsUid,
+            'includeRelations' => true,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $news = json_decode($result->content[0]->text)->records[0];
+
+        $this->assertCount(4, $news->categories, 'Should see 4 workspace categories');
+        $this->assertEquals([2, 3, 4, 5], $news->categories);
+    }
 }

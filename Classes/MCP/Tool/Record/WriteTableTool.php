@@ -1361,8 +1361,15 @@ class WriteTableTool extends AbstractRecordTool
             return $data;
         }
 
-        // $uid is already the workspace UID (resolved by the caller)
-        $record = BackendUtility::getRecord($table, $uid, $translationParentField . ',l10n_state');
+        // $uid is already the workspace UID (resolved by the caller).
+        // Request l10n_state alongside the parent field; if the column doesn't exist
+        // (misconfigured extension), BackendUtility may throw — catch gracefully.
+        try {
+            $record = BackendUtility::getRecord($table, $uid, $translationParentField . ',l10n_state');
+        } catch (\Doctrine\DBAL\Exception $e) {
+            // l10n_state column might not exist; fall back to just the parent field
+            $record = BackendUtility::getRecord($table, $uid, $translationParentField);
+        }
         if (!$record || empty($record[$translationParentField])) {
             // Not a translation — nothing to do
             return $data;
@@ -1401,14 +1408,20 @@ class WriteTableTool extends AbstractRecordTool
 
         if ($changed) {
             // Write l10n_state directly to the database because DataHandler reads it
-            // from the record, not from the incoming dataMap
-            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getConnectionForTable($table);
-            $connection->update(
-                $table,
-                ['l10n_state' => json_encode($l10nState)],
-                ['uid' => $uid]
-            );
+            // from the record, not from the incoming dataMap.
+            // The l10n_state column is auto-added by TYPO3 for translatable tables,
+            // but guard against misconfigured extensions with a try-catch.
+            try {
+                $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getConnectionForTable($table);
+                $connection->update(
+                    $table,
+                    ['l10n_state' => json_encode($l10nState)],
+                    ['uid' => $uid]
+                );
+            } catch (\Doctrine\DBAL\Exception $e) {
+                // l10n_state column might not exist; skip gracefully
+            }
         }
 
         return $data;
