@@ -1,0 +1,74 @@
+name: Release to TER
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (without v prefix)'
+        required: false
+        default: '0.0.0-dev'
+
+jobs:
+  release:
+    name: Build and publish to TER
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: zip
+          coverage: none
+
+      - name: Determine version
+        id: version
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "version=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Set version in ext_emconf.php
+        run: vendor/bin/tailor set-version "${{ steps.version.outputs.version }}" --no-docs
+
+      - name: Build TER zip
+        run: composer build:ter
+
+      - name: Upload zip as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp_server_${{ steps.version.outputs.version }}
+          path: dist/*.zip
+
+      - name: Attach zip to GitHub release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG_NAME" dist/*.zip --clobber
+
+      - name: Publish to TER
+        if: github.event_name == 'release'
+        env:
+          TYPO3_API_TOKEN: ${{ secrets.TYPO3_API_TOKEN }}
+          RELEASE_COMMENT: ${{ github.event.release.body }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          vendor/bin/tailor ter:publish \
+            --path .build/mcp_server \
+            --comment "$RELEASE_COMMENT" \
+            "$VERSION" \
+            mcp_server

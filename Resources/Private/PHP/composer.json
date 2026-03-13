@@ -1,0 +1,15 @@
+{
+    "name": "hn/mcp-server-libraries",
+    "description": "Bundled libraries for mcp_server extension in non-composer TYPO3 installations",
+    "require": {
+        "logiscape/mcp-sdk-php": "^1.2"
+    },
+    "replace": {
+        "psr/log": "*"
+    },
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true,
+        "classmap-authoritative": true
+    }
+}
