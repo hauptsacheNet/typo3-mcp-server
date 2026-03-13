@@ -449,10 +449,14 @@ class WriteTableTool extends AbstractRecordTool
         
         // Convert data for storage
         $data = $this->convertDataForStorage($table, $data);
-        
+
+        // For translation records, ensure l10n_state marks explicitly updated fields as "custom"
+        // so DataHandler doesn't override them with allowLanguageSynchronization
+        $data = $this->ensureL10nStateForTranslation($table, $uid, $data);
+
         // Resolve the live UID to workspace UID
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
-        
+
         // First, update the parent record without inline relations
         $dataMap = [$table => [$workspaceUid => $data]];
         
@@ -1340,6 +1344,77 @@ class WriteTableTool extends AbstractRecordTool
         return $data;
     }
     
+    /**
+     * For translation records, set l10n_state to "custom" for fields that
+     * have allowLanguageSynchronization enabled and are being explicitly updated.
+     *
+     * Without this, DataHandler would sync these fields from the default language
+     * record and silently discard the values the MCP client sent.
+     *
+     * DataHandler reads l10n_state from the database record (not from incoming data),
+     * so this method writes directly to the database before the DataHandler call.
+     */
+    protected function ensureL10nStateForTranslation(string $table, int $uid, array $data): array
+    {
+        $translationParentField = $this->tableAccessService->getTranslationParentFieldName($table);
+        if (!$translationParentField) {
+            return $data;
+        }
+
+        // Resolve the workspace UID so we read the correct record
+        $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
+        $record = BackendUtility::getRecord($table, $workspaceUid, $translationParentField . ',l10n_state');
+        if (!$record || empty($record[$translationParentField])) {
+            // Not a translation — nothing to do
+            return $data;
+        }
+
+        $columns = $GLOBALS['TCA'][$table]['columns'] ?? [];
+        $syncFields = [];
+
+        foreach ($data as $fieldName => $_value) {
+            $behaviour = $columns[$fieldName]['config']['behaviour'] ?? [];
+            if (!empty($behaviour['allowLanguageSynchronization'])) {
+                $syncFields[] = $fieldName;
+            }
+        }
+
+        if (empty($syncFields)) {
+            return $data;
+        }
+
+        // Decode existing l10n_state (JSON field on the record)
+        $l10nState = [];
+        if (!empty($record['l10n_state'])) {
+            $decoded = json_decode($record['l10n_state'], true);
+            if (is_array($decoded)) {
+                $l10nState = $decoded;
+            }
+        }
+
+        $changed = false;
+        foreach ($syncFields as $fieldName) {
+            if (($l10nState[$fieldName] ?? '') !== 'custom') {
+                $l10nState[$fieldName] = 'custom';
+                $changed = true;
+            }
+        }
+
+        if ($changed) {
+            // Write l10n_state directly to the database because DataHandler reads it
+            // from the record, not from the incoming dataMap
+            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable($table);
+            $connection->update(
+                $table,
+                ['l10n_state' => json_encode($l10nState)],
+                ['uid' => $workspaceUid]
+            );
+        }
+
+        return $data;
+    }
+
     /**
      * Get the live UID for a workspace record
      * For workspace records, this returns the t3ver_oid (original/live UID)
