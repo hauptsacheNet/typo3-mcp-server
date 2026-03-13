@@ -450,12 +450,12 @@ class WriteTableTool extends AbstractRecordTool
         // Convert data for storage
         $data = $this->convertDataForStorage($table, $data);
 
+        // Resolve the live UID to workspace UID (once, used throughout)
+        $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
+
         // For translation records, ensure l10n_state marks explicitly updated fields as "custom"
         // so DataHandler doesn't override them with allowLanguageSynchronization
-        $data = $this->ensureL10nStateForTranslation($table, $uid, $data);
-
-        // Resolve the live UID to workspace UID
-        $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
+        $data = $this->ensureL10nStateForTranslation($table, $workspaceUid, $data);
 
         // First, update the parent record without inline relations
         $dataMap = [$table => [$workspaceUid => $data]];
@@ -1361,9 +1361,8 @@ class WriteTableTool extends AbstractRecordTool
             return $data;
         }
 
-        // Resolve the workspace UID so we read the correct record
-        $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
-        $record = BackendUtility::getRecord($table, $workspaceUid, $translationParentField . ',l10n_state');
+        // $uid is already the workspace UID (resolved by the caller)
+        $record = BackendUtility::getRecord($table, $uid, $translationParentField . ',l10n_state');
         if (!$record || empty($record[$translationParentField])) {
             // Not a translation — nothing to do
             return $data;
@@ -1408,7 +1407,7 @@ class WriteTableTool extends AbstractRecordTool
             $connection->update(
                 $table,
                 ['l10n_state' => json_encode($l10nState)],
-                ['uid' => $workspaceUid]
+                ['uid' => $uid]
             );
         }
 
