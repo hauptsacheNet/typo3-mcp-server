@@ -99,13 +99,15 @@ trait ExceptionHandlerTrait
             return $e->getMessage();
         }
         
-        // Map common exceptions to user-friendly messages only for unexpected errors
+        // Include the real exception message — the MCP client is an LLM that needs
+        // diagnostic details to help the user, and content editors are authorized users.
+        $detail = $e->getMessage();
         return match (true) {
-            $e instanceof \InvalidArgumentException => 'Invalid input provided' . ($operation ? ' for ' . $operation : ''),
-            $e instanceof \RuntimeException => 'Operation failed' . ($operation ? ': ' . $operation : ''),
-            $e instanceof \DomainException => 'Invalid operation requested',
-            $e instanceof \Doctrine\DBAL\Exception => 'Database operation failed',
-            default => 'An unexpected error occurred' . ($operation ? ' during ' . $operation : '')
+            $e instanceof \InvalidArgumentException => 'Invalid input provided' . ($operation ? ' for ' . $operation : '') . ($detail ? ': ' . $detail : ''),
+            $e instanceof \RuntimeException => 'Operation failed' . ($operation ? ': ' . $operation : '') . ($detail ? ': ' . $detail : ''),
+            $e instanceof \DomainException => 'Invalid operation requested' . ($detail ? ': ' . $detail : ''),
+            $e instanceof \Doctrine\DBAL\Exception => 'Database operation failed: ' . ($detail ?: 'Unknown error'),
+            default => 'An unexpected error occurred' . ($operation ? ' during ' . $operation : '') . ($detail ? ': ' . $detail : '')
         };
     }
     

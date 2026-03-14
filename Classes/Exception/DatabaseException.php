@@ -22,7 +22,7 @@ class DatabaseException extends McpException
     {
         parent::__construct(
             "Database error during {$operation} on table {$table}: " . ($previous ? $previous->getMessage() : 'Unknown error'),
-            "Failed to {$operation} record",
+            "Failed to {$operation} record: " . ($previous ? $previous->getMessage() : 'Unknown error'),
             500,
             $previous,
             ['operation' => $operation, 'table' => $table]

@@ -190,10 +190,13 @@ class ErrorHandlingTest extends AbstractFunctionalTest
             'where' => 'invalid SQL syntax @@@ error'
         ]);
         
-        // Should handle the database error gracefully
+        // Should handle the database error gracefully and include the real error message
         $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
-        // The error message should be user-friendly, not exposing SQL details
-        $this->assertStringNotContainsString('@@@ error', $result->content[0]->text);
+        // The error message should include diagnostic details for the LLM to act on
+        $errorText = $result->content[0]->text;
+        $this->assertStringContainsString('Failed to', $errorText);
+        // Stack traces should not be exposed, but the exception message should be
+        $this->assertStringNotContainsString('Stack trace:', $errorText);
     }
     
     /**
@@ -215,11 +218,10 @@ class ErrorHandlingTest extends AbstractFunctionalTest
         
         // Should either succeed or fail gracefully
         if ($result->isError) {
-            // Error message should not contain stack traces or internal paths
+            // Error message should not contain stack traces or internal file paths
             $errorText = $result->content[0]->text;
             $this->assertStringNotContainsString('Stack trace:', $errorText);
             $this->assertStringNotContainsString('/var/www/', $errorText);
-            $this->assertStringNotContainsString('\\Hn\\McpServer\\', $errorText);
         }
     }
     
