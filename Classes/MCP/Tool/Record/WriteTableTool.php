@@ -687,7 +687,26 @@ class WriteTableTool extends AbstractRecordTool
         if (isset($data['pid']) && $action !== 'create') {
             return "Field 'pid' can only be set during record creation";
         }
-        
+
+        // Pre-determine the record type for type-aware field access checking.
+        // TSconfig can disable fields globally but re-enable them for specific types, so we
+        // need the type context as early as possible to avoid false "not accessible" errors.
+        $earlyRecordType = '';
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
+        if ($typeField) {
+            if ($action === 'update' && $uid !== null) {
+                $currentRecord = BackendUtility::getRecord($table, $uid, $typeField);
+                if ($currentRecord && isset($currentRecord[$typeField])) {
+                    $earlyRecordType = (string)$currentRecord[$typeField];
+                }
+                if (isset($data[$typeField])) {
+                    $earlyRecordType = (string)$data[$typeField];
+                }
+            } else {
+                $earlyRecordType = isset($data[$typeField]) ? (string)$data[$typeField] : '';
+            }
+        }
+
         // Validate and convert field values
         foreach ($data as $fieldName => $value) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
@@ -695,8 +714,10 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
 
-            // Check if field is accessible (filters out file fields and inaccessible inline relations)
-            if (!$this->tableAccessService->canAccessField($table, $fieldName)) {
+            // Check if field is accessible (filters out file fields and inaccessible inline relations).
+            // Pass the record type so that TSconfig type-specific overrides are respected.
+            // For example, a field may be globally disabled but re-enabled for a specific CType.
+            if (!$this->tableAccessService->canAccessField($table, $fieldName, $earlyRecordType)) {
                 $fieldType = $fieldConfig['config']['type'] ?? '';
                 if ($fieldType === 'file') {
                     return "Field '{$fieldName}': File fields are not supported. Please use TYPO3 backend for file operations.";
