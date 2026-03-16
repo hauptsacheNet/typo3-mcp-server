@@ -449,10 +449,14 @@ class WriteTableTool extends AbstractRecordTool
         
         // Convert data for storage
         $data = $this->convertDataForStorage($table, $data);
-        
-        // Resolve the live UID to workspace UID
+
+        // For translation records, add l10n_state overrides so DataHandler treats
+        // explicitly updated fields as "custom" (not synced from parent)
+        $data = $this->ensureL10nStateForTranslation($table, $uid, $data);
+
+        // Resolve the live UID to workspace UID (once, used throughout)
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
-        
+
         // First, update the parent record without inline relations
         $dataMap = [$table => [$workspaceUid => $data]];
         
@@ -1340,6 +1344,51 @@ class WriteTableTool extends AbstractRecordTool
         return $data;
     }
     
+    /**
+     * For translation records, set l10n_state to "custom" for fields that
+     * have allowLanguageSynchronization enabled and are being explicitly updated.
+     *
+     * Without this, DataHandler's DataMapProcessor would sync these fields from
+     * the default language record and silently discard the values the MCP client sent.
+     *
+     * This uses the same mechanism as TYPO3's FormEngine: passing l10n_state as an
+     * array in the dataMap. DataMapProcessor's DataMapItem::buildState() reads the
+     * persisted l10n_state JSON from the database first, then merges incoming array
+     * values on top (see DataMapItem::buildState step 4).
+     */
+    protected function ensureL10nStateForTranslation(string $table, int $uid, array $data): array
+    {
+        $translationParentField = $this->tableAccessService->getTranslationParentFieldName($table);
+        if (!$translationParentField) {
+            return $data;
+        }
+
+        // $uid is already the workspace UID (resolved by the caller)
+        $record = BackendUtility::getRecord($table, $uid, $translationParentField);
+        if (!$record || empty($record[$translationParentField])) {
+            // Not a translation — nothing to do
+            return $data;
+        }
+
+        $columns = $GLOBALS['TCA'][$table]['columns'] ?? [];
+        $l10nStateOverrides = [];
+
+        foreach ($data as $fieldName => $_value) {
+            $behaviour = $columns[$fieldName]['config']['behaviour'] ?? [];
+            if (!empty($behaviour['allowLanguageSynchronization'])) {
+                $l10nStateOverrides[$fieldName] = 'custom';
+            }
+        }
+
+        if (!empty($l10nStateOverrides)) {
+            // Pass as array — DataMapProcessor merges this on top of the DB value,
+            // exactly like FormEngine's LocalizationStateSelector does.
+            $data['l10n_state'] = $l10nStateOverrides;
+        }
+
+        return $data;
+    }
+
     /**
      * Get the live UID for a workspace record
      * For workspace records, this returns the t3ver_oid (original/live UID)
