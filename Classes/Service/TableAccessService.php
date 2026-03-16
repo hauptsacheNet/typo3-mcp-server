@@ -1077,7 +1077,20 @@ class TableAccessService implements SingletonInterface
         if (!empty($config['foreign_table'])) {
             return null;
         }
-        
+
+        // Skip validation for fields whose allowed values are dynamically extended by
+        // page TSconfig or backend layouts at runtime. The static TCA items list is
+        // incomplete for these fields, so validating against it would produce false negatives.
+        //
+        // colPos is the primary example: TYPO3 backend layouts define their own column
+        // positions (e.g. colPos=20 for "Main content") via page TSconfig addItems, which
+        // are not present in $GLOBALS['TCA']['tt_content']['columns']['colPos']['config']['items'].
+        // Validating colPos against TCA items alone would reject perfectly valid values.
+        $fieldsWithDynamicItems = ['colPos'];
+        if (in_array($fieldName, $fieldsWithDynamicItems, true)) {
+            return null;
+        }
+
         // Use the shared parseSelectItems method
         if (isset($config['items']) && is_array($config['items'])) {
             $parsed = $this->parseSelectItems($config['items']);
