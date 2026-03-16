@@ -1054,57 +1054,69 @@ class TableAccessService implements SingletonInterface
     
     /**
      * Get allowed values for a select field
-     * 
+     *
+     * Uses TYPO3's FormDataCompiler to resolve all dynamic items (static TCA items,
+     * foreign_table, itemsProcFunc, TSconfig addItems/removeItems/keepItems, etc.).
+     * Falls back to static TCA items if FormDataCompiler fails.
+     *
      * @param string $table Table name
      * @param string $fieldName Field name
-     * @return array|null Array of allowed values or null if not a select field
+     * @param array $record Record context for dynamic item resolution (pid, field values for itemsProcFunc)
+     * @return array|null Array of allowed values or null if not a select field or cannot be resolved
      */
-    public function getSelectFieldAllowedValues(string $table, string $fieldName): ?array
+    public function getSelectFieldAllowedValues(string $table, string $fieldName, array $record = []): ?array
     {
         $fieldConfig = $this->getFieldConfig($table, $fieldName);
         if (!$fieldConfig) {
             return null;
         }
-        
+
         $config = $fieldConfig['config'] ?? [];
-        
+
         // Only process select fields
         if (($config['type'] ?? '') !== 'select') {
             return null;
         }
-        
-        // If it's a foreign table select, we can't validate values here
+
+        // Try dynamic resolution via FormDataCompiler (handles all sources: static, foreign_table, itemsProcFunc, TSconfig)
+        $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
+        $resolved = $resolver->resolveSelectItems($table, $fieldName, $record);
+        if ($resolved !== null && !empty($resolved['values'])) {
+            return $resolved['values'];
+        }
+
+        // Fallback: static TCA items only (foreign_table cannot be resolved without FormDataCompiler)
         if (!empty($config['foreign_table'])) {
             return null;
         }
-        
-        // Use the shared parseSelectItems method
+
         if (isset($config['items']) && is_array($config['items'])) {
             $parsed = $this->parseSelectItems($config['items']);
             return empty($parsed['values']) ? null : $parsed['values'];
         }
-        
+
         return null;
     }
     
     /**
      * Validate a field value based on its TCA configuration
-     * 
+     *
      * @param string $table Table name
      * @param string $fieldName Field name
      * @param mixed $value Field value
+     * @param array $record Record context for dynamic select item resolution
      * @return string|null Error message if validation fails, null if valid
      */
-    public function validateFieldValue(string $table, string $fieldName, $value): ?string
+    public function validateFieldValue(string $table, string $fieldName, $value, array $record = []): ?string
     {
         $fieldConfig = $this->getFieldConfig($table, $fieldName);
         if (!$fieldConfig) {
             return "Field '{$fieldName}' does not exist in table '{$table}'";
         }
-        
+
         $config = $fieldConfig['config'] ?? [];
         $fieldType = $config['type'] ?? '';
-        
+
         // Check max length for string fields
         if (in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color']) && is_string($value)) {
             $maxLength = $config['max'] ?? 0;
@@ -1112,14 +1124,14 @@ class TableAccessService implements SingletonInterface
                 return "Field '{$fieldName}' value exceeds maximum length of {$maxLength} characters";
             }
         }
-        
-        // Validate select fields
-        if ($fieldType === 'select' && empty($config['foreign_table'])) {
-            $allowedValues = $this->getSelectFieldAllowedValues($table, $fieldName);
+
+        // Validate select fields (all sources: static, foreign_table, itemsProcFunc, TSconfig)
+        if ($fieldType === 'select') {
+            $allowedValues = $this->getSelectFieldAllowedValues($table, $fieldName, $record);
             if ($allowedValues !== null) {
                 // Handle comma-separated values for multiple select
                 $values = is_string($value) ? GeneralUtility::trimExplode(',', $value, true) : [$value];
-                
+
                 foreach ($values as $val) {
                     if (!in_array((string)$val, $allowedValues, true)) {
                         $allowedList = implode(', ', array_map(function($v) { return "'{$v}'"; }, $allowedValues));
@@ -1128,7 +1140,7 @@ class TableAccessService implements SingletonInterface
                 }
             }
         }
-        
+
         // Validate required fields
         if (!empty($config['required']) || !empty($config['eval'])) {
             $evalRules = GeneralUtility::trimExplode(',', $config['eval'] ?? '', true);
@@ -1138,7 +1150,7 @@ class TableAccessService implements SingletonInterface
                 }
             }
         }
-        
+
         return null;
     }
     

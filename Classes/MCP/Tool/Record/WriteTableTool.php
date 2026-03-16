@@ -256,7 +256,7 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         // Validate the data
-        $validationResult = $this->validateRecordData($table, $data, 'create');
+        $validationResult = $this->validateRecordData($table, $data, 'create', null, $pid);
         if ($validationResult !== true) {
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
@@ -675,11 +675,11 @@ class WriteTableTool extends AbstractRecordTool
      * @param int|null $uid Record UID (required for update actions)
      * @return true|string True if valid, error message if invalid
      */
-    protected function validateRecordData(string $table, array &$data, string $action, ?int $uid = null)
+    protected function validateRecordData(string $table, array &$data, string $action, ?int $uid = null, int $pid = 0)
     {
         // Table access has already been validated by ensureTableAccess() before this method is called
         // No need to re-check table existence here
-        
+
         // Special handling for uid and pid
         if (isset($data['uid'])) {
             return "Field 'uid' cannot be modified directly";
@@ -687,7 +687,15 @@ class WriteTableTool extends AbstractRecordTool
         if (isset($data['pid']) && $action !== 'create') {
             return "Field 'pid' can only be set during record creation";
         }
-        
+
+        // Build merged record context for dynamic select item resolution (itemsProcFunc, TSconfig)
+        if ($action === 'update' && $uid) {
+            $existingRecord = BackendUtility::getRecord($table, $uid) ?? [];
+            $mergedRecord = array_merge($existingRecord, $data);
+        } else {
+            $mergedRecord = array_merge($data, ['pid' => $pid]);
+        }
+
         // Validate and convert field values
         foreach ($data as $fieldName => $value) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
@@ -704,8 +712,8 @@ class WriteTableTool extends AbstractRecordTool
                 return "Field '{$fieldName}' is not accessible";
             }
 
-            // Validate field value
-            $validationError = $this->tableAccessService->validateFieldValue($table, $fieldName, $value);
+            // Validate field value (with record context for dynamic select item resolution)
+            $validationError = $this->tableAccessService->validateFieldValue($table, $fieldName, $value, $mergedRecord);
             if ($validationError !== null) {
                 return $validationError;
             }
