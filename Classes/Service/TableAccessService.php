@@ -1129,8 +1129,14 @@ class TableAccessService implements SingletonInterface
         if ($fieldType === 'select') {
             $allowedValues = $this->getSelectFieldAllowedValues($table, $fieldName, $record);
             if ($allowedValues !== null) {
-                // Handle comma-separated values for multiple select
-                $values = is_string($value) ? GeneralUtility::trimExplode(',', $value, true) : [$value];
+                // Handle multiple values: arrays (multi-select), comma-separated strings, or single values
+                if (is_array($value)) {
+                    $values = $value;
+                } elseif (is_string($value)) {
+                    $values = GeneralUtility::trimExplode(',', $value, true);
+                } else {
+                    $values = [$value];
+                }
 
                 foreach ($values as $val) {
                     if (!in_array((string)$val, $allowedValues, true)) {

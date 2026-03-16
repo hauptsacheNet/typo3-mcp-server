@@ -25,7 +25,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class SelectItemResolver
 {
     /**
-     * Runtime cache for compiled form data, keyed by "table:recordHash"
+     * Runtime cache for compiled form data, keyed by "table:pid"
      * @var array<string, array>
      */
     private array $cache = [];
