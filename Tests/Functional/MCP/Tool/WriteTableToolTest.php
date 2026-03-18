@@ -1677,6 +1677,80 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
+     * Test that sequential content element creation preserves intended order.
+     * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/26
+     *
+     * When an LLM creates multiple content elements one after another using position "bottom",
+     * they must appear in the same order they were created (first created = first in list).
+     */
+    public function testSequentialWritesCreateContentInCorrectOrder(): void
+    {
+        $writeTool = new WriteTableTool();
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Create a fresh page so we have no pre-existing content
+        $pageResult = $writeTool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => $this->getRootPageUid(),
+            'data' => [
+                'title' => 'Test Sorting Page',
+                'slug' => '/test-sorting',
+                'doktype' => 1,
+            ]
+        ]);
+        $this->assertFalse($pageResult->isError, json_encode($pageResult->jsonSerialize()));
+        $pageData = $this->extractJsonFromResult($pageResult);
+        $pageUid = $pageData['uid'];
+
+        // Sequentially create 3 content elements at the bottom
+        $expectedHeaders = ['1: First', '2: Second', '3: Third'];
+        $createdUids = [];
+
+        foreach ($expectedHeaders as $header) {
+            $result = $writeTool->execute([
+                'action' => 'create',
+                'table' => 'tt_content',
+                'pid' => $pageUid,
+                'position' => 'bottom',
+                'data' => [
+                    'CType' => 'textmedia',
+                    'header' => $header,
+                    'colPos' => 0,
+                ]
+            ]);
+            $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+            $data = $this->extractJsonFromResult($result);
+            $createdUids[] = $data['uid'];
+        }
+
+        // Use ReadTable to fetch all content on the page — results should be sorted by sorting ASC
+        $readResult = $readTool->execute([
+            'table' => 'tt_content',
+            'pid' => $pageUid,
+        ]);
+        $this->assertFalse($readResult->isError, json_encode($readResult->jsonSerialize()));
+        $readData = $this->extractJsonFromResult($readResult);
+
+        $this->assertArrayHasKey('records', $readData);
+        $records = $readData['records'];
+        $this->assertCount(3, $records, 'Expected exactly 3 content elements on the page');
+
+        // Verify the records come back in creation order
+        $actualHeaders = array_map(fn(array $r) => $r['header'], $records);
+        $this->assertSame(
+            $expectedHeaders,
+            $actualHeaders,
+            'Content elements must appear in the order they were created. ' .
+            'Sequential "bottom" writes should produce ascending sorting values.'
+        );
+
+        // Also verify UIDs match in order
+        $actualUids = array_map(fn(array $r) => $r['uid'], $records);
+        $this->assertSame($createdUids, $actualUids, 'UIDs should match creation order');
+    }
+
+    /**
      * Helper method to assert a record is not in live workspace
      */
     protected function assertRecordNotInLive(string $table, int $uid): void
