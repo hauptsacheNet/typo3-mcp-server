@@ -286,11 +286,7 @@ class WriteTableTool extends AbstractRecordTool
                     ->select('uid')
                     ->from($table)
                     ->where(
-                        $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER)),
-                        $queryBuilder->expr()->or(
-                            $queryBuilder->expr()->eq('t3ver_oid', 0),
-                            $queryBuilder->expr()->eq('t3ver_state', 4) // MOVE_POINTER
-                        )
+                        $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
                     )
                     ->orderBy($sortingField, 'DESC')
                     ->addOrderBy('uid', 'DESC')
