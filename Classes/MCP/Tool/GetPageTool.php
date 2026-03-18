@@ -668,7 +668,13 @@ class GetPageTool extends AbstractRecordTool
         if (!str_starts_with($path, '/')) {
             $path = '/' . $path;
         }
-        
+
+        // Strip trailing slash for non-root paths (slugs in DB don't have trailing slashes)
+        // This handles the common case of URLs like /about/ vs slug /about
+        if ($path !== '/' && str_ends_with($path, '/')) {
+            $path = rtrim($path, '/');
+        }
+
         // Special handling for home page
         if ($path === '/') {
             // Try to find the root page from any site

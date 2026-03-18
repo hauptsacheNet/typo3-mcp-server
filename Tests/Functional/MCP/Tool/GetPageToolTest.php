@@ -512,6 +512,46 @@ class GetPageToolTest extends FunctionalTestCase
     }
 
     /**
+     * Test URL resolution with trailing slash
+     */
+    public function testUrlResolutionWithTrailingSlash(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
+
+        // Test with trailing slash on path
+        $result = $tool->execute([
+            'url' => '/about/'
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString('UID: 2', $content);
+        $this->assertStringContainsString('Title: About', $content);
+    }
+
+    /**
+     * Test URL resolution with trailing slash on full URL
+     */
+    public function testUrlResolutionWithTrailingSlashFullUrl(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
+
+        // Test with trailing slash on full URL
+        $result = $tool->execute([
+            'url' => 'https://example.com/about/team/'
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString('UID: 4', $content);
+        $this->assertStringContainsString('Title: Team', $content);
+    }
+
+    /**
      * Test URL resolution without leading slash
      */
     public function testUrlResolutionWithoutLeadingSlash(): void
