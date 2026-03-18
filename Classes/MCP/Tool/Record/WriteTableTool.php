@@ -269,32 +269,51 @@ class WriteTableTool extends AbstractRecordTool
         
         // Prepare the data array
         $newRecordData = $data;
-        $newRecordData['pid'] = $pid;
-        
-        // Handle sorting for bottom position
-        // Only set sorting if the table has a sorting field configured and not explicitly provided
-        $sortingField = $this->tableAccessService->getSortingFieldName($table);
-        if ($position === 'bottom' && $sortingField !== null && !isset($data[$sortingField])) {
-            // Get the maximum sorting value and add some space
-            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getQueryBuilderForTable($table);
 
-            $maxSorting = $queryBuilder
-                ->select($sortingField)
-                ->from($table)
-                ->where(
-                    $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
-                )
-                ->orderBy($sortingField, 'DESC')
-                ->setMaxResults(1)
-                ->executeQuery()
-                ->fetchOne();
+        // Use DataHandler's native pid-based positioning:
+        // - Positive pid → record is placed at the TOP of that page (DataHandler default)
+        // - Negative pid (-uid) → record is placed AFTER the record with that uid
+        if ($position === 'bottom') {
+            $sortingField = $this->tableAccessService->getSortingFieldName($table);
+            if ($sortingField !== null && !isset($data[$sortingField])) {
+                // Find the last record on this page to insert after it
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable($table);
+                $queryBuilder->getRestrictions()->removeAll()
+                    ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
 
-            if ($maxSorting !== false) {
-                $newRecordData[$sortingField] = (int)$maxSorting + 128; // Add some space for future insertions
+                $lastRecord = $queryBuilder
+                    ->select('uid')
+                    ->from($table)
+                    ->where(
+                        $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
+                    )
+                    ->orderBy($sortingField, 'DESC')
+                    ->addOrderBy('uid', 'DESC')
+                    ->setMaxResults(1)
+                    ->executeQuery()
+                    ->fetchAssociative();
+
+                if ($lastRecord) {
+                    // Negative pid tells DataHandler to insert after this record
+                    $newRecordData['pid'] = -(int)$lastRecord['uid'];
+                } else {
+                    // No records exist yet — positive pid inserts as first record
+                    $newRecordData['pid'] = $pid;
+                }
+            } else {
+                $newRecordData['pid'] = $pid;
             }
+        } elseif (strpos($position, 'after:') === 0) {
+            $referenceUid = (int)substr($position, strlen('after:'));
+            // Resolve live UID to workspace UID if needed, since DataHandler works with real UIDs
+            $wsUid = $this->resolveToWorkspaceUid($table, $referenceUid);
+            $newRecordData['pid'] = -$wsUid;
+        } else {
+            // 'top', 'before:UID', or default — use positive pid (DataHandler inserts at top)
+            $newRecordData['pid'] = $pid;
         }
-        
+
         // Create a unique ID for this new record
         $newId = 'NEW' . uniqid();
         
@@ -391,24 +410,23 @@ class WriteTableTool extends AbstractRecordTool
         }
         
         
-        // Handle after/before positioning if needed
-        if (strpos($position, 'after:') === 0 || strpos($position, 'before:') === 0) {
-            $positionType = substr($position, 0, strpos($position, ':'));
-            $referenceUid = (int)substr($position, strpos($position, ':') + 1);
-            
+        // Handle before positioning via move command (after is already handled via negative pid)
+        if (strpos($position, 'before:') === 0) {
+            $referenceUid = (int)substr($position, strlen('before:'));
+
             // Set up the command map for moving the record
             $cmdMap = [];
             $cmdMap[$table][$parentUid]['move'] = [
-                'action' => $positionType,
+                'action' => 'before',
                 'target' => $referenceUid,
             ];
-            
+
             // Initialize a new DataHandler for the move operation
             $moveDataHandler = GeneralUtility::makeInstance(DataHandler::class);
             $moveDataHandler->BE_USER = $GLOBALS['BE_USER'];
             $moveDataHandler->start([], $cmdMap);
             $moveDataHandler->process_cmdmap();
-            
+
             // Check for errors in the move operation
             if (!empty($moveDataHandler->errorLog)) {
                 // The record was created but positioning failed
