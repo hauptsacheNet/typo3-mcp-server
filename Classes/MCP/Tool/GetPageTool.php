@@ -664,16 +664,8 @@ class GetPageTool extends AbstractRecordTool
         $parsedUrl = parse_url($url);
         $path = $parsedUrl['path'] ?? $url;
         
-        // Normalize the path - ensure it starts with /
-        if (!str_starts_with($path, '/')) {
-            $path = '/' . $path;
-        }
-
-        // Strip trailing slash for non-root paths (slugs in DB don't have trailing slashes)
-        // This handles the common case of URLs like /about/ vs slug /about
-        if ($path !== '/' && str_ends_with($path, '/')) {
-            $path = rtrim($path, '/');
-        }
+        // Normalize: ensure leading slash, strip trailing slash (slugs in DB have no trailing slash)
+        $path = '/' . trim($path, '/');
 
         // Special handling for home page
         if ($path === '/') {
