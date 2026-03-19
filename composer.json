@@ -21,8 +21,7 @@
         "typo3/testing-framework": "^9.2.0",
         "typo3/cms-install": "^13.4",
         "georgringer/news": "^14.0",
-        "brianium/paratest": "^7.11",
-        "typo3/tailor": "^1.0"
+        "brianium/paratest": "^7.11"
     },
     "autoload": {
         "psr-4": {
