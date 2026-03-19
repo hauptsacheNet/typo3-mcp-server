@@ -177,23 +177,23 @@ class ErrorHandlingTest extends AbstractFunctionalTest
     }
     
     /**
-     * Test that database exceptions are properly caught and converted
+     * Test that invalid filter fields are properly rejected
      */
-    public function testDatabaseExceptionHandling(): void
+    public function testInvalidFilterFieldHandling(): void
     {
         $tool = new ReadTableTool();
-        
-        // Create a condition that would cause a database error
-        // Using invalid SQL syntax in where clause
+
+        // Using a nonexistent field should produce a validation error
         $result = $tool->execute([
             'table' => 'pages',
-            'where' => 'invalid SQL syntax @@@ error'
+            'filters' => [
+                ['field' => 'nonexistent_column', 'operator' => 'eq', 'value' => 'test'],
+            ],
         ]);
-        
-        // Should handle the database error gracefully
+
+        // Should handle the error gracefully
         $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
-        // The error message should be user-friendly, not exposing SQL details
-        $this->assertStringNotContainsString('@@@ error', $result->content[0]->text);
+        $this->assertStringContainsString('unknown field', $result->content[0]->text);
     }
     
     /**
