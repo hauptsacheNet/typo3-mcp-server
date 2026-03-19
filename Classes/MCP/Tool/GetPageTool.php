@@ -664,11 +664,9 @@ class GetPageTool extends AbstractRecordTool
         $parsedUrl = parse_url($url);
         $path = $parsedUrl['path'] ?? $url;
         
-        // Normalize the path - ensure it starts with /
-        if (!str_starts_with($path, '/')) {
-            $path = '/' . $path;
-        }
-        
+        // Normalize: ensure leading slash, strip trailing slash (slugs in DB have no trailing slash)
+        $path = '/' . trim($path, '/');
+
         // Special handling for home page
         if ($path === '/') {
             // Try to find the root page from any site
