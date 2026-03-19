@@ -99,6 +99,7 @@ class ReadTableTool extends AbstractRecordTool
             ],
             'annotations' => [
                 'readOnlyHint' => true,
+                'destructiveHint' => false,
                 'idempotentHint' => true
             ]
         ];

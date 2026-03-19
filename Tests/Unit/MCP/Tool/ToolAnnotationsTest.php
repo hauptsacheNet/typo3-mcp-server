@@ -33,6 +33,7 @@ class ToolAnnotationsTest extends TestCase
         $annotations = $getPageTreeTool->getAnnotations();
         $this->assertIsArray($annotations);
         $this->assertTrue($annotations['readOnlyHint']);
+        $this->assertFalse($annotations['destructiveHint']);
         $this->assertTrue($annotations['idempotentHint']);
 
         // GetPageTool
@@ -40,10 +41,11 @@ class ToolAnnotationsTest extends TestCase
             ->disableOriginalConstructor()
             ->onlyMethods([])
             ->getMock();
-        
+
         $annotations = $getPageTool->getAnnotations();
         $this->assertIsArray($annotations);
         $this->assertTrue($annotations['readOnlyHint']);
+        $this->assertFalse($annotations['destructiveHint']);
         $this->assertTrue($annotations['idempotentHint']);
 
         // SearchTool
@@ -51,10 +53,11 @@ class ToolAnnotationsTest extends TestCase
             ->disableOriginalConstructor()
             ->onlyMethods([])
             ->getMock();
-        
+
         $annotations = $searchTool->getAnnotations();
         $this->assertIsArray($annotations);
         $this->assertTrue($annotations['readOnlyHint']);
+        $this->assertFalse($annotations['destructiveHint']);
         $this->assertTrue($annotations['idempotentHint']);
 
         // ListTablesTool
@@ -62,10 +65,11 @@ class ToolAnnotationsTest extends TestCase
             ->disableOriginalConstructor()
             ->onlyMethods([])
             ->getMock();
-        
+
         $annotations = $listTablesTool->getAnnotations();
         $this->assertIsArray($annotations);
         $this->assertTrue($annotations['readOnlyHint']);
+        $this->assertFalse($annotations['destructiveHint']);
         $this->assertTrue($annotations['idempotentHint']);
 
         // ReadTableTool
@@ -73,10 +77,11 @@ class ToolAnnotationsTest extends TestCase
             ->disableOriginalConstructor()
             ->onlyMethods([])
             ->getMock();
-        
+
         $annotations = $readTableTool->getAnnotations();
         $this->assertIsArray($annotations);
         $this->assertTrue($annotations['readOnlyHint']);
+        $this->assertFalse($annotations['destructiveHint']);
         $this->assertTrue($annotations['idempotentHint']);
 
         // GetTableSchemaTool
@@ -84,10 +89,11 @@ class ToolAnnotationsTest extends TestCase
             ->disableOriginalConstructor()
             ->onlyMethods([])
             ->getMock();
-        
+
         $annotations = $getTableSchemaTool->getAnnotations();
         $this->assertIsArray($annotations);
         $this->assertTrue($annotations['readOnlyHint']);
+        $this->assertFalse($annotations['destructiveHint']);
         $this->assertTrue($annotations['idempotentHint']);
 
         // GetFlexFormSchemaTool
@@ -95,10 +101,11 @@ class ToolAnnotationsTest extends TestCase
             ->disableOriginalConstructor()
             ->onlyMethods([])
             ->getMock();
-        
+
         $annotations = $getFlexFormSchemaTool->getAnnotations();
         $this->assertIsArray($annotations);
         $this->assertTrue($annotations['readOnlyHint']);
+        $this->assertFalse($annotations['destructiveHint']);
         $this->assertTrue($annotations['idempotentHint']);
     }
 
@@ -115,6 +122,7 @@ class ToolAnnotationsTest extends TestCase
         $annotations = $writeTableTool->getAnnotations();
         $this->assertIsArray($annotations);
         $this->assertFalse($annotations['readOnlyHint']);
+        $this->assertTrue($annotations['destructiveHint']);
         $this->assertFalse($annotations['idempotentHint']);
     }
 }

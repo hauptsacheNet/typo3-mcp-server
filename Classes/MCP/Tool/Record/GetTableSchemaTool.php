@@ -44,6 +44,7 @@ class GetTableSchemaTool extends AbstractRecordTool
             ],
             'annotations' => [
                 'readOnlyHint' => true,
+                'destructiveHint' => false,
                 'idempotentHint' => true
             ]
         ];
