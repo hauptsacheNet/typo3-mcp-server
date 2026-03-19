@@ -195,21 +195,23 @@ class ReadTableToolTest extends AbstractFunctionalTest
     }
 
     /**
-     * Test reading with custom WHERE condition
+     * Test reading with structured filters
      */
-    public function testReadWithWhereCondition(): void
+    public function testReadWithFilters(): void
     {
         $tool = new ReadTableTool();
-        
+
         $result = $tool->execute([
             'table' => 'tt_content',
-            'where' => 'CType = "textmedia"',
+            'filters' => [
+                ['field' => 'CType', 'operator' => 'eq', 'value' => 'textmedia'],
+            ],
             'includeRelations' => false
         ]);
-        
-        $this->assertFalse($result->isError);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $data = json_decode($result->content[0]->text, true);
-        
+
         // All returned records should have CType = textmedia
         foreach ($data['records'] as $record) {
             $this->assertEquals('textmedia', $record['CType']);
@@ -217,20 +219,30 @@ class ReadTableToolTest extends AbstractFunctionalTest
     }
 
     /**
-     * Test WHERE condition security (should block dangerous SQL)
+     * Test that raw WHERE parameter is no longer accepted
      */
-    public function testWhereConditionSecurity(): void
+    public function testRawWhereParameterIsIgnored(): void
     {
         $tool = new ReadTableTool();
-        
-        // Try to inject dangerous SQL
-        $result = $tool->execute([
-            'table' => 'pages',
-            'where' => 'uid = 1; DROP TABLE pages',
+
+        // Passing "where" should have no filtering effect (parameter removed)
+        $resultWithWhere = $tool->execute([
+            'table' => 'tt_content',
+            'where' => 'CType = "textmedia"',
         ]);
-        
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('disallowed SQL keywords', $result->content[0]->text);
+
+        $resultWithout = $tool->execute([
+            'table' => 'tt_content',
+        ]);
+
+        $this->assertFalse($resultWithWhere->isError, json_encode($resultWithWhere->jsonSerialize()));
+        $this->assertFalse($resultWithout->isError, json_encode($resultWithout->jsonSerialize()));
+
+        $dataWith = json_decode($resultWithWhere->content[0]->text, true);
+        $dataWithout = json_decode($resultWithout->content[0]->text, true);
+
+        // Both should return the same records since "where" is ignored
+        $this->assertEquals($dataWith['total'], $dataWithout['total']);
     }
 
     /**
@@ -253,7 +265,7 @@ class ReadTableToolTest extends AbstractFunctionalTest
         $this->assertArrayHasKey('uid', $properties);
         $this->assertArrayHasKey('limit', $properties);
         $this->assertArrayHasKey('offset', $properties);
-        $this->assertArrayHasKey('where', $properties);
+        $this->assertArrayHasKey('filters', $properties);
     }
 
     /**
