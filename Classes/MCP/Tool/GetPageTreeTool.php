@@ -8,8 +8,10 @@ use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\ArrayParameterType;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
+use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Context\Context;
@@ -115,7 +117,15 @@ class GetPageTreeTool extends AbstractRecordTool
         
         // Convert the page tree to a text-based tree with indentation
         $textTree = $this->renderTextTree($pageTree, 0, $languageUid, $recordCounts, $pluginHints);
-        
+
+        // Prepend workspace context notice
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        if ($currentWorkspace > 0) {
+            $textTree = '[WORKSPACE MODE: workspace id=' . $currentWorkspace . '. '
+                . 'Workspace-new pages and content are shown. They are drafts not yet published to live. '
+                . 'Do NOT re-create pages or content that already appear here.]' . "\n\n" . $textTree;
+        }
+
         return new CallToolResult([new TextContent($textTree)]);
     }
 
@@ -128,10 +138,17 @@ class GetPageTreeTool extends AbstractRecordTool
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
 
-        // Only apply the DeletedRestriction to filter out deleted pages
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+
+        // WorkspaceRestriction: shows live records + workspace-new + move-pointer pages,
+        // but NOT workspace overlays (t3ver_oid>0, t3ver_state≠4) — prevents duplicate
+        // pages appearing for live records that have pending workspace modifications.
+        // workspaceOL() is applied below to each record to replace live data with
+        // its workspace-modified version where applicable.
         $queryBuilder->getRestrictions()
             ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace));
 
         // Build the query
         $query = $queryBuilder->select('*')
@@ -178,15 +195,30 @@ class GetPageTreeTool extends AbstractRecordTool
         // Process the result
         $pageTree = [];
         foreach ($pages as $page) {
+            // Apply workspace overlay: replaces live record data with workspace-modified
+            // version, or returns false if the page is a delete-placeholder in this workspace.
+            if ($currentWorkspace > 0) {
+                BackendUtility::workspaceOL('pages', $page);
+                if ($page === false) {
+                    // Page is marked for deletion in this workspace — skip it
+                    continue;
+                }
+            }
+
+            // After workspaceOL(): overlay records have uid swapped to the live record's uid
+            // (t3ver_oid). Workspace-new pages (t3ver_oid=0) keep their original uid.
+            // Either way, $page['uid'] is now the correct live-facing uid.
+            $displayUid = (int)$page['uid'];
+
             $pageData = [
-                'uid' => (int)$page['uid'],
+                'uid' => $displayUid,
                 'pid' => (int)$page['pid'],
                 'title' => $page['title'],
                 'nav_title' => $page['nav_title'],
                 'hidden' => (bool)$page['hidden'],
                 'doktype' => (int)$page['doktype'],
                 'subpageCount' => 0,
-                'url' => $this->siteInformationService->generatePageUrl((int)$page['uid']),
+                'url' => $this->siteInformationService->generatePageUrl($displayUid),
             ];
 
             // Get language overlay if language specified
@@ -228,9 +260,11 @@ class GetPageTreeTool extends AbstractRecordTool
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
 
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
         $queryBuilder->getRestrictions()
             ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace));
 
         $query = $queryBuilder->count('uid')
             ->from('pages')

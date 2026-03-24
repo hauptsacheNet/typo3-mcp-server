@@ -147,7 +147,16 @@ class GetPageTool extends AbstractRecordTool
         
         // Build a text representation of the page information
         $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl, $languageId, $translations);
-        
+
+        // Prepend workspace context notice so the AI understands why content may be pending
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        if ($currentWorkspace > 0) {
+            $workspaceInfo = $this->getWorkspaceInfo($currentWorkspace);
+            $result = '[WORKSPACE MODE: "' . $workspaceInfo . '" (id=' . $currentWorkspace . '). '
+                . 'All records shown here are workspace drafts — not yet visible on the live site. '
+                . 'Do NOT re-create records that already appear in this output.]' . "\n\n" . $result;
+        }
+
         return new CallToolResult([new TextContent($result)]);
     }
 
@@ -194,8 +203,17 @@ class GetPageTool extends AbstractRecordTool
             throw new \RuntimeException('Page not found: ' . $uid);
         }
 
-        // Apply workspace transparency - return live UID for consistency
-        // For workspace versions of existing records, use the live UID
+        // Apply workspace overlay: replaces live page data with workspace-modified version
+        if ($currentWorkspace > 0) {
+            BackendUtility::workspaceOL('pages', $page);
+            if ($page === false) {
+                throw new \RuntimeException('Page ' . $uid . ' is marked for deletion in current workspace');
+            }
+        }
+
+        // Restore live UID for workspace overlay records. workspaceOL() replaces uid with the
+        // overlay record's uid — we swap back to the live uid (t3ver_oid) for consistent API output
+        // and because getPageOverlay() below expects the live uid to find translations.
         if (isset($page['t3ver_oid']) && $page['t3ver_oid'] > 0) {
             $page['uid'] = (int)$page['t3ver_oid'];
         }
@@ -397,12 +415,25 @@ class GetPageTool extends AbstractRecordTool
 
         $records = $query->executeQuery()->fetchAllAssociative();
 
-        // Apply workspace transparency - use live UID for workspace versions
-        foreach ($records as &$record) {
+        // Apply workspace overlay: replaces live record data with workspace-modified version,
+        // or removes records marked for deletion in this workspace.
+        $processedRecords = [];
+        foreach ($records as $record) {
+            if ($currentWorkspace > 0) {
+                BackendUtility::workspaceOL($table, $record);
+                if ($record === false) {
+                    // Record is marked for deletion in workspace — exclude it
+                    $totalCount = max(0, $totalCount - 1);
+                    continue;
+                }
+            }
+            // Workspace transparency: expose live UID for workspace overlay records
             if (isset($record['t3ver_oid']) && $record['t3ver_oid'] > 0) {
                 $record['uid'] = (int)$record['t3ver_oid'];
             }
+            $processedRecords[] = $record;
         }
+        $records = $processedRecords;
 
         return [
             'total' => (int)$totalCount,
@@ -455,6 +486,23 @@ class GetPageTool extends AbstractRecordTool
         ];
     }
     
+    /**
+     * Get workspace name for display
+     */
+    protected function getWorkspaceInfo(int $workspaceId): string
+    {
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('sys_workspace');
+        $queryBuilder->getRestrictions()->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+        $row = $queryBuilder->select('title')
+            ->from('sys_workspace')
+            ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($workspaceId, \Doctrine\DBAL\ParameterType::INTEGER)))
+            ->executeQuery()
+            ->fetchAssociative();
+        return $row ? (string)$row['title'] : 'Workspace #' . $workspaceId;
+    }
+
     /**
      * Format page information as readable text
      */
