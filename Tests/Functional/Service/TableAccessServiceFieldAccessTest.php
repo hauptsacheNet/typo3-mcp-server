@@ -157,4 +157,28 @@ class TableAccessServiceFieldAccessTest extends FunctionalTestCase
             }
         }
     }
+
+    /**
+     * Foreign type notation (e.g. "uid_local:type" in sys_file_reference) must
+     * return null from getTypeFieldName since it is not a local column.
+     */
+    public function testForeignTypeNotationReturnsNullForTypeField(): void
+    {
+        // sys_file_reference has ctrl.type = 'uid_local:type'
+        $typeField = $this->service->getTypeFieldName('sys_file_reference');
+
+        $this->assertNull($typeField, 'Foreign type notation should return null');
+    }
+
+    /**
+     * Tables with foreign type notation must still return a usable types list.
+     */
+    public function testForeignTypeNotationReturnsDefaultType(): void
+    {
+        $types = $this->service->getAvailableTypes('sys_file_reference');
+
+        $this->assertNotEmpty($types, 'Should return at least one default type');
+        $this->assertArrayHasKey('1', $types, 'Foreign type tables fall through to typeless default (key "1")');
+        $this->assertSame('Default', $types['1']);
+    }
 }
