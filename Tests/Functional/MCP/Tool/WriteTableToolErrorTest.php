@@ -288,8 +288,8 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         ]);
 
         $this->assertTrue($result->isError, 'File fields should be rejected');
-        $this->assertStringContainsString('File fields are not supported', $result->content[0]->text);
         $this->assertStringContainsString('media', $result->content[0]->text);
+        $this->assertStringContainsString('not accessible', $result->content[0]->text);
     }
     
     /**
