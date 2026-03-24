@@ -22,12 +22,14 @@ use Hn\McpServer\MCP\McpServerFactory;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Service\SiteInformationService;
+use Hn\McpServer\Http\CorsHeadersTrait;
 
 /**
  * MCP HTTP Endpoint for remote access
  */
 class McpEndpoint
 {
+    use CorsHeadersTrait;
     /**
      * eID entry point via __invoke method
      */
@@ -59,7 +61,7 @@ class McpEndpoint
 
             if (!$token) {
                 error_log("MCP: No token found in Authorization header or query params");
-                return $this->createUnauthorizedResponse('Missing authentication token');
+                return $this->createUnauthorizedResponse('Missing authentication token', $request);
             }
 
             // Log token for debugging (first 20 chars only for security)
@@ -70,7 +72,7 @@ class McpEndpoint
 
             if (!$tokenInfo) {
                 error_log("MCP: Token validation failed for: " . substr($token, 0, 20) . "...");
-                return $this->createUnauthorizedResponse('Invalid or expired token');
+                return $this->createUnauthorizedResponse('Invalid or expired token', $request);
             }
 
             error_log("MCP: Token validation successful for user: " . $tokenInfo['be_user_uid']);
@@ -180,6 +182,12 @@ class McpEndpoint
             return $matches[1];
         }
 
+        // Try REDIRECT_HTTP_AUTHORIZATION (Apache mod_rewrite/mod_auth_form strips and prefixes)
+        $redirectAuth = $serverParams['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+        if (!empty($redirectAuth) && preg_match('/Bearer\s+(.+)/', $redirectAuth, $matches)) {
+            return $matches[1];
+        }
+
         // Fallback to query parameter for backward compatibility
         $queryParams = $request->getQueryParams();
         return $queryParams['token'] ?? null;
@@ -188,7 +196,7 @@ class McpEndpoint
     /**
      * Create unauthorized response
      */
-    private function createUnauthorizedResponse(string $message): ResponseInterface
+    private function createUnauthorizedResponse(string $message, ServerRequestInterface $request = null): ResponseInterface
     {
         $stream = new Stream('php://temp', 'rw');
         $stream->write(json_encode([
@@ -197,11 +205,28 @@ class McpEndpoint
         ]));
         $stream->rewind();
 
-        return new Response(
+        // Build WWW-Authenticate header with resource_metadata URL (RFC 9728)
+        $wwwAuth = 'Bearer';
+        if ($request !== null) {
+            $uri = $request->getUri();
+            $baseUrl = $uri->getScheme() . '://' . $uri->getHost();
+            if ($uri->getPort() && $uri->getPort() !== 443 && $uri->getPort() !== 80) {
+                $baseUrl .= ':' . $uri->getPort();
+            }
+            $resourceMetadataUrl = $baseUrl . '/.well-known/oauth-protected-resource/mcp';
+            $wwwAuth = 'Bearer resource_metadata="' . $resourceMetadataUrl . '"';
+        }
+
+        $response = new Response(
             $stream,
             401,
-            ['Content-Type' => 'application/json']
+            [
+                'Content-Type' => 'application/json',
+                'WWW-Authenticate' => $wwwAuth,
+            ]
         );
+
+        return $this->addCorsHeaders($response);
     }
 
     /**
