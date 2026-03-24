@@ -50,10 +50,10 @@ trait ExceptionHandlerTrait
         
         // Determine user-friendly message
         $userMessage = $this->getUserFriendlyMessage($e, $operation);
-        
+
         return $this->createErrorResult($userMessage);
     }
-    
+
     /**
      * Log exception with context
      * 

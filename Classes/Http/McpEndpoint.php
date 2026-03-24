@@ -12,6 +12,7 @@ use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Context\Context;
+use TYPO3\CMS\Core\Context\FileProcessingAspect;
 use TYPO3\CMS\Core\Context\UserAspect;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Http\Response;
@@ -268,6 +269,10 @@ class McpEndpoint
             $context = GeneralUtility::makeInstance(Context::class);
             $context->setAspect('backend.user', new UserAspect($beUser));
             $context->setAspect('workspace', new WorkspaceAspect($workspaceId));
+
+            // Disable deferred image processing — DeferredBackendImageProcessor requires a full
+            // backend session with CSRF tokens, which MCP endpoints don't have (Bearer token only).
+            $context->setAspect('fileProcessing', new FileProcessingAspect(false));
 
             // Log workspace selection for debugging
             error_log("MCP: User {$userId} switched to workspace {$workspaceId}");

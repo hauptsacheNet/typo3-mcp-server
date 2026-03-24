@@ -480,6 +480,23 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
+     * Get workspace name for display
+     */
+    protected function getWorkspaceInfo(int $workspaceId): string
+    {
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('sys_workspace');
+        $queryBuilder->getRestrictions()->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+        $row = $queryBuilder->select('title')
+            ->from('sys_workspace')
+            ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($workspaceId, \Doctrine\DBAL\ParameterType::INTEGER)))
+            ->executeQuery()
+            ->fetchAssociative();
+        return $row ? (string)$row['title'] : 'Workspace #' . $workspaceId;
+    }
+
+    /**
      * Format page information as readable text
      */
     protected function formatPageInfo(array $pageData, array $recordsInfo, ?string $pageUrl = null, int $languageId = 0, array $translations = []): string

@@ -272,23 +272,22 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     }
     
     /**
-     * Test that file fields are not supported
+     * Test that file fields require valid file reference data
      */
-    public function testFileFieldsNotSupported(): void
+    public function testFileFieldsRequireValidData(): void
     {
-        // The 'media' field on pages table is type='file', which is not supported
+        // The 'media' field on pages table is type='file' — it now accepts file reference arrays
         $result = $this->tool->execute([
             'action' => 'create',
             'table' => 'pages',
             'pid' => 0,
             'data' => [
                 'title' => 'Test Page',
-                'media' => 'some_value' // File fields should be rejected regardless of value
+                'media' => 'some_value' // String values should be rejected for file fields
             ]
         ]);
 
-        $this->assertTrue($result->isError, 'File fields should be rejected');
-        $this->assertStringContainsString('File fields are not supported', $result->content[0]->text);
+        $this->assertTrue($result->isError, 'Invalid file field data should be rejected');
         $this->assertStringContainsString('media', $result->content[0]->text);
     }
     
