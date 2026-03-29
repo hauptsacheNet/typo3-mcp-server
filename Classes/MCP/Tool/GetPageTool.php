@@ -147,7 +147,9 @@ class GetPageTool extends AbstractRecordTool
         
         // Build a text representation of the page information
         $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl, $languageId, $translations);
-        
+
+        $result = $this->getWorkspaceHint() . $result;
+
         return new CallToolResult([new TextContent($result)]);
     }
 
@@ -194,8 +196,17 @@ class GetPageTool extends AbstractRecordTool
             throw new \RuntimeException('Page not found: ' . $uid);
         }
 
-        // Apply workspace transparency - return live UID for consistency
-        // For workspace versions of existing records, use the live UID
+        // Apply workspace overlay: replaces live page data with workspace-modified version
+        if ($currentWorkspace > 0) {
+            BackendUtility::workspaceOL('pages', $page);
+            if ($page === false) {
+                throw new \RuntimeException('Page ' . $uid . ' is marked for deletion in current workspace');
+            }
+        }
+
+        // Restore live UID for workspace overlay records. workspaceOL() replaces uid with the
+        // overlay record's uid — we swap back to the live uid (t3ver_oid) for consistent API output
+        // and because getPageOverlay() below expects the live uid to find translations.
         if (isset($page['t3ver_oid']) && $page['t3ver_oid'] > 0) {
             $page['uid'] = (int)$page['t3ver_oid'];
         }
@@ -397,12 +408,25 @@ class GetPageTool extends AbstractRecordTool
 
         $records = $query->executeQuery()->fetchAllAssociative();
 
-        // Apply workspace transparency - use live UID for workspace versions
-        foreach ($records as &$record) {
+        // Apply workspace overlay: replaces live record data with workspace-modified version,
+        // or removes records marked for deletion in this workspace.
+        $processedRecords = [];
+        foreach ($records as $record) {
+            if ($currentWorkspace > 0) {
+                BackendUtility::workspaceOL($table, $record);
+                if ($record === false) {
+                    // Record is marked for deletion in workspace — exclude it
+                    $totalCount = max(0, $totalCount - 1);
+                    continue;
+                }
+            }
+            // Workspace transparency: expose live UID for workspace overlay records
             if (isset($record['t3ver_oid']) && $record['t3ver_oid'] > 0) {
                 $record['uid'] = (int)$record['t3ver_oid'];
             }
+            $processedRecords[] = $record;
         }
+        $records = $processedRecords;
 
         return [
             'total' => (int)$totalCount,

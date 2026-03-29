@@ -158,5 +158,18 @@ abstract class AbstractRecordTool extends AbstractTool
         // If it's not accessible, it's effectively "hidden" from MCP
         return !$this->tableAccessService->canAccessTable($table);
     }
-    
+
+    /**
+     * Get workspace hint text to prepend to tool output.
+     * Returns empty string when in live workspace.
+     */
+    protected function getWorkspaceHint(): string
+    {
+        $info = $this->workspaceContextService->getWorkspaceInfo();
+        if ($info['is_live']) {
+            return '';
+        }
+        return '[WORKSPACE: "' . $info['title'] . '" — Edits are staged as drafts, not yet live.]' . "\n\n";
+    }
+
 }
