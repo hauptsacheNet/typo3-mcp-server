@@ -118,13 +118,7 @@ class GetPageTreeTool extends AbstractRecordTool
         // Convert the page tree to a text-based tree with indentation
         $textTree = $this->renderTextTree($pageTree, 0, $languageUid, $recordCounts, $pluginHints);
 
-        // Prepend workspace context notice
-        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-        if ($currentWorkspace > 0) {
-            $textTree = '[WORKSPACE MODE: workspace id=' . $currentWorkspace . '. '
-                . 'Workspace-new pages and content are shown. They are drafts not yet published to live. '
-                . 'Do NOT re-create pages or content that already appear here.]' . "\n\n" . $textTree;
-        }
+        $textTree = $this->getWorkspaceHint() . $textTree;
 
         return new CallToolResult([new TextContent($textTree)]);
     }

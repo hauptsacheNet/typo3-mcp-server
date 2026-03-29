@@ -148,14 +148,7 @@ class GetPageTool extends AbstractRecordTool
         // Build a text representation of the page information
         $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl, $languageId, $translations);
 
-        // Prepend workspace context notice so the AI understands why content may be pending
-        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-        if ($currentWorkspace > 0) {
-            $workspaceInfo = $this->getWorkspaceInfo($currentWorkspace);
-            $result = '[WORKSPACE MODE: "' . $workspaceInfo . '" (id=' . $currentWorkspace . '). '
-                . 'All records shown here are workspace drafts — not yet visible on the live site. '
-                . 'Do NOT re-create records that already appear in this output.]' . "\n\n" . $result;
-        }
+        $result = $this->getWorkspaceHint() . $result;
 
         return new CallToolResult([new TextContent($result)]);
     }
@@ -486,23 +479,6 @@ class GetPageTool extends AbstractRecordTool
         ];
     }
     
-    /**
-     * Get workspace name for display
-     */
-    protected function getWorkspaceInfo(int $workspaceId): string
-    {
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('sys_workspace');
-        $queryBuilder->getRestrictions()->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-        $row = $queryBuilder->select('title')
-            ->from('sys_workspace')
-            ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($workspaceId, \Doctrine\DBAL\ParameterType::INTEGER)))
-            ->executeQuery()
-            ->fetchAssociative();
-        return $row ? (string)$row['title'] : 'Workspace #' . $workspaceId;
-    }
-
     /**
      * Format page information as readable text
      */

@@ -248,27 +248,26 @@ class WorkspaceOverlayPageToolsTest extends FunctionalTestCase
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
 
         $content = $result->content[0]->text;
-        $this->assertStringContainsString('[WORKSPACE MODE:', $content);
-        $this->assertStringContainsString('workspace drafts', $content);
+        $this->assertStringContainsString('[WORKSPACE:', $content);
+        $this->assertStringContainsString('drafts', $content);
         // Notice should come before page info
-        $workspacePos = strpos($content, '[WORKSPACE MODE:');
+        $workspacePos = strpos($content, '[WORKSPACE:');
         $pageInfoPos = strpos($content, 'PAGE INFORMATION');
         $this->assertLessThan($pageInfoPos, $workspacePos, 'Workspace notice should precede page info');
     }
 
     /**
-     * GetPage workspace notice includes the workspace name and id.
+     * GetPage workspace notice includes the workspace name.
      */
-    public function testGetPageWorkspaceNoticeIncludesWorkspaceInfo(): void
+    public function testGetPageWorkspaceNoticeIncludesWorkspaceName(): void
     {
         $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
-        $workspaceId = $GLOBALS['BE_USER']->workspace;
 
         $result = $this->getPageTool->execute(['uid' => 1]);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
 
         $content = $result->content[0]->text;
-        $this->assertStringContainsString('id=' . $workspaceId, $content);
+        $this->assertStringContainsString('Test Workspace', $content);
     }
 
     // =========================================================================
@@ -456,8 +455,8 @@ class WorkspaceOverlayPageToolsTest extends FunctionalTestCase
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
 
         $content = $result->content[0]->text;
-        $this->assertStringContainsString('[WORKSPACE MODE:', $content);
-        $this->assertStringContainsString('drafts not yet published', $content);
+        $this->assertStringContainsString('[WORKSPACE:', $content);
+        $this->assertStringContainsString('drafts', $content);
     }
 
     /**
