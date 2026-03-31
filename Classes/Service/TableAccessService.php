@@ -691,8 +691,16 @@ class TableAccessService implements SingletonInterface
      */
     public function getTypeFieldName(string $table): ?string
     {
-        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
-        return $ctrl['type'] ?? null;
+        $typeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
+
+        // Foreign type notation (e.g. "uid_local:type") derives the record type
+        // from a related record's field. This is not a local column and must not
+        // be used in SQL queries or field lookups.
+        if ($typeField !== null && str_contains($typeField, ':')) {
+            return null;
+        }
+
+        return $typeField;
     }
     
     /**
@@ -876,7 +884,13 @@ class TableAccessService implements SingletonInterface
         if (!$typeField) {
             return ['1' => 'Default'];
         }
-        
+
+        // Defense-in-depth: foreign type notation should already be caught by
+        // getTypeFieldName() returning null, but guard here in case that changes.
+        if (str_contains($typeField, ':')) {
+            return ['0' => 'Default'];
+        }
+
         $typeConfig = $GLOBALS['TCA'][$table]['columns'][$typeField]['config'] ?? [];
         $items = $typeConfig['items'] ?? [];
         
