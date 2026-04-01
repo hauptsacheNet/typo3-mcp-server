@@ -41,8 +41,11 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Install tailor
+        run: composer global require typo3/tailor:^1 --prefer-dist --no-progress
+
       - name: Set version in ext_emconf.php
-        run: vendor/bin/tailor set-version "${{ steps.version.outputs.version }}" --no-docs
+        run: php ~/.composer/vendor/bin/tailor set-version "${{ steps.version.outputs.version }}" --no-docs
 
       - name: Build TER zip
         run: composer build:ter
@@ -67,7 +70,7 @@ jobs:
           RELEASE_COMMENT: ${{ github.event.release.body }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          vendor/bin/tailor ter:publish \
+          php ~/.composer/vendor/bin/tailor ter:publish \
             --path .build/mcp_server \
             --comment "$RELEASE_COMMENT" \
             "$VERSION" \
