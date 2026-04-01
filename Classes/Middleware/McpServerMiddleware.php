@@ -52,7 +52,8 @@ class McpServerMiddleware implements MiddlewareInterface
             // OAuth discovery endpoints (.well-known)
             '/.well-known/oauth-authorization-server' => GeneralUtility::makeInstance(OAuthAuthServerMetadataEndpoint::class)($request),
             '/.well-known/oauth-protected-resource' => GeneralUtility::makeInstance(OAuthResourceMetadataEndpoint::class)($request),
-            
+            '/.well-known/oauth-protected-resource/mcp' => GeneralUtility::makeInstance(OAuthResourceMetadataEndpoint::class)($request),
+
             // TYPO3 main page with OAuth continuation check
             '/typo3/main' => $this->handleOAuthCookieContinuation($request, $handler),
             
