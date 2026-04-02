@@ -16,15 +16,19 @@ trait CorsHeadersTrait
      */
     private function addCorsHeaders(ResponseInterface $response, ?string $origin = null): ResponseInterface
     {
-        // Get the actual origin from the request, or use a safe default
         $allowedOrigin = $origin ?: $this->getAllowedOrigin();
-        
+
+        // No CORS headers for non-CORS requests (no Origin header)
+        if (empty($allowedOrigin)) {
+            return $response;
+        }
+
         return $response
             ->withHeader('Access-Control-Allow-Origin', $allowedOrigin)
             ->withHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
             ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With')
             ->withHeader('Access-Control-Allow-Credentials', 'true')
-            ->withHeader('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
+            ->withHeader('Access-Control-Max-Age', '86400');
     }
     
     /**
@@ -37,8 +41,8 @@ trait CorsHeadersTrait
             return $request->getHeaderLine('Origin');
         }
 
-        // Fallback for non-CORS requests
-        return '*';
+        // No Origin header = not a CORS request
+        return '';
     }
 
     /**

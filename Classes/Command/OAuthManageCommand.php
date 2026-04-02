@@ -120,7 +120,7 @@ class OAuthManageCommand extends Command
             $output->writeln("Created: <info>$created</info>");
             $output->writeln("Expires: <info>$expires</info>");
             $output->writeln("Last Used: <info>$lastUsed</info>");
-            $output->writeln("Token: <comment>" . substr($token['token'], 0, 20) . "...</comment>");
+            $output->writeln("Token Hash: <comment>" . substr($token['token'], 0, 16) . "...</comment> (hash — original token shown only at creation)");
             $output->writeln("");
         }
 

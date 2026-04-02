@@ -15,6 +15,12 @@
 /dist
 /.build
 
+# Node / Playwright
+/Build/node_modules
+/Build/playwright-report
+/Build/test-results
+/Build/tests/playwright/.auth/login.json
+
 # other
 *.local
 .DS_Store
