@@ -99,9 +99,6 @@ class McpServerModuleController
             'createWorkspaceUrl' => $createWorkspaceUrl,
         ];
         
-        // Include JavaScript for copy functionality
-        $this->pageRenderer->addJsFile('EXT:mcp_server/Resources/Public/JavaScript/mcp-module.js');
-        
         // Include CSS for endpoint status indicators
         $this->pageRenderer->addCssFile('EXT:mcp_server/Resources/Public/Css/mcp-module.css');
         
@@ -254,7 +251,7 @@ class McpServerModuleController
                     'created' => date('Y-m-d H:i:s', $token['crdate']),
                     'expires' => date('Y-m-d H:i:s', $token['expires']),
                     'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
-                    'token_preview' => substr($token['token'], 0, 20) . '...',
+                    'token_hash' => substr($token['token'], 0, 16) . '...',
                 ];
             }, $tokens);
             
@@ -286,7 +283,7 @@ class McpServerModuleController
         return [
             'baseUrl' => $endpointUrl,
             'hasTokens' => !empty($mcpRemoteTokens),
-            'tokenUrl' => !empty($mcpRemoteTokens) ? $endpointUrl . '?token=' . array_values($mcpRemoteTokens)[0]['token'] : null,
+            'tokenUrl' => null, // Token hashed at rest — cannot reconstruct URL from stored hash
             'description' => 'For MCP clients that don\'t support Authorization headers (like mcp-remote without auth)',
         ];
     }
@@ -305,7 +302,7 @@ class McpServerModuleController
 
         return [
             'hasToken' => $hasToken,
-            'token' => $token['token'] ?? null,
+            'tokenHash' => $token['token'] ?? null, // SHA-256 hash, not usable as bearer token
             'expires' => $token['expires'] ?? null,
             'clientName' => $clientName,
         ];

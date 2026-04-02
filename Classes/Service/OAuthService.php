@@ -99,10 +99,17 @@ class OAuthService
             return null;
         }
 
-        // Verify PKCE challenge if provided
-        if (!empty($authCode['pkce_challenge']) && $codeVerifier !== null) {
+        // Verify PKCE: if a challenge was set, the verifier is mandatory
+        if (!empty($authCode['pkce_challenge'])) {
+            if ($codeVerifier === null) {
+                return null;
+            }
+            // Only S256 is supported
+            if (($authCode['pkce_challenge_method'] ?? '') !== 'S256') {
+                return null;
+            }
             $computedChallenge = rtrim(strtr(base64_encode(hash('sha256', $codeVerifier, true)), '+/', '-_'), '=');
-            if ($computedChallenge !== $authCode['pkce_challenge']) {
+            if (!hash_equals($computedChallenge, $authCode['pkce_challenge'])) {
                 return null;
             }
         }
@@ -127,13 +134,14 @@ class OAuthService
                 'pid' => 0,
                 'tstamp' => time(),
                 'crdate' => time(),
-                'token' => $accessToken,
+                'token' => $this->hashToken($accessToken),
                 'be_user_uid' => $authCode['be_user_uid'],
                 'client_name' => $authCode['client_name'],
                 'expires' => $expires,
                 'last_used' => time(),
                 'created_ip' => $clientIp,
                 'last_used_ip' => $clientIp,
+                'token_version' => 1,
             ]
         );
 
@@ -158,35 +166,76 @@ class OAuthService
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('tx_mcpserver_access_tokens');
 
+        // Try hashed lookup first (token_version=1, post-migration)
         $queryBuilder = $connection->createQueryBuilder();
         $tokenRecord = $queryBuilder
             ->select('*')
             ->from('tx_mcpserver_access_tokens')
             ->where(
-                $queryBuilder->expr()->eq('token', $queryBuilder->createNamedParameter($token)),
+                $queryBuilder->expr()->eq('token', $queryBuilder->createNamedParameter($this->hashToken($token))),
                 $queryBuilder->expr()->gt('expires', $queryBuilder->createNamedParameter(time())),
                 $queryBuilder->expr()->eq('deleted', $queryBuilder->createNamedParameter(0))
             )
             ->executeQuery()
             ->fetchAssociative();
 
+        // Fallback: try plaintext lookup for pre-migration tokens (token_version=0)
+        if (!$tokenRecord) {
+            $queryBuilder = $connection->createQueryBuilder();
+            $tokenRecord = $queryBuilder
+                ->select('*')
+                ->from('tx_mcpserver_access_tokens')
+                ->where(
+                    $queryBuilder->expr()->eq('token', $queryBuilder->createNamedParameter($token)),
+                    $queryBuilder->expr()->eq('token_version', $queryBuilder->createNamedParameter(0)),
+                    $queryBuilder->expr()->gt('expires', $queryBuilder->createNamedParameter(time())),
+                    $queryBuilder->expr()->eq('deleted', $queryBuilder->createNamedParameter(0))
+                )
+                ->executeQuery()
+                ->fetchAssociative();
+        }
+
         if (!$tokenRecord) {
             return null;
         }
 
-        // Update last used timestamp and IP
-        $clientIp = '';
-        if ($request !== null) {
-            $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
+        // Auto-upgrade version-0 (plaintext) tokens to hashed on successful validation.
+        // Best-effort: if the upgrade fails, authentication still succeeds and the
+        // upgrade will be retried on next validation or handled by the upgrade wizard.
+        if ((int)($tokenRecord['token_version'] ?? 0) === 0) {
+            try {
+                $upgradeBuilder = $connection->createQueryBuilder();
+                $upgradeBuilder
+                    ->update('tx_mcpserver_access_tokens')
+                    ->where(
+                        $upgradeBuilder->expr()->eq('uid', $upgradeBuilder->createNamedParameter($tokenRecord['uid'])),
+                        $upgradeBuilder->expr()->eq('token_version', $upgradeBuilder->createNamedParameter(0))
+                    )
+                    ->set('token', $this->hashToken($token))
+                    ->set('token_version', 1)
+                    ->executeStatement();
+            } catch (\Throwable $e) {
+                // Non-fatal: token is valid, upgrade will be retried later
+            }
         }
 
-        $queryBuilder = $connection->createQueryBuilder();
-        $queryBuilder
-            ->update('tx_mcpserver_access_tokens')
-            ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($tokenRecord['uid'])))
-            ->set('last_used', time())
-            ->set('last_used_ip', $clientIp)
-            ->executeStatement();
+        // Update last used timestamp and IP (best-effort, must not block authentication)
+        try {
+            $clientIp = '';
+            if ($request !== null) {
+                $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
+            }
+
+            $queryBuilder = $connection->createQueryBuilder();
+            $queryBuilder
+                ->update('tx_mcpserver_access_tokens')
+                ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($tokenRecord['uid'])))
+                ->set('last_used', time())
+                ->set('last_used_ip', $clientIp)
+                ->executeStatement();
+        } catch (\Throwable $e) {
+            // Non-fatal: audit trail update failure must not prevent authentication
+        }
 
         return [
             'be_user_uid' => (int)$tokenRecord['be_user_uid'],
@@ -347,7 +396,7 @@ class OAuthService
             'registration_endpoint' => $baseUrl . '/mcp_oauth/register',
             'response_types_supported' => ['code'],
             'grant_types_supported' => ['authorization_code'],
-            'code_challenge_methods_supported' => ['S256', 'plain'],
+            'code_challenge_methods_supported' => ['S256'],
             'token_endpoint_auth_methods_supported' => ['none', 'client_secret_post'],
             'registration_endpoint_auth_methods_supported' => ['none'],
         ];
@@ -377,13 +426,14 @@ class OAuthService
                 'pid' => 0,
                 'tstamp' => time(),
                 'crdate' => time(),
-                'token' => $accessToken,
+                'token' => $this->hashToken($accessToken),
                 'be_user_uid' => $beUserId,
                 'client_name' => $clientName,
                 'expires' => $expires,
                 'last_used' => time(),
                 'created_ip' => $clientIp,
                 'last_used_ip' => $clientIp,
+                'token_version' => 1,
             ]
         );
 
@@ -396,5 +446,14 @@ class OAuthService
     private function generateSecureToken(): string
     {
         return bin2hex(random_bytes(32));
+    }
+
+    /**
+     * Hash a token for storage. Uses SHA-256 which is appropriate for
+     * high-entropy random tokens (unlike passwords, these don't need bcrypt).
+     */
+    private function hashToken(string $token): string
+    {
+        return hash('sha256', $token);
     }
 }
