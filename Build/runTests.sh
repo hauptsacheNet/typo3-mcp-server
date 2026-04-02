@@ -38,7 +38,7 @@ usage() {
 Usage: $(basename "$0") [options] [-- phpunit-args]
 
 Options:
-    -p <version>    PHP version: 8.2, 8.3 (default), 8.4
+    -p <version>    PHP version: 8.2, 8.3 (default), 8.4, 8.5
     -d <dbms>       Database backend: sqlite (default), mysql, mariadb, postgres
     -s <suite>      Test suite: functional (default), lint, e2e
     -h, --help      Show this help
@@ -94,8 +94,8 @@ IMAGE="php:${PHP_VERSION}-cli"
 
 # Validate inputs
 case "${PHP_VERSION}" in
-    8.2|8.3|8.4) ;;
-    *) echo "Error: unsupported PHP version '${PHP_VERSION}'. Use 8.2, 8.3, or 8.4." >&2; exit 1 ;;
+    8.2|8.3|8.4|8.5) ;;
+    *) echo "Error: unsupported PHP version '${PHP_VERSION}'. Use 8.2, 8.3, 8.4, or 8.5." >&2; exit 1 ;;
 esac
 
 case "${DBMS}" in

@@ -18,10 +18,10 @@
         "typo3/cms-workspaces": "^13.4"
     },
     "require-dev": {
-        "typo3/testing-framework": "^9.2.0",
+        "typo3/testing-framework": "^8.2 || ^9.2",
         "typo3/cms-install": "^13.4",
         "georgringer/news": "^14.0",
-        "brianium/paratest": "^7.11"
+        "brianium/paratest": "^7.4"
     },
     "autoload": {
         "psr-4": {
