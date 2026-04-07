@@ -644,6 +644,56 @@ class GetPageToolTest extends FunctionalTestCase
     }
 
     /**
+     * Test URL resolution with domain but no protocol (e.g. www.example.com)
+     */
+    public function testUrlResolutionWithDomainWithoutProtocol(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
+
+        // Test with bare domain (no protocol) - should resolve to home page
+        $result = $tool->execute([
+            'url' => 'example.com'
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString('UID: 1', $content);
+        $this->assertStringContainsString('Title: Home', $content);
+
+        // Test with bare domain + path (no protocol)
+        $result = $tool->execute([
+            'url' => 'example.com/about'
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString('UID: 2', $content);
+        $this->assertStringContainsString('Title: About', $content);
+    }
+
+    /**
+     * Test URL resolution with full URL but no trailing slash (e.g. https://example.com)
+     */
+    public function testUrlResolutionWithFullUrlWithoutTrailingSlash(): void
+    {
+        $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
+        $languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $tool = new GetPageTool($siteInformationService, $languageService);
+
+        // Test with full URL without trailing slash - should resolve to home page
+        $result = $tool->execute([
+            'url' => 'https://example.com'
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString('UID: 1', $content);
+        $this->assertStringContainsString('Title: Home', $content);
+    }
+
+    /**
      * Test URL resolution with language parameter
      */
     public function testUrlResolutionWithLanguage(): void
