@@ -7,6 +7,7 @@ namespace Hn\McpServer\Utility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use Hn\McpServer\Service\SelectItemResolver;
 use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
 
@@ -84,30 +85,57 @@ class TcaFormattingUtility
                     $result .= " [MM table: " . $config['MM'] . "]";
                 }
 
-                // Add select options if available
-                if (isset($config['items']) && is_array($config['items'])) {
-                    $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
-                    $parsed = $tableAccessService->parseSelectItems($config['items'], false); // Include dividers
+                // Resolve select options using FormDataCompiler (handles static items, foreign_table, itemsProcFunc, TSconfig)
+                $resolved = null;
+                if (!empty($table) && !empty($fieldName)) {
+                    $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
+                    $resolved = $resolver->resolveSelectItems($table, $fieldName);
+                }
 
-                    // Check if this field has authMode restrictions
+                if ($resolved !== null && !empty($resolved['values'])) {
+                    // Use dynamically resolved items
+                    $hasAuthMode = !empty($config['authMode']);
+                    $beUser = $GLOBALS['BE_USER'] ?? null;
+                    $isAdmin = $beUser && $beUser->isAdmin();
+
+                    $options = [];
+                    foreach ($resolved['values'] as $value) {
+                        // Filter by authMode for non-admin users
+                        if ($hasAuthMode && !$isAdmin && $beUser) {
+                            if (!$beUser->checkAuthMode($table, $fieldName, $value)) {
+                                continue;
+                            }
+                        }
+
+                        $label = $resolved['labels'][$value] ?? '';
+                        if ($label) {
+                            $translatedLabel = TableAccessService::translateLabel($label);
+                            $options[] = $value . " (" . $translatedLabel . ")";
+                        }
+                    }
+
+                    if (!empty($options)) {
+                        $result .= " [Options: " . implode(', ', $options) . "]";
+                    }
+                } elseif (isset($config['items']) && is_array($config['items'])) {
+                    // Fallback: use static TCA items
+                    $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+                    $parsed = $tableAccessService->parseSelectItems($config['items'], false);
+
                     $hasAuthMode = !empty($config['authMode']);
                     $beUser = $GLOBALS['BE_USER'] ?? null;
                     $isAdmin = $beUser && $beUser->isAdmin();
 
                     $options = [];
                     foreach ($parsed['values'] as $value) {
-                        // Skip dividers
                         if ($value === '--div--') {
                             continue;
                         }
-
-                        // Filter by authMode for non-admin users
                         if ($hasAuthMode && !$isAdmin && $beUser && !empty($table) && !empty($fieldName)) {
                             if (!$beUser->checkAuthMode($table, $fieldName, $value)) {
-                                continue; // User doesn't have permission for this value
+                                continue;
                             }
                         }
-
                         $label = $parsed['labels'][$value] ?? '';
                         if ($label) {
                             $translatedLabel = TableAccessService::translateLabel($label);
