@@ -59,9 +59,27 @@ class ReadTableTool extends AbstractRecordTool
                 'type' => 'integer',
                 'description' => 'Filter by record UID (use pid filter instead to read multiple records of a page)',
             ],
-            'where' => [
-                'type' => 'string',
-                'description' => 'SQL WHERE condition for filtering (without the WHERE keyword)',
+            'filters' => [
+                'type' => 'array',
+                'description' => 'Filter conditions applied with AND. Each filter has field, operator, and optionally value.',
+                'items' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'field' => [
+                            'type' => 'string',
+                            'description' => 'Column name to filter on',
+                        ],
+                        'operator' => [
+                            'type' => 'string',
+                            'description' => 'Comparison operator',
+                            'enum' => self::ALLOWED_OPERATORS,
+                        ],
+                        'value' => [
+                            'description' => 'Value to compare against (not needed for isNull/isNotNull). Use array for in/notIn.',
+                        ],
+                    ],
+                    'required' => ['field', 'operator'],
+                ],
             ],
             'limit' => [
                 'type' => 'integer',
@@ -122,7 +140,7 @@ class ReadTableTool extends AbstractRecordTool
             // Extract and validate parameters
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
-        $condition = $params['where'] ?? '';
+        $filters = $params['filters'] ?? [];
         $limit = isset($params['limit']) ? (int)$params['limit'] : 20;
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
         $language = $params['language'] ?? null;
@@ -159,7 +177,7 @@ class ReadTableTool extends AbstractRecordTool
             $table,
             $pid,
             $uid,
-            $condition,
+            $filters,
             $limit,
             $offset,
             $languageUid,
@@ -185,7 +203,7 @@ class ReadTableTool extends AbstractRecordTool
         string $table,
         ?int $pid,
         ?int $uid,
-        string $condition,
+        array $filters,
         int $limit,
         int $offset,
         ?int $languageUid = null,
@@ -248,25 +266,9 @@ class ReadTableTool extends AbstractRecordTool
             }
         }
 
-        // Apply custom condition if specified
-        if (!empty($condition)) {
-            // Basic SQL injection protection
-            $disallowedKeywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'TRUNCATE', 'ALTER', 'CREATE'];
-            $containsDisallowed = false;
-
-            foreach ($disallowedKeywords as $keyword) {
-                if (stripos($condition, $keyword) !== false) {
-                    $containsDisallowed = true;
-                    break;
-                }
-            }
-
-            if ($containsDisallowed) {
-                throw new \InvalidArgumentException('The condition contains disallowed SQL keywords');
-            }
-
-            // Add the condition directly
-            $queryBuilder->andWhere($condition);
+        // Apply structured filters
+        if (!empty($filters)) {
+            $this->applyFilters($queryBuilder, $filters, $table);
         }
 
         // Apply default sorting from TCA
@@ -329,8 +331,8 @@ class ReadTableTool extends AbstractRecordTool
             }
         }
 
-        if (!empty($condition)) {
-            $countQueryBuilder->andWhere($condition);
+        if (!empty($filters)) {
+            $this->applyFilters($countQueryBuilder, $filters, $table);
         }
 
         try {
@@ -608,6 +610,141 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         return $normalized;
+    }
+
+    private const ALLOWED_OPERATORS = [
+        'eq', 'neq', 'lt', 'lte', 'gt', 'gte',
+        'like', 'notLike',
+        'in', 'notIn',
+        'isNull', 'isNotNull',
+    ];
+
+    /**
+     * Apply structured filters to a query builder using parameterized queries.
+     *
+     * @param QueryBuilder $queryBuilder
+     * @param array $filters Array of filter definitions with field, operator, value
+     * @param string $table Table name for field validation
+     * @throws ValidationException
+     */
+    protected function applyFilters(QueryBuilder $queryBuilder, array $filters, string $table): void
+    {
+        // Build set of valid field names for this table (TCA columns + essential fields)
+        $essentialFields = $this->tableAccessService->getEssentialFields($table);
+        $validFields = array_merge(array_keys($GLOBALS['TCA'][$table]['columns'] ?? []), $essentialFields);
+        $validFieldsLower = [];
+        foreach ($validFields as $fieldName) {
+            $validFieldsLower[strtolower($fieldName)] = $fieldName;
+        }
+
+        // Operators that require a value
+        $valueRequiredOperators = ['eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'like', 'notLike', 'in', 'notIn'];
+
+        foreach ($filters as $index => $filter) {
+            if (!is_array($filter)) {
+                throw new ValidationException(["Filter at index {$index} must be an object"]);
+            }
+
+            $field = $filter['field'] ?? null;
+            $operator = $filter['operator'] ?? null;
+            $value = $filter['value'] ?? null;
+
+            if (empty($field) || !is_string($field)) {
+                throw new ValidationException(["Filter at index {$index} requires a 'field' string"]);
+            }
+
+            if (empty($operator) || !is_string($operator)) {
+                throw new ValidationException(["Filter at index {$index} requires an 'operator' string"]);
+            }
+
+            if (!in_array($operator, self::ALLOWED_OPERATORS, true)) {
+                throw new ValidationException(["Filter at index {$index} has invalid operator '{$operator}'. Allowed: " . implode(', ', self::ALLOWED_OPERATORS)]);
+            }
+
+            // Validate that comparison operators have a value
+            if (in_array($operator, $valueRequiredOperators, true) && $value === null) {
+                throw new ValidationException(["Filter at index {$index}: operator '{$operator}' requires a 'value'"]);
+            }
+
+            // Validate field exists in table (case-insensitive lookup)
+            $resolvedField = $validFieldsLower[strtolower($field)] ?? null;
+            if ($resolvedField === null) {
+                throw new ValidationException(["Filter at index {$index} references unknown field '{$field}' in table '{$table}'"]);
+            }
+
+            // Verify the field is accessible (not excluded by TSconfig, permissions, etc.)
+            // Essential fields (uid, pid, type, label, etc.) are always allowed for filtering
+            if (!in_array($resolvedField, $essentialFields, true)
+                && !$this->tableAccessService->canAccessField($table, $resolvedField)
+            ) {
+                throw new ValidationException(["Filter at index {$index} references inaccessible field '{$resolvedField}' in table '{$table}'"]);
+            }
+
+            // Determine the parameter type from the actual PHP type — no string coercion
+            $paramType = ParameterType::STRING;
+            if (is_int($value)) {
+                $paramType = ParameterType::INTEGER;
+            } elseif (is_bool($value)) {
+                $paramType = ParameterType::INTEGER;
+                $value = (int)$value;
+            }
+
+            // Build the expression
+            $expr = $queryBuilder->expr();
+            switch ($operator) {
+                case 'eq':
+                    $queryBuilder->andWhere($expr->eq($resolvedField, $queryBuilder->createNamedParameter($value, $paramType)));
+                    break;
+                case 'neq':
+                    $queryBuilder->andWhere($expr->neq($resolvedField, $queryBuilder->createNamedParameter($value, $paramType)));
+                    break;
+                case 'lt':
+                    $queryBuilder->andWhere($expr->lt($resolvedField, $queryBuilder->createNamedParameter($value, $paramType)));
+                    break;
+                case 'lte':
+                    $queryBuilder->andWhere($expr->lte($resolvedField, $queryBuilder->createNamedParameter($value, $paramType)));
+                    break;
+                case 'gt':
+                    $queryBuilder->andWhere($expr->gt($resolvedField, $queryBuilder->createNamedParameter($value, $paramType)));
+                    break;
+                case 'gte':
+                    $queryBuilder->andWhere($expr->gte($resolvedField, $queryBuilder->createNamedParameter($value, $paramType)));
+                    break;
+                case 'like':
+                    $queryBuilder->andWhere($expr->like($resolvedField, $queryBuilder->createNamedParameter($value)));
+                    break;
+                case 'notLike':
+                    $queryBuilder->andWhere($expr->notLike($resolvedField, $queryBuilder->createNamedParameter($value)));
+                    break;
+                case 'in':
+                case 'notIn':
+                    if (!is_array($value)) {
+                        throw new ValidationException(["Filter at index {$index}: '{$operator}' operator requires an array value"]);
+                    }
+                    $arrayType = $this->isIntegerArray($value)
+                        ? \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY
+                        : \TYPO3\CMS\Core\Database\Connection::PARAM_STR_ARRAY;
+                    $exprMethod = $operator === 'in' ? 'in' : 'notIn';
+                    $queryBuilder->andWhere($expr->$exprMethod(
+                        $resolvedField,
+                        $queryBuilder->createNamedParameter($value, $arrayType)
+                    ));
+                    break;
+                case 'isNull':
+                    $queryBuilder->andWhere($expr->isNull($resolvedField));
+                    break;
+                case 'isNotNull':
+                    $queryBuilder->andWhere($expr->isNotNull($resolvedField));
+                    break;
+            }
+        }
+    }
+
+    private function isIntegerArray(array $values): bool
+    {
+        return !empty($values) && array_reduce($values, static function (bool $carry, $v): bool {
+            return $carry && is_int($v);
+        }, true);
     }
 
     /**
