@@ -684,10 +684,25 @@ class GetPageTool extends AbstractRecordTool
     {
         $siteFinder = GeneralUtility::makeInstance(SiteFinder::class);
         
+        // Normalize URLs without a scheme: if the input starts with a known site domain,
+        // prepend https:// so parse_url extracts the host correctly.
+        // This handles cases like "www.example.com" or "www.example.com/about".
+        if (!str_contains($url, '://') && !str_starts_with($url, '/')) {
+            foreach ($siteFinder->getAllSites() as $site) {
+                $siteHost = $site->getBase()->getHost();
+                if (!empty($siteHost) && str_starts_with($url, $siteHost)) {
+                    $url = 'https://' . $url;
+                    break;
+                }
+            }
+        }
+
         // Try to parse as full URL first
         $parsedUrl = parse_url($url);
-        $path = $parsedUrl['path'] ?? $url;
-        
+
+        // When a scheme+host URL has no path (e.g. "https://example.com"), treat it as home page
+        $path = $parsedUrl['path'] ?? '/';
+
         // Normalize: ensure leading slash, strip trailing slash (slugs in DB have no trailing slash)
         $path = '/' . trim($path, '/');
 
