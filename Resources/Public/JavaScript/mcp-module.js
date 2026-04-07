@@ -822,6 +822,8 @@ function checkMcpEndpointAuth(element, endpoint) {
     element.classList.remove('success', 'warning', 'error');
     
     // Create a test request with a dummy Bearer token
+    // Use credentials: 'omit' to avoid sending HTTP basic auth credentials,
+    // which would be replaced by our Bearer header and cause logout issues
     fetch(endpoint + '?test=auth', {
         method: 'GET',
         headers: {
@@ -829,7 +831,7 @@ function checkMcpEndpointAuth(element, endpoint) {
             'Authorization': 'Bearer test-header-check-12345'
         },
         mode: 'cors',
-        credentials: 'same-origin'
+        credentials: 'omit'
     })
     .then(response => {
         // We expect this to fail with 401 since it's a fake token
@@ -854,8 +856,12 @@ function checkMcpEndpointAuth(element, endpoint) {
         }).catch(() => {
             // If JSON parsing fails, check the status code
             if (response.status === 401) {
-                // This is expected for a fake token, but we need to know if headers were passed
-                setEndpointStatus(element, 'warning', 'MCP endpoint is reachable but Authorization header status unknown');
+                // A 401 may indicate HTTP basic auth is blocking the request
+                setEndpointStatus(element, 'warning', 'MCP endpoint returned 401 - if behind HTTP basic auth, the Authorization header may be blocked');
+                const warningDiv = document.getElementById('auth-header-warning');
+                if (warningDiv) {
+                    warningDiv.style.display = 'block';
+                }
             } else {
                 setEndpointStatus(element, 'error', `MCP endpoint returned ${response.status} ${response.statusText}`);
             }

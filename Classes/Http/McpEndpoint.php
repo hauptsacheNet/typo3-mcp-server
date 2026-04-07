@@ -322,12 +322,6 @@ class McpEndpoint
             $receivedAuthHeader = true;
         }
 
-        $response = GeneralUtility::makeInstance(Response::class)
-            ->withHeader('Content-Type', 'application/json; charset=utf-8')
-            ->withHeader('Access-Control-Allow-Origin', '*')
-            ->withHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-            ->withStatus(200);
-
         $responseData = [
             'test' => 'auth',
             'headers_received' => $headers,
@@ -339,6 +333,11 @@ class McpEndpoint
         $body = GeneralUtility::makeInstance(Stream::class, 'php://temp', 'rw');
         $body->write(json_encode($responseData, JSON_PRETTY_PRINT));
 
-        return $response->withBody($body);
+        $response = GeneralUtility::makeInstance(Response::class)
+            ->withHeader('Content-Type', 'application/json; charset=utf-8')
+            ->withStatus(200)
+            ->withBody($body);
+
+        return $this->addCorsHeaders($response);
     }
 }
