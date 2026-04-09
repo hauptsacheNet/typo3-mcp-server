@@ -51,20 +51,23 @@ class TableAccessService implements SingletonInterface
     public function getAccessibleTables(bool $includeReadOnly = false): array
     {
         $accessibleTables = [];
-        
+
         foreach (array_keys($GLOBALS['TCA']) as $table) {
-            $accessInfo = $this->getTableAccessInfo($table);
-            
+            // When including read-only tables, don't require workspace capability
+            // This allows listing read-only tables like sys_file
+            $requireWorkspaceCapability = !$includeReadOnly;
+            $accessInfo = $this->getTableAccessInfo($table, $requireWorkspaceCapability);
+
             if ($accessInfo['accessible']) {
                 // Skip read-only tables if not requested
                 if (!$includeReadOnly && $accessInfo['read_only']) {
                     continue;
                 }
-                
+
                 $accessibleTables[$table] = $accessInfo;
             }
         }
-        
+
         return $accessibleTables;
     }
     
@@ -192,15 +195,18 @@ class TableAccessService implements SingletonInterface
      */
     public function validateTableAccess(string $table, string $operation = 'read'): void
     {
-        $accessInfo = $this->getTableAccessInfo($table);
-        
+        // For read operations, don't require workspace capability
+        // This allows reading read-only tables like sys_file that aren't workspace-capable
+        $requireWorkspaceCapability = ($operation !== 'read');
+        $accessInfo = $this->getTableAccessInfo($table, $requireWorkspaceCapability);
+
         if (!$accessInfo['accessible']) {
             $reasons = implode(', ', $accessInfo['reasons']);
             throw new \InvalidArgumentException(
                 "Cannot access table '{$table}': {$reasons}"
             );
         }
-        
+
         // Check specific operation permission
         if ($operation !== 'read' && !$accessInfo['permissions'][$operation]) {
             throw new \InvalidArgumentException(
@@ -418,15 +424,18 @@ class TableAccessService implements SingletonInterface
             return true;
         }
         
-        // Root-level tables that are dangerous to modify
-        if (!empty($GLOBALS['TCA'][$table]['ctrl']['rootLevel'])) {
+        // Root-level-only tables (rootLevel=1) are dangerous to modify
+        // rootLevel=-1 means "can exist on any page including root" and is fine
+        $rootLevel = $GLOBALS['TCA'][$table]['ctrl']['rootLevel'] ?? 0;
+        if ($rootLevel === 1 || $rootLevel === true) {
             // Allow some safe root-level tables
             $allowedRootTables = [
+                'sys_file', // File records - read-only, needed for file reference resolution
                 'sys_file_storage', // File storage configuration
                 'sys_domain', // Domain configuration
                 'sys_category', // Category system - safe for read operations
             ];
-            
+
             if (!in_array($table, $allowedRootTables)) {
                 return true;
             }
@@ -447,7 +456,6 @@ class TableAccessService implements SingletonInterface
             'cache_hash', // Cache tables - managed by system
             'sys_be_shortcuts', // User shortcuts - user-specific
             'sys_news', // System news - admin-only
-            'sys_file_reference', // FAL reference table - file handling not supported yet
         ];
         
         if (in_array($table, $restrictedTables)) {
@@ -599,18 +607,11 @@ class TableAccessService implements SingletonInterface
     {
         $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
 
-        // Block file fields - file handling not supported yet
         $fieldType = $fieldConfig['config']['type'] ?? '';
-        if ($fieldType === 'file') {
-            return false;
-        }
 
-        // Block inline relations where foreign table isn't writable
-        // This automatically filters out relations to:
-        // - Tables without workspace support
-        // - Read-only tables (sys_file, sys_file_metadata, etc.)
-        // - Tables with no user access
-        if ($fieldType === 'inline') {
+        // Block inline/file relations where foreign table isn't writable
+        // type=file is functionally an inline relation to sys_file_reference (expanded by TcaPreparation)
+        if ($fieldType === 'inline' || $fieldType === 'file') {
             $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
             if ($foreignTable && !$this->canAccessTable($foreignTable)) {
                 return false;

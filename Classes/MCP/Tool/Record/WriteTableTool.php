@@ -717,12 +717,8 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
 
-            // Check if field is accessible (filters out file fields and inaccessible inline relations)
+            // Check if field is accessible (filters out inaccessible inline relations)
             if (!$this->tableAccessService->canAccessField($table, $fieldName)) {
-                $fieldType = $fieldConfig['config']['type'] ?? '';
-                if ($fieldType === 'file') {
-                    return "Field '{$fieldName}': File fields are not supported. Please use TYPO3 backend for file operations.";
-                }
                 return "Field '{$fieldName}' is not accessible";
             }
 
@@ -748,8 +744,8 @@ class WriteTableTool extends AbstractRecordTool
                 }
             }
             
-            // Validate inline field type
-            if ($fieldConfig['config']['type'] === 'inline') {
+            // Validate inline/file field type
+            if ($fieldConfig['config']['type'] === 'inline' || $fieldConfig['config']['type'] === 'file') {
                 // Validate inline relation data
                 $validationError = $this->validateInlineRelationData($fieldConfig, $value);
                 if ($validationError !== null) {
@@ -847,7 +843,8 @@ class WriteTableTool extends AbstractRecordTool
         
         foreach ($data as $fieldName => $value) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
-            if ($fieldConfig && ($fieldConfig['config']['type'] ?? '') === 'inline') {
+            $fieldType = $fieldConfig['config']['type'] ?? '';
+            if ($fieldConfig && ($fieldType === 'inline' || $fieldType === 'file')) {
                 $inlineRelations[$fieldName] = [
                     'config' => $fieldConfig['config'],
                     'value' => $value
@@ -856,10 +853,10 @@ class WriteTableTool extends AbstractRecordTool
                 unset($data[$fieldName]);
             }
         }
-        
+
         return $inlineRelations;
     }
-    
+
     /**
      * Process inline relations for DataHandler
      */
@@ -909,8 +906,9 @@ class WriteTableTool extends AbstractRecordTool
         ?int $liveUid = null
     ): void {
         // If we're updating, handle existing relations
+        $foreignMatchFields = $config['foreign_match_fields'] ?? [];
         if ($liveUid !== null) {
-            $this->handleExistingEmbeddedRelations($foreignTable, $foreignField, $liveUid, $records);
+            $this->handleExistingEmbeddedRelations($foreignTable, $foreignField, $liveUid, $records, $foreignMatchFields);
         }
         
         foreach ($records as $index => $recordData) {
@@ -925,12 +923,19 @@ class WriteTableTool extends AbstractRecordTool
             // Remove it if it was accidentally included
             unset($recordData[$foreignField]);
             $recordData['pid'] = $pid;
-            
+
+            // Set foreign_match_fields (e.g., tablenames/fieldname for sys_file_reference)
+            if (!empty($config['foreign_match_fields'])) {
+                foreach ($config['foreign_match_fields'] as $matchField => $matchValue) {
+                    $recordData[$matchField] = $matchValue;
+                }
+            }
+
             // If we have a sorting field, set it
             if (isset($config['foreign_sortby'])) {
                 $recordData[$config['foreign_sortby']] = ($index + 1) * 256;
             }
-            
+
             // Add to data map
             if (!isset($dataMap[$foreignTable])) {
                 $dataMap[$foreignTable] = [];
@@ -1025,25 +1030,33 @@ class WriteTableTool extends AbstractRecordTool
         string $foreignTable,
         string $foreignField,
         int $parentUid,
-        array $newRecords
+        array $newRecords,
+        array $foreignMatchFields = []
     ): void {
         // Get all existing child records for this parent
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable($foreignTable);
-        
+
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
-        
-        $existingRecords = $queryBuilder
+
+        $queryBuilder
             ->select('uid')
             ->from($foreignTable)
             ->where(
                 $queryBuilder->expr()->eq($foreignField, $queryBuilder->createNamedParameter($parentUid, ParameterType::INTEGER))
-            )
-            ->executeQuery()
-            ->fetchAllAssociative();
+            );
+
+        // Scope to specific field when foreign_match_fields are present (e.g., sys_file_reference)
+        foreach ($foreignMatchFields as $matchField => $matchValue) {
+            $queryBuilder->andWhere(
+                $queryBuilder->expr()->eq($matchField, $queryBuilder->createNamedParameter($matchValue))
+            );
+        }
+
+        $existingRecords = $queryBuilder->executeQuery()->fetchAllAssociative();
         
         if (!empty($existingRecords)) {
             // Extract UIDs of new records that have UIDs (updates)
@@ -1150,9 +1163,10 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
 
-            // Check if this is an inline relation field — those genuinely use arrays
+            // Check if this is an inline/file relation field — those genuinely use arrays
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
-            if ($fieldConfig && ($fieldConfig['config']['type'] ?? '') === 'inline') {
+            $fieldType = $fieldConfig['config']['type'] ?? '';
+            if ($fieldConfig && ($fieldType === 'inline' || $fieldType === 'file')) {
                 continue;
             }
 

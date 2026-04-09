@@ -1,3 +1,4 @@
 "sys_file"
-,"uid","pid","name","identifier","storage","type","size"
-,1,0,"test.jpg","/test.jpg",1,2,123456
+,"uid","pid","name","identifier","storage","type","size","mime_type"
+,1,0,"test.jpg","/user_upload/test.jpg",1,2,123456,"image/jpeg"
+,2,0,"document.pdf","/user_upload/document.pdf",1,5,654321,"application/pdf"

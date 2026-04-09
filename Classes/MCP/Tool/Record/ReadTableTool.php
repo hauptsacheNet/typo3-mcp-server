@@ -8,6 +8,7 @@ use Doctrine\DBAL\ParameterType;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Mcp\Types\CallToolResult;
+use TYPO3\CMS\Core\Database\Connection;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
@@ -663,7 +664,7 @@ class ReadTableTool extends AbstractRecordTool
 
             match ($fieldType) {
                 'select', 'category' => $this->includeSelectRelations($result['records'], $fieldName, $fieldConfig, $table),
-                'inline' => $this->includeInlineRelations($result['records'], $fieldName, $fieldConfig, $recordUids),
+                'inline', 'file' => $this->includeInlineRelations($result['records'], $fieldName, $fieldConfig, $recordUids),
                 default => null,
             };
         }
@@ -807,9 +808,16 @@ class ReadTableTool extends AbstractRecordTool
         $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
         $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
 
-        // Get all related records
+        // Get all related records, filtering by foreign_match_fields if present
+        // (e.g., sys_file_reference uses tablenames/fieldname to distinguish which field owns each reference)
         $foreignSortBy = $fieldConfig['config']['foreign_sortby'] ?? '';
-        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy);
+        $foreignMatchFields = $fieldConfig['config']['foreign_match_fields'] ?? [];
+        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy, $foreignMatchFields);
+
+        // For sys_file_reference, enrich with file metadata so LLMs know what file is referenced
+        if ($foreignTable === 'sys_file_reference' && !empty($relatedRecords)) {
+            $relatedRecords = $this->enrichFileReferences($relatedRecords);
+        }
 
         // Group related records by parent record
         $groupedRecords = [];
@@ -846,9 +854,78 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
+     * Enrich sys_file_reference records with file metadata from sys_file.
+     * Adds file_name, file_identifier, and public_url so LLMs know what file is referenced.
+     */
+    protected function enrichFileReferences(array $records): array
+    {
+        // Collect unique sys_file UIDs from uid_local
+        $fileUids = [];
+        foreach ($records as $record) {
+            $fileUid = (int)($record['uid_local'] ?? 0);
+            if ($fileUid > 0) {
+                $fileUids[$fileUid] = true;
+            }
+        }
+
+        if (empty($fileUids)) {
+            return $records;
+        }
+
+        // Fetch file metadata in a single query
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('sys_file');
+        $queryBuilder->getRestrictions()->removeAll();
+
+        $fileRecords = $queryBuilder
+            ->select('uid', 'name', 'identifier', 'storage', 'type', 'mime_type', 'size')
+            ->from('sys_file')
+            ->where(
+                $queryBuilder->expr()->in(
+                    'uid',
+                    $queryBuilder->createNamedParameter(array_keys($fileUids), Connection::PARAM_INT_ARRAY)
+                )
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        // Index by uid
+        $fileMap = [];
+        foreach ($fileRecords as $fileRecord) {
+            $fileMap[(int)$fileRecord['uid']] = $fileRecord;
+        }
+
+        // Resolve public URLs via ResourceFactory
+        $resourceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class);
+
+        // Enrich each file reference record
+        foreach ($records as &$record) {
+            $fileUid = (int)($record['uid_local'] ?? 0);
+            if ($fileUid > 0 && isset($fileMap[$fileUid])) {
+                $file = $fileMap[$fileUid];
+                $record['file_name'] = $file['name'];
+                $record['file_identifier'] = $file['identifier'];
+                $record['file_mime_type'] = $file['mime_type'];
+                $record['file_size'] = (int)$file['size'];
+
+                // Try to resolve public URL
+                try {
+                    $fileObject = $resourceFactory->getFileObject($fileUid);
+                    $record['public_url'] = $fileObject->getPublicUrl();
+                } catch (\Exception $e) {
+                    // File might not be accessible
+                    $record['public_url'] = null;
+                }
+            }
+        }
+
+        return $records;
+    }
+
+    /**
      * Get inline related records
      */
-    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids, string $foreignSortBy = ''): array
+    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids, string $foreignSortBy = '', array $foreignMatchFields = []): array
     {
         if (empty($parentUids)) {
             return [];
@@ -858,35 +935,41 @@ class ReadTableTool extends AbstractRecordTool
 
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
 
-        // Apply restrictions
-        // For inline relations, we need proper workspace handling
+        // Apply restrictions including workspace delete placeholders
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
-
-        // Select all fields
-        // Apply default sorting if foreign_sortby is defined
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
         if (empty($foreignSortBy)) {
             $this->applyDefaultSorting($queryBuilder, $table);
         } else {
             $queryBuilder->orderBy($foreignSortBy, 'ASC')
-                ->addOrderBy('uid', 'ASC');  // Secondary sort by UID for consistency;
+                ->addOrderBy('uid', 'ASC');
         }
 
-
-        // Ensure we have the sort field in our select
-        $records = $queryBuilder->select('*')
+        $queryBuilder->select('*')
             ->from($table)
             ->where(
                 $queryBuilder->expr()->in(
                     $foreignField,
                     $queryBuilder->createNamedParameter($parentUids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
                 )
-            )
-            ->executeQuery()
-            ->fetchAllAssociative();
+            );
+
+        // Apply foreign_match_fields (e.g., tablenames/fieldname for sys_file_reference)
+        // This ensures file references are scoped to the correct parent field
+        foreach ($foreignMatchFields as $matchField => $matchValue) {
+            $queryBuilder->andWhere(
+                $queryBuilder->expr()->eq(
+                    $matchField,
+                    $queryBuilder->createNamedParameter($matchValue)
+                )
+            );
+        }
+
+        $records = $queryBuilder->executeQuery()->fetchAllAssociative();
 
 
 
