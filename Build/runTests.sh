@@ -112,7 +112,6 @@ esac
 cleanup() {
     set +e
     docker rm -f "${CONTAINER_NAME}" "${RUN_ID}-web" "${RUN_ID}-db" "${RUN_ID}-pw" >/dev/null 2>&1
-    docker rm -f "${DB_CONTAINER_NAME}" >/dev/null 2>&1
     docker network rm "${NETWORK_NAME}" >/dev/null 2>&1
     set -e
 }
@@ -205,23 +204,21 @@ start_db_container() {
     exit 1
 }
 
-# Build the env flags and install commands for the PHP container
+# Build the env flags and install commands for the PHP container.
+# Sets global arrays/strings: ENV_ARGS, INSTALL_CMDS
 build_docker_env_args() {
-    local -n _env_args=$1
-    local -n _install_cmds=$2
-
     case "${DBMS}" in
         sqlite)
-            _env_args=(
+            ENV_ARGS=(
                 -e "typo3DatabaseDriver=pdo_sqlite"
                 -e "typo3DatabaseName=${DB_NAME}"
             )
-            _install_cmds="apt-get update -qq >/dev/null 2>&1 && \
+            INSTALL_CMDS="apt-get update -qq >/dev/null 2>&1 && \
 apt-get install -y -qq libsqlite3-dev libicu-dev libzip-dev unzip git >/dev/null 2>&1 && \
 docker-php-ext-install pdo_sqlite intl zip >/dev/null 2>&1"
             ;;
         mysql|mariadb)
-            _env_args=(
+            ENV_ARGS=(
                 -e "typo3DatabaseDriver=pdo_mysql"
                 -e "typo3DatabaseHost=${DB_HOST}"
                 -e "typo3DatabasePort=${DB_PORT}"
@@ -229,12 +226,12 @@ docker-php-ext-install pdo_sqlite intl zip >/dev/null 2>&1"
                 -e "typo3DatabasePassword=${DB_PASSWORD}"
                 -e "typo3DatabaseName=${DB_NAME}"
             )
-            _install_cmds="apt-get update -qq >/dev/null 2>&1 && \
+            INSTALL_CMDS="apt-get update -qq >/dev/null 2>&1 && \
 apt-get install -y -qq libicu-dev libzip-dev unzip git >/dev/null 2>&1 && \
 docker-php-ext-install pdo_mysql intl zip >/dev/null 2>&1"
             ;;
         postgres)
-            _env_args=(
+            ENV_ARGS=(
                 -e "typo3DatabaseDriver=pdo_pgsql"
                 -e "typo3DatabaseHost=${DB_HOST}"
                 -e "typo3DatabasePort=${DB_PORT}"
@@ -242,7 +239,7 @@ docker-php-ext-install pdo_mysql intl zip >/dev/null 2>&1"
                 -e "typo3DatabasePassword=${DB_PASSWORD}"
                 -e "typo3DatabaseName=${DB_NAME}"
             )
-            _install_cmds="apt-get update -qq >/dev/null 2>&1 && \
+            INSTALL_CMDS="apt-get update -qq >/dev/null 2>&1 && \
 apt-get install -y -qq libpq-dev libicu-dev libzip-dev unzip git >/dev/null 2>&1 && \
 docker-php-ext-install pdo_pgsql intl zip >/dev/null 2>&1"
             ;;
@@ -259,9 +256,9 @@ case "${TEST_SUITE}" in
     functional)
         start_db_container
 
-        declare -a ENV_ARGS=()
+        ENV_ARGS=()
         INSTALL_CMDS=""
-        build_docker_env_args ENV_ARGS INSTALL_CMDS
+        build_docker_env_args
 
         NETWORK_ARGS=()
         if [ "${DBMS}" != "sqlite" ]; then
@@ -333,7 +330,7 @@ case "${TEST_SUITE}" in
             -w /app \
             -e "TYPO3_CONTEXT=Development" \
             "chialab/php:8.4" \
-            bash -c 'set -e && rm -rf var/cache var/log && composer install --no-interaction --prefer-dist --no-scripts -q && mkdir -p public && test -f public/index.php || bash Build/setup-typo3.sh && vendor/bin/typo3 setup --driver=mysqli --host=db --port=3306 --dbname=typo3 --username=root --password=root --admin-username=admin --admin-user-password=Admin123! --admin-email=admin@example.com --project-name=mcp-server-e2e --server-type=other --no-interaction --force && php -r '"'"'$s=include"config/system/settings.php";$s["SYS"]["trustedHostsPattern"]=".*";$s["SYS"]["devIPmask"]="*";file_put_contents("config/system/settings.php","<?php\nreturn ".var_export($s,true).";\n");'"'"' && rm -rf var/cache && exec php -S 0.0.0.0:8080 -t public/'
+            bash -c 'set -e && rm -rf var/cache var/log && composer install --no-interaction --prefer-dist --no-scripts -q 2>&1 || composer update --no-interaction --prefer-dist --no-scripts -q 2>&1 && mkdir -p public && vendor/bin/typo3 setup --driver=mysqli --host=db --port=3306 --dbname=typo3 --username=root --password=root --admin-username=admin --admin-user-password=Admin123! --admin-email=admin@example.com --project-name=mcp-server-e2e --server-type=other --no-interaction --force && php -r '"'"'$s=include"config/system/settings.php";$s["SYS"]["trustedHostsPattern"]=".*";$s["SYS"]["devIPmask"]="*";file_put_contents("config/system/settings.php","<?php\nreturn ".var_export($s,true).";\n");'"'"' && rm -rf var/cache && exec php -S 0.0.0.0:8080 -t public/'
 
         echo "Waiting for TYPO3..."
         for i in $(seq 1 120); do
@@ -366,7 +363,7 @@ case "${TEST_SUITE}" in
             -e "TYPO3_BASE_URL=http://web:8080" \
             -e "CI=${CI:-}" \
             "mcr.microsoft.com/playwright:v1.52.0-noble" \
-            /bin/bash -c "npm ci 2>/dev/null && npx playwright test ${EXTRA_ARGS[@]+"${EXTRA_ARGS[*]}"}"
+            /bin/bash -c "npm ci 2>/dev/null && npx playwright test ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
         ;;
     *)
         echo "Unknown test suite: ${TEST_SUITE}" >&2
