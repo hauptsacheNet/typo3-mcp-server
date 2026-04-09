@@ -168,35 +168,13 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 <div class="tab-pane fade" id="n8n" role="tabpanel" aria-labelledby="n8n-pill">
                                     <h5>🔄 n8n Integration</h5>
 
-                                    <f:if condition="{n8nTokenInfo.hasToken}">
-                                        <f:then>
-                                            <div class="alert alert-success mb-3">
-                                                <h6><strong>✓ n8n token active</strong></h6>
-                                                <p class="mb-0 text-muted small">The plain token was shown only at creation. If you lost it, revoke this token and create a new one.</p>
-                                            </div>
-                                        </f:then>
-                                        <f:else>
-                                            <div class="alert alert-info mb-3">
-                                                <h6><strong>No n8n token found</strong></h6>
-                                                <p class="mb-2">Create an n8n token to connect n8n workflows to this TYPO3 instance.</p>
-
-                                                <button id="create-n8n-token-btn" class="btn btn-primary">
-                                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
-                                                        <span class="icon-markup">➕</span>
-                                                    </span>
-                                                    Create n8n Token
-                                                </button>
-                                            </div>
-                                        </f:else>
-                                    </f:if>
-
                                     <p>To configure your n8n MCP Client node:</p>
                                     <ol>
                                         <li>In n8n, add an <strong>MCP Client</strong> node to your workflow</li>
                                         <li>Set <strong>Endpoint</strong> to: <code>{baseUrl}/mcp</code></li>
                                         <li>Set <strong>Server Transport</strong> to: <code>HTTP Streamable</code></li>
                                         <li>Set <strong>Authentication</strong> to: <code>Bearer Auth</code></li>
-                                        <li>Create a new credential and paste the token (shown once at creation)</li>
+                                        <li>Create a token in the <strong>Active OAuth Tokens</strong> section (e.g. name it "n8n"), create a new credential and paste the token</li>
                                         <li>Select which tools to include or choose "All"</li>
                                     </ol>
                                 </div>
@@ -205,34 +183,13 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 <div class="tab-pane fade" id="manus" role="tabpanel" aria-labelledby="manus-pill">
                                     <h5>🤖 manus Integration</h5>
 
-                                    <f:if condition="{manusTokenInfo.hasToken}">
-                                        <f:then>
-                                            <div class="alert alert-success mb-3">
-                                                <h6><strong>✓ manus token active</strong></h6>
-                                                <p class="mb-0 text-muted small">The plain token was shown only at creation. If you lost it, revoke this token and create a new one.</p>
-                                            </div>
-                                        </f:then>
-                                        <f:else>
-                                            <div class="alert alert-info mb-3">
-                                                <h6><strong>No manus token found</strong></h6>
-                                                <p class="mb-2">Create a manus token to connect manus agents to this TYPO3 instance.</p>
-
-                                                <button id="create-manus-token-btn" class="btn btn-primary">
-                                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
-                                                        <span class="icon-markup">➕</span>
-                                                    </span>
-                                                    Create manus Token
-                                                </button>
-                                            </div>
-                                        </f:else>
-                                    </f:if>
-
                                     <p>To configure your manus MCP connection:</p>
                                     <ol>
                                         <li>In manus, go to Connectors settings and add a connector</li>
                                         <li>Set <strong>Server Name</strong> to: <code>{siteName}</code></li>
                                         <li>Set <strong>Transport</strong> to: <code>HTTP</code></li>
                                         <li>Set <strong>Server URL</strong> to: <code>{baseUrl}/mcp</code></li>
+                                        <li>Create a token in the <strong>Active OAuth Tokens</strong> section (e.g. name it "manus")</li>
                                         <li>Add a custom header <code>Authorization</code> with the value <code>Bearer YOUR_TOKEN</code> (use the token shown at creation)</li>
                                         <li>Save your MCP configuration</li>
                                     </ol>
@@ -290,58 +247,24 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 For MCP clients that don't support remote connections natively. The mcp-remote package acts as a local bridge, connecting to this TYPO3 instance on behalf of your MCP client.
                             </p>
 
-                            <f:if condition="{mcpRemoteUrl.hasTokens}">
-                                <f:then>
-                                    <div class="alert alert-success">
-                                        <h6><strong>mcp-remote token active</strong></h6>
-                                        <p class="mb-0">The plain token was shown at creation time. Use it in the mcp-remote URL as a query parameter:</p>
-                                    </div>
-
-                                    <div class="mt-3">
-                                        <h6><strong>Example mcp-remote configuration:</strong></h6>
-                                        <textarea class="form-control mb-2" rows="9" readonly id="mcp-remote-config" style="font-family: monospace; font-size: 12px; white-space: pre"><f:format.raw>{
+                            <div class="mt-3">
+                                <h6><strong>Example mcp-remote configuration:</strong></h6>
+                                <textarea class="form-control mb-2" rows="9" readonly id="mcp-remote-config" style="font-family: monospace; font-size: 12px; white-space: pre"><f:format.raw>{
   "mcpServers": {
     "</f:format.raw>{siteName}<f:format.raw>": {
       "command": "npx",
-      "args": ["mcp-remote", "</f:format.raw>{mcpRemoteUrl.baseUrl}?token=YOUR_TOKEN<f:format.raw>"]
+      "args": ["mcp-remote", "</f:format.raw>{baseUrl}/mcp?token=YOUR_TOKEN<f:format.raw>"]
     }
   }
 }</f:format.raw></textarea>
-                                        <p class="text-muted small">Replace <code>YOUR_TOKEN</code> with the plain token shown when you created it.</p>
-                                        <button class="btn btn-sm btn-outline-secondary copy-button" type="button" data-copy-target="mcp-remote-config">
-                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
-                                                <span class="icon-markup">📋</span>
-                                            </span>
-                                            Copy Configuration
-                                        </button>
-                                    </div>
-                                </f:then>
-                                <f:else>
-                                    <div class="alert alert-info">
-                                        <h6><strong>No mcp-remote token found</strong></h6>
-                                        <p class="mb-3">Create an mcp-remote token to use with clients that require URL-based authentication.</p>
-                                        
-                                        <div class="mb-3">
-                                            <button id="create-mcp-remote-token-btn" class="btn btn-primary btn-lg">
-                                                <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
-                                                    <span class="icon-markup">➕</span>
-                                                </span>
-                                                Create mcp-remote Token
-                                            </button>
-                                        </div>
-                                        
-                                        <div class="small text-muted">
-                                            <p class="mb-1"><strong>What happens:</strong></p>
-                                            <ul class="mb-2">
-                                                <li>A secure 30-day token will be created instantly</li>
-                                                <li>This token is specifically for mcp-remote configurations</li>
-                                                <li>The token URL will appear above for copying</li>
-                                            </ul>
-                                            <p class="mb-0"><em>For remote-capable clients:</em> Use the Remote MCP Setup tab instead.</p>
-                                        </div>
-                                    </div>
-                                </f:else>
-                            </f:if>
+                                <p class="text-muted small">Create a token in the <strong>Active OAuth Tokens</strong> section (e.g. name it "mcp-remote") and replace <code>YOUR_TOKEN</code> with the plain token shown at creation.</p>
+                                <button class="btn btn-sm btn-outline-secondary copy-button" type="button" data-copy-target="mcp-remote-config">
+                                    <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-edit-copy" data-identifier="actions-edit-copy">
+                                        <span class="icon-markup">📋</span>
+                                    </span>
+                                    Copy Configuration
+                                </button>
+                            </div>
 
                             <div class="alert alert-secondary mt-3">
                                 <h6><strong>⚠️ Security Note:</strong></h6>
@@ -399,8 +322,9 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                     <h3 class="card-title mb-0">
                         🔑 Active OAuth Tokens
                     </h3>
-                    <div class="btn-group" role="group">
-                        <button id="refresh-tokens-btn" class="btn btn-sm btn-outline-secondary">
+                    <div class="d-flex gap-2">
+                        <div class="btn-group" role="group">
+                            <button id="refresh-tokens-btn" class="btn btn-sm btn-outline-secondary">
                             <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-refresh" data-identifier="actions-refresh">
                                 <span class="icon-markup">🔄</span>
                             </span>
@@ -411,6 +335,13 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 <span class="icon-markup">🗑️</span>
                             </span>
                             Revoke All
+                        </button>
+                        </div>
+                        <button id="create-token-btn" class="btn btn-sm btn-primary">
+                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-add" data-identifier="actions-add">
+                                <span class="icon-markup">➕</span>
+                            </span>
+                            Create Token
                         </button>
                     </div>
                 </div>
@@ -460,8 +391,8 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                     <div class="mb-3">
                                         <span style="font-size: 2rem;">🔑</span>
                                     </div>
-                                    <p>No active OAuth tokens found.</p>
-                                    <p class="small">Use the Remote MCP Setup above to connect your first MCP client.</p>
+                                    <p>No active tokens found.</p>
+                                    <p class="small">Click <strong>Create Token</strong> above to create your first token.</p>
                                 </div>
                             </f:else>
                         </f:if>

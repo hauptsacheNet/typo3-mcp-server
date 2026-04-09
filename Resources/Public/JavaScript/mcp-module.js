@@ -37,19 +37,9 @@ class McpModule {
             revokeAllTokensBtn.addEventListener('click', () => this.revokeAllTokens());
         }
 
-        const createMcpRemoteTokenBtn = document.getElementById('create-mcp-remote-token-btn');
-        if (createMcpRemoteTokenBtn) {
-            createMcpRemoteTokenBtn.addEventListener('click', () => this.createToken('mcp-remote token', createMcpRemoteTokenBtn));
-        }
-
-        const createN8nTokenBtn = document.getElementById('create-n8n-token-btn');
-        if (createN8nTokenBtn) {
-            createN8nTokenBtn.addEventListener('click', () => this.createToken('n8n token', createN8nTokenBtn));
-        }
-
-        const createManusTokenBtn = document.getElementById('create-manus-token-btn');
-        if (createManusTokenBtn) {
-            createManusTokenBtn.addEventListener('click', () => this.createToken('manus token', createManusTokenBtn));
+        const createTokenBtn = document.getElementById('create-token-btn');
+        if (createTokenBtn) {
+            createTokenBtn.addEventListener('click', () => this.showCreateTokenModal());
         }
 
         // Delegated revoke button handler
@@ -298,38 +288,101 @@ class McpModule {
     }
 
     /**
-     * Unified token creation with "show once" modal.
+     * Show modal to name the new token before creating it.
      */
-    createToken(clientType, button) {
-        if (button) button.disabled = true;
+    showCreateTokenModal() {
+        const container = document.createElement('div');
+        container.style.padding = '10px';
 
-        const requestBody = clientType ? { clientType } : {};
+        const label = document.createElement('label');
+        label.className = 'form-label';
+        label.setAttribute('for', 'modal-token-name-input');
+        label.textContent = 'Token name';
+        container.appendChild(label);
 
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'form-control';
+        input.id = 'modal-token-name-input';
+        input.maxLength = 100;
+        input.placeholder = 'e.g. n8n, manus, my-app';
+        container.appendChild(input);
+
+        const hint = document.createElement('p');
+        hint.className = 'text-muted small mt-2 mb-0';
+        hint.textContent = 'Choose a name to identify this token later. It will appear in the token list.';
+        container.appendChild(hint);
+
+        const submit = () => {
+            const name = input.value.trim();
+            if (!name) {
+                Notification.warning('Name required', 'Please enter a name for the token.');
+                return;
+            }
+            Modal.dismiss();
+            this.createToken(name);
+        };
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                submit();
+            }
+        });
+
+        Modal.advanced({
+            title: 'Create Token',
+            content: container,
+            severity: Severity.info,
+            buttons: [
+                {
+                    text: 'Cancel',
+                    btnClass: 'btn-default',
+                    trigger: () => Modal.dismiss()
+                },
+                {
+                    text: 'Create',
+                    btnClass: 'btn-primary',
+                    trigger: submit
+                }
+            ]
+        });
+
+        // Focus the input after the Bootstrap modal transition completes.
+        // TYPO3's Modal moves our content to the top frame, so use
+        // input.closest('.modal') to find the actual modal element.
+        setTimeout(() => {
+            const modalEl = input.closest('.modal');
+            if (modalEl) {
+                modalEl.addEventListener('shown.bs.modal', () => input.focus(), { once: true });
+            }
+        }, 0);
+    }
+
+    /**
+     * Create a token via AJAX and show the "show once" modal.
+     */
+    createToken(clientName) {
         new AjaxRequest(TYPO3.settings.ajaxUrls.mcp_server_create_token)
-            .post(requestBody)
+            .post({ clientName })
             .then(async (response) => {
                 const data = await response.resolve();
                 if (data.success && data.token) {
-                    this.showTokenModal(data.token, clientType);
+                    this.showTokenModal(data.token, clientName);
                     this.refreshTokens();
-                } else if (data.success) {
-                    Notification.success('Token created', 'Token created successfully.');
-                    setTimeout(() => window.location.reload(), 2000);
                 } else {
                     Notification.error('Token creation failed', data.message || 'Unknown error');
-                    if (button) button.disabled = false;
                 }
             })
             .catch((error) => {
                 Notification.error('Network error', 'Error creating token: ' + (error.message || 'Unknown error'));
-                if (button) button.disabled = false;
             });
     }
 
     /**
      * Display a TYPO3 Modal with the plain token (shown only once).
      */
-    showTokenModal(plainToken, clientType) {
+    showTokenModal(plainToken, clientName) {
         const container = document.createElement('div');
         container.style.padding = '10px';
 
@@ -341,12 +394,12 @@ class McpModule {
         warning.appendChild(document.createTextNode(' Copy it now and store it securely. You will not be able to see it again.'));
         container.appendChild(warning);
 
-        if (clientType) {
+        if (clientName) {
             const label = document.createElement('p');
             const strong = document.createElement('strong');
-            strong.textContent = 'Client type: ';
+            strong.textContent = 'Token name: ';
             label.appendChild(strong);
-            label.appendChild(document.createTextNode(clientType));
+            label.appendChild(document.createTextNode(clientName));
             container.appendChild(label);
         }
 
@@ -367,18 +420,29 @@ class McpModule {
         copyBtn.type = 'button';
         copyBtn.textContent = 'Copy';
         copyBtn.addEventListener('click', () => {
+            const onSuccess = () => {
+                copyBtn.textContent = 'Copied!';
+                copyBtn.classList.add('btn-success');
+                copyBtn.classList.remove('btn-outline-secondary');
+            };
+            // The modal lives in the top frame (TYPO3 Modal API), so use
+            // input.ownerDocument for execCommand — not the iframe's document.
+            const doc = input.ownerDocument;
             if (navigator.clipboard && window.isSecureContext) {
-                navigator.clipboard.writeText(plainToken).then(() => {
-                    copyBtn.textContent = 'Copied!';
-                    copyBtn.classList.add('btn-success');
-                    copyBtn.classList.remove('btn-outline-secondary');
-                }).catch(() => {
+                navigator.clipboard.writeText(plainToken).then(onSuccess).catch(() => {
+                    input.focus();
                     input.select();
-                    copyBtn.textContent = 'Select & copy with Ctrl+C';
+                    doc.execCommand('copy');
+                    onSuccess();
                 });
             } else {
+                input.focus();
                 input.select();
-                copyBtn.textContent = 'Select & copy with Ctrl+C';
+                if (doc.execCommand('copy')) {
+                    onSuccess();
+                } else {
+                    copyBtn.textContent = 'Select & copy with Ctrl+C';
+                }
             }
         });
         inputGroup.appendChild(copyBtn);
@@ -395,11 +459,22 @@ class McpModule {
                     btnClass: 'btn-primary',
                     trigger: () => {
                         Modal.dismiss();
-                        window.location.reload();
                     }
                 }
             ]
         });
+
+        // Focus and select the token value after the modal transition so
+        // the user can immediately Cmd+C / Ctrl+C.
+        setTimeout(() => {
+            const modalEl = input.closest('.modal');
+            if (modalEl) {
+                modalEl.addEventListener('shown.bs.modal', () => {
+                    input.focus();
+                    input.select();
+                }, { once: true });
+            }
+        }, 0);
     }
 
     // =========================================================================
@@ -422,8 +497,8 @@ class McpModule {
         if (!tokens || tokens.length === 0) {
             container.innerHTML = `
                 <div id="no-tokens-message" class="text-center text-muted py-4">
-                    <p>No active OAuth tokens found.</p>
-                    <p class="small">Use the Remote MCP Setup above to connect your first MCP client.</p>
+                    <p>No active tokens found.</p>
+                    <p class="small">Click <strong>Create Token</strong> above to create your first token.</p>
                 </div>
             `;
         } else {

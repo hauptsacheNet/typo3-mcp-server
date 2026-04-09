@@ -63,12 +63,6 @@ class McpServerModuleController
         }
         
         
-        // Generate mcp-remote token URL (for clients that don't support auth headers)
-        $mcpRemoteUrl = $this->generateMcpRemoteUrl($baseUrl, $tokens);
-
-        // Generate token info for n8n and manus
-        $n8nTokenInfo = $this->getClientTokenInfo($tokens, 'n8n token');
-        $manusTokenInfo = $this->getClientTokenInfo($tokens, 'manus token');
 
         // Check if any workspace exists
         $hasWorkspace = $this->hasAnyWorkspace();
@@ -101,9 +95,6 @@ class McpServerModuleController
             'tools' => $tools,
             'username' => $backendUser->user['username'],
             'userId' => $userId,
-            'mcpRemoteUrl' => $mcpRemoteUrl,
-            'n8nTokenInfo' => $n8nTokenInfo,
-            'manusTokenInfo' => $manusTokenInfo,
             'siteName' => $this->getSiteName(),
             'hasWorkspace' => $hasWorkspace,
             'isLocalhost' => $isLocalhost,
@@ -278,44 +269,6 @@ class McpServerModuleController
         }
     }
 
-    /**
-     * Generate mcp-remote URL with token parameter for clients that don't support auth headers
-     */
-    private function generateMcpRemoteUrl(string $baseUrl, array $tokens): array
-    {
-        $endpointUrl = $baseUrl . '/mcp';
-
-        // Filter tokens to only include mcp-remote tokens
-        $mcpRemoteTokens = array_filter($tokens, function($token) {
-            return $token['client_name'] === 'mcp-remote token';
-        });
-
-        return [
-            'baseUrl' => $endpointUrl,
-            'hasTokens' => !empty($mcpRemoteTokens),
-            'tokenUrl' => null, // Token hashed at rest — cannot reconstruct URL from stored hash
-            'description' => 'For MCP clients that don\'t support Authorization headers (like mcp-remote without auth)',
-        ];
-    }
-
-    /**
-     * Get token info for a specific client type
-     */
-    private function getClientTokenInfo(array $tokens, string $clientName): array
-    {
-        $clientTokens = array_filter($tokens, function($token) use ($clientName) {
-            return $token['client_name'] === $clientName;
-        });
-
-        $hasToken = !empty($clientTokens);
-        $token = $hasToken ? array_values($clientTokens)[0] : null;
-
-        return [
-            'hasToken' => $hasToken,
-            'expires' => $token['expires'] ?? null,
-            'clientName' => $clientName,
-        ];
-    }
 
     /**
      * Check if any TYPO3 workspace exists
@@ -405,8 +358,8 @@ class McpServerModuleController
     }
 
     /**
-     * Create an access token for MCP clients via AJAX
-     * Supports different client types (mcp-remote, n8n, manus)
+     * Create an access token for MCP clients via AJAX.
+     * Accepts a free-form client name (non-empty, max 100 chars).
      */
     public function createTokenAction(ServerRequestInterface $request): ResponseInterface
     {
@@ -430,40 +383,28 @@ class McpServerModuleController
                 }
             }
 
-            $clientType = $parsedBody['clientType'] ?? 'mcp-remote token';
+            $clientName = trim($parsedBody['clientName'] ?? $parsedBody['clientType'] ?? '');
 
-            // Validate client type
-            $allowedClientTypes = ['mcp-remote token', 'n8n token', 'manus token'];
-            if (!in_array($clientType, $allowedClientTypes, true)) {
+            // Validate client name
+            if ($clientName === '') {
                 return new JsonResponse([
                     'success' => false,
-                    'message' => 'Invalid client type'
+                    'message' => 'Token name is required'
+                ], 400);
+            }
+            if (mb_strlen($clientName) > 100) {
+                return new JsonResponse([
+                    'success' => false,
+                    'message' => 'Token name must not exceed 100 characters'
                 ], 400);
             }
 
-            // Check if user already has a token for this client type
-            $existingTokens = $this->oauthService->getUserTokens($userId);
-            $tokenExists = false;
-            foreach ($existingTokens as $token) {
-                if ($token['client_name'] === $clientType) {
-                    $tokenExists = true;
-                    break;
-                }
-            }
-
-            if ($tokenExists) {
-                return new JsonResponse([
-                    'success' => false,
-                    'message' => sprintf('You already have a %s. Please revoke it first if you want to create a new one.', $clientType)
-                ], 400);
-            }
-
-            // Create new token for the specified client type
-            $token = $this->oauthService->createDirectAccessToken($userId, $clientType, $request);
+            // Create new token
+            $token = $this->oauthService->createDirectAccessToken($userId, $clientName, $request);
 
             return new JsonResponse([
                 'success' => true,
-                'message' => sprintf('%s created successfully', $clientType),
+                'message' => sprintf('Token "%s" created successfully', $clientName),
                 'token' => $token
             ]);
 
