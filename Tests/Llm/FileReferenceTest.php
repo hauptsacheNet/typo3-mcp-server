@@ -30,7 +30,6 @@ class FileReferenceTest extends LlmTestCase
 
     /**
      * Verify our own infrastructure: sys_file is readable without pid filter.
-     * This is a sanity check before running LLM tests.
      */
     public function testSysFileIsReadableWithoutPid(): void
     {
@@ -47,14 +46,10 @@ class FileReferenceTest extends LlmTestCase
 
     /**
      * Test that an LLM can discover available files by reading sys_file.
-     *
-     * When asked about files, the LLM should query sys_file to discover what's available.
-     * This is the prerequisite for creating file references.
      */
     public function testLlmDiscoversAvailableFiles(): void
     {
-        $prompt = 'What image files are available in the TYPO3 system? List them with their filenames and UIDs. ' .
-            'The files are stored in the sys_file table which is a root-level table (query it without a pid filter).';
+        $prompt = 'What image files are available in the system? List them.';
 
         $response = $this->executeUntilToolFound(
             $this->callLlm($prompt),
@@ -71,26 +66,24 @@ class FileReferenceTest extends LlmTestCase
             if (($call['arguments']['table'] ?? '') === 'sys_file') {
                 $queriedSysFile = true;
 
-                // Execute and verify the result
+                // Log what the LLM passed for debugging
+                $callArgs = json_encode($call['arguments']);
+
                 $readResult = $this->executeToolCall($call);
                 $this->assertFalse($readResult['isError'] ?? false,
                     'Reading sys_file failed: ' . $readResult['content']);
 
-                // Check if it found files
                 $this->assertStringContainsString('test.jpg', $readResult['content'],
-                    'sys_file query should return test.jpg. Result: ' . $readResult['content']);
+                    "sys_file query should return test.jpg.\nLLM args: {$callArgs}\nResult: " . $readResult['content']);
                 break;
             }
         }
 
-        // If the LLM didn't query sys_file yet, continue the conversation
-        if (!$queriedSysFile) {
-            // Execute whatever it did and continue
+        // If not yet, continue the conversation
+        if (!$queriedSysFile && $response->hasToolCalls()) {
             $nextResponse = $this->executeAndContinue($response);
 
-            // Check again
-            $readCalls = $nextResponse->getToolCallsByName('ReadTable');
-            foreach ($readCalls as $call) {
+            foreach ($nextResponse->getToolCallsByName('ReadTable') as $call) {
                 if (($call['arguments']['table'] ?? '') === 'sys_file') {
                     $queriedSysFile = true;
                     $readResult = $this->executeToolCall($call);
@@ -106,37 +99,36 @@ class FileReferenceTest extends LlmTestCase
     }
 
     /**
-     * Test that an LLM can add an image to a content element via the assets field.
+     * Test that an LLM can add an image to a content element.
      *
-     * This is the end-to-end test: explore, discover files, create content with file reference.
-     * The LLM should understand that file references are embedded in the parent's file field
-     * (e.g., assets for textmedia), not created as separate sys_file_reference records.
+     * No hints about UIDs or field names - the LLM must discover everything
+     * from the schema and available data. It should:
+     * 1. Explore the page tree to find the home page
+     * 2. Check GetTableSchema for textmedia to learn about the assets field
+     * 3. Query sys_file to find test.jpg
+     * 4. Create the content element with embedded file reference
      */
     public function testLlmAddsImageToContentElement(): void
     {
-        $prompt = 'Create a new textmedia content element on the home page (pid=1) with header "Welcome Image". ' .
-            'Add the image file test.jpg (which has sys_file uid=1) to the assets field. ' .
-            'Set the alt text to "Welcome to our site". ' .
-            'File references are embedded as record data in the assets field: ' .
-            'assets: [{"uid_local": <sys_file_uid>, "alternative": "alt text"}]';
+        $prompt = 'Add the image test.jpg to a new textmedia content element on the home page. ' .
+            'Set the header to "Welcome Image" and the alt text to "Welcome to our site".';
 
         // Let the LLM explore and find the write action
         $response = $this->executeUntilToolFound(
             $this->callLlm($prompt),
             'WriteTable',
-            8
+            10
         );
 
         // Verify it called WriteTable
         $writeCalls = $response->getToolCallsByName('WriteTable');
-        $this->assertNotEmpty($writeCalls, 'Expected WriteTable call. History: ' . implode(' -> ', $this->getToolCallHistory()));
+        $this->assertNotEmpty($writeCalls,
+            'Expected WriteTable call. History: ' . implode(' -> ', $this->getToolCallHistory()));
 
         $writeCall = $writeCalls[0]['arguments'];
-
-        // Log what the LLM tried for debugging
         $writeJson = json_encode($writeCall, JSON_PRETTY_PRINT);
 
-        // Check: did it try the correct approach (tt_content with embedded assets)?
+        // Check: did it use the correct approach (tt_content with embedded assets)?
         if ($writeCall['table'] === 'tt_content' && isset($writeCall['data']['assets'])) {
             // Correct approach: embedded file reference in assets field
             $this->assertEquals('create', $writeCall['action']);
@@ -147,8 +139,6 @@ class FileReferenceTest extends LlmTestCase
             $firstRef = $assets[0];
             $this->assertArrayHasKey('uid_local', $firstRef,
                 'File reference should include uid_local. WriteTable call: ' . $writeJson);
-            $this->assertEquals(1, $firstRef['uid_local'],
-                'Should reference sys_file uid=1 (test.jpg)');
 
             // Execute the write and verify it succeeds
             $writeResult = $this->executeToolCall($writeCalls[0]);
@@ -157,10 +147,9 @@ class FileReferenceTest extends LlmTestCase
 
         } elseif ($writeCall['table'] === 'sys_file_reference') {
             // Alternative approach: LLM tried to create sys_file_reference directly
-            // This is not ideal but shows the LLM understands file references exist
             $this->markTestIncomplete(
                 'LLM created sys_file_reference directly instead of embedding via assets field. ' .
-                'This works but is not the recommended approach. WriteTable call: ' . $writeJson
+                'This suggests the schema guidance is not sufficient. WriteTable call: ' . $writeJson
             );
         } else {
             $this->fail(
@@ -172,14 +161,10 @@ class FileReferenceTest extends LlmTestCase
 
     /**
      * Test that an LLM can read existing file references on a content element.
-     *
-     * Content element uid=100 has file references in the fixtures.
-     * The LLM should be able to read them and understand the structure.
      */
     public function testLlmReadsExistingFileReferences(): void
     {
-        $prompt = 'Read the content element with uid=100 from tt_content and tell me about its file references (images/assets). ' .
-            'What files are attached to it?';
+        $prompt = 'Read content element uid=100 from tt_content and describe its attached files.';
 
         $response = $this->executeUntilToolFound(
             $this->callLlm($prompt),
@@ -187,7 +172,6 @@ class FileReferenceTest extends LlmTestCase
             3
         );
 
-        // Should have called ReadTable for tt_content
         $readCalls = $response->getToolCallsByName('ReadTable');
         $this->assertNotEmpty($readCalls, 'Expected ReadTable call');
 

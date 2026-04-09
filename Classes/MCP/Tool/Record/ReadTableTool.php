@@ -54,7 +54,7 @@ class ReadTableTool extends AbstractRecordTool
             ],
             'pid' => [
                 'type' => 'integer',
-                'description' => 'Filter by page ID (recommended - use this instead of individual record lookups)',
+                'description' => 'Filter by page ID (recommended for content tables). Omit for root-level tables like sys_file that store records at pid=0.',
             ],
             'uid' => [
                 'type' => 'integer',
@@ -208,8 +208,11 @@ class ReadTableTool extends AbstractRecordTool
         $queryBuilder->select('*')
             ->from($table);
 
-        // Filter by pid if specified
-        if ($pid !== null && $this->tableHasPidField($table)) {
+        // Filter by pid if specified, but skip for root-level-only tables (rootLevel=1)
+        // Root-level tables like sys_file store all records at pid=0
+        $rootLevel = $GLOBALS['TCA'][$table]['ctrl']['rootLevel'] ?? 0;
+        $isRootLevelOnly = ($rootLevel === 1 || $rootLevel === true);
+        if ($pid !== null && $this->tableHasPidField($table) && !$isRootLevelOnly) {
             $queryBuilder->andWhere(
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
             );
@@ -294,7 +297,7 @@ class ReadTableTool extends AbstractRecordTool
         $countQueryBuilder->count('uid')->from($table);
 
         // Apply the same WHERE conditions as the main query
-        if ($pid !== null && $this->tableHasPidField($table)) {
+        if ($pid !== null && $this->tableHasPidField($table) && !$isRootLevelOnly) {
             $countQueryBuilder->andWhere(
                 $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pid, ParameterType::INTEGER))
             );

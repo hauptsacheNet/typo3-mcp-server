@@ -146,6 +146,11 @@ class TcaFormattingUtility
                     $result .= " [foreign table: " . $config['foreign_table'] . "]";
                 }
                 break;
+
+            case 'file':
+                // File fields are inline relations to sys_file_reference (expanded by TcaPreparation)
+                $result .= " [File references - write as array of objects: [{\"uid_local\": <sys_file_uid>, \"title\": \"...\", \"alternative\": \"...\", \"description\": \"...\"}]. Query sys_file (without pid) to find available files.]";
+                break;
                 
             case 'flex':
                 // Only applicable for TCA
