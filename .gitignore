@@ -15,6 +15,10 @@
 /dist
 /.build
 
+# TYPO3 temp and test artifacts
+/typo3temp
+/index.php
+
 # other
 *.local
 .DS_Store
