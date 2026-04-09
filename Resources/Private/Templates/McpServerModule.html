@@ -431,7 +431,6 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                                 <th>Created</th>
                                                 <th>Last Used</th>
                                                 <th>Expires</th>
-                                                <th>Token Hash</th>
                                                 <th>Actions</th>
                                             </tr>
                                         </thead>
@@ -439,15 +438,9 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                             <f:for each="{tokens}" as="token">
                                                 <tr data-token-id="{token.uid}">
                                                     <td><strong>{token.client_name}</strong></td>
-                                                    <td><small class="text-muted">{token.crdate -> f:format.date(format: 'Y-m-d H:i:s')}</small></td>
-                                                    <td><small class="text-muted">
-                                                        <f:if condition="{token.last_used}">
-                                                            <f:then>{token.last_used -> f:format.date(format: 'Y-m-d H:i:s')}</f:then>
-                                                            <f:else>Never</f:else>
-                                                        </f:if>
-                                                    </small></td>
-                                                    <td><small class="text-muted">{token.expires -> f:format.date(format: 'Y-m-d H:i:s')}</small></td>
-                                                    <td><code class="small">{token.token -> f:format.crop(maxCharacters: 16, append: '...')}</code></td>
+                                                    <td><small class="text-muted">{token.created}</small></td>
+                                                    <td><small class="text-muted">{token.last_used}</small></td>
+                                                    <td><small class="text-muted">{token.expires}</small></td>
                                                     <td>
                                                         <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="{token.uid}">
                                                             <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-delete" data-identifier="actions-delete">

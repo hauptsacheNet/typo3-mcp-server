@@ -437,7 +437,6 @@ class McpModule {
                                 <th>Created</th>
                                 <th>Last Used</th>
                                 <th>Expires</th>
-                                <th>Token Hash</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -448,9 +447,11 @@ class McpModule {
                                     <td><small class="text-muted">${esc(token.created)}</small></td>
                                     <td><small class="text-muted">${esc(token.last_used)}</small></td>
                                     <td><small class="text-muted">${esc(token.expires)}</small></td>
-                                    <td><code class="small">${esc(token.token_hash)}</code></td>
                                     <td>
-                                        <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="${esc(token.uid)}" aria-label="Revoke token for ${esc(token.client_name)}">Revoke</button>
+                                        <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="${esc(token.uid)}" aria-label="Revoke token for ${esc(token.client_name)}">
+                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-delete" data-identifier="actions-delete"><span class="icon-markup">🗑️</span></span>
+                                            Revoke
+                                        </button>
                                     </td>
                                 </tr>
                             `).join('')}

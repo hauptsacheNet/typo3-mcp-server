@@ -82,9 +82,20 @@ class McpServerModuleController
             'returnUrl' => (string)$request->getUri(),
         ]);
 
+        // Format tokens for template display (same shape as AJAX response)
+        $formattedTokens = array_map(function ($token) {
+            return [
+                'uid' => $token['uid'],
+                'client_name' => $token['client_name'],
+                'created' => date('Y-m-d H:i:s', $token['crdate']),
+                'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
+                'expires' => date('Y-m-d H:i:s', $token['expires']),
+            ];
+        }, $tokens);
+
         // Prepare template variables
         $templateVariables = [
-            'tokens' => $tokens,
+            'tokens' => $formattedTokens,
             'authUrl' => $authUrl,
             'baseUrl' => $baseUrl,
             'tools' => $tools,
@@ -251,7 +262,6 @@ class McpServerModuleController
                     'created' => date('Y-m-d H:i:s', $token['crdate']),
                     'expires' => date('Y-m-d H:i:s', $token['expires']),
                     'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
-                    'token_hash' => substr($token['token'], 0, 16) . '...',
                 ];
             }, $tokens);
             
@@ -302,7 +312,6 @@ class McpServerModuleController
 
         return [
             'hasToken' => $hasToken,
-            'tokenHash' => $token['token'] ?? null, // SHA-256 hash, not usable as bearer token
             'expires' => $token['expires'] ?? null,
             'clientName' => $clientName,
         ];
