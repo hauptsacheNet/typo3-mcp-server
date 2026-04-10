@@ -34,3 +34,31 @@ jobs:
 
       - name: Run functional test suite
         run: composer test
+
+  llm-tests:
+    runs-on: ubuntu-latest
+    name: LLM Tests
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-llm-tests'))
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@accd6127cb78bee3e8082180cb391013d204ef9f # v2
+        with:
+          php-version: '8.4'
+          extensions: sqlite3, pdo_sqlite, intl
+          coverage: none
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Create web entry point
+        run: mkdir -p public && touch public/index.php
+
+      - name: Run LLM test suite
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPO3_PATH_ROOT: ${{ github.workspace }}/public
+        run: vendor/bin/phpunit -c Tests/Llm/phpunit-llm.xml --testdox --no-progress

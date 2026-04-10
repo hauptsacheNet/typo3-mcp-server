@@ -172,8 +172,25 @@ abstract class LlmTestCase extends FunctionalTestCase
     }
 
     /**
+     * Build a context string for failure messages, including model and prompt.
+     */
+    protected function getFailureContext(LlmResponse $response = null): string
+    {
+        $context = "[Model: {$this->llmModel}]\n";
+        $context .= "Prompt: {$this->lastPrompt}\n";
+        if ($response !== null) {
+            $textResponse = $response->getContent();
+            if (!empty($textResponse)) {
+                $context .= "LLM text response: " . mb_substr($textResponse, 0, 500) . "\n";
+            }
+            $context .= "\n" . $this->getToolCallsDebugString($response);
+        }
+        return $context;
+    }
+
+    /**
      * Assert that a specific tool was called in the response
-     * 
+     *
      * @param LlmResponse $response
      * @param string $toolName
      * @param array|null $expectedParams Partial params to match (null to skip param checking)
@@ -181,49 +198,56 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected function assertToolCalled(LlmResponse $response, string $toolName, ?array $expectedParams = null): void
     {
         $toolCalls = $response->getToolCalls();
-        
+
         $found = false;
         foreach ($toolCalls as $toolCall) {
             if ($toolCall['name'] === $toolName) {
                 $found = true;
-                
+
                 if ($expectedParams !== null) {
                     $actualParams = $toolCall['arguments'] ?? [];
-                    
+
                     // Check if expected params are present in actual params
                     foreach ($expectedParams as $key => $value) {
-                        $this->assertArrayHasKey($key, $actualParams, "Expected parameter '$key' not found in tool call '$toolName'");
-                        
+                        $this->assertArrayHasKey($key, $actualParams,
+                            "Expected parameter '$key' not found in tool call '$toolName'.\n" .
+                            $this->getFailureContext($response));
+
                         // For nested arrays, do partial matching
                         if (is_array($value) && is_array($actualParams[$key])) {
                             foreach ($value as $nestedKey => $nestedValue) {
                                 if (is_string($nestedKey)) {
-                                    $this->assertArrayHasKey($nestedKey, $actualParams[$key]);
-                                    $this->assertEquals($nestedValue, $actualParams[$key][$nestedKey]);
+                                    $this->assertArrayHasKey($nestedKey, $actualParams[$key],
+                                        "Expected nested parameter '$key.$nestedKey' not found in tool call '$toolName'.\n" .
+                                        $this->getFailureContext($response));
+                                    $this->assertEquals($nestedValue, $actualParams[$key][$nestedKey],
+                                        "Nested parameter '$key.$nestedKey' value mismatch in tool call '$toolName'.\n" .
+                                        $this->getFailureContext($response));
                                 }
                             }
                         } else {
-                            $this->assertEquals($value, $actualParams[$key], "Parameter '$key' value mismatch in tool call '$toolName'");
+                            $this->assertEquals($value, $actualParams[$key],
+                                "Parameter '$key' value mismatch in tool call '$toolName'.\n" .
+                                $this->getFailureContext($response));
                         }
                     }
                 }
-                
+
                 break;
             }
         }
-        
+
         if (!$found) {
             $this->fail(
                 "Expected tool '$toolName' was not called.\n\n" .
-                "Prompt: " . $this->lastPrompt . "\n\n" .
-                $this->getToolCallsDebugString($response)
+                $this->getFailureContext($response)
             );
         }
     }
 
     /**
      * Assert that tools were called in a specific order (with flexibility)
-     * 
+     *
      * @param LlmResponse $response
      * @param array $expectedSequence Array of tool names
      * @param bool $strict If true, no other tools allowed between expected ones
@@ -232,9 +256,13 @@ abstract class LlmTestCase extends FunctionalTestCase
     {
         $toolCalls = $response->getToolCalls();
         $actualSequence = array_map(fn($call) => $call['name'], $toolCalls);
-        
+
         if ($strict) {
-            $this->assertEquals($expectedSequence, $actualSequence);
+            $this->assertEquals($expectedSequence, $actualSequence,
+                "Tool sequence mismatch (strict).\n" .
+                "Expected: " . implode(' → ', $expectedSequence) . "\n" .
+                "Actual:   " . implode(' → ', $actualSequence) . "\n" .
+                $this->getFailureContext($response));
         } else {
             // Check that expected tools appear in order (but allow other tools between)
             $lastIndex = -1;
@@ -247,7 +275,11 @@ abstract class LlmTestCase extends FunctionalTestCase
                         break;
                     }
                 }
-                $this->assertTrue($found, "Expected tool '$expectedTool' not found in sequence or out of order");
+                $this->assertTrue($found,
+                    "Expected tool '$expectedTool' not found in sequence or out of order.\n" .
+                    "Expected sequence: " . implode(' → ', $expectedSequence) . "\n" .
+                    "Actual sequence:   " . implode(' → ', $actualSequence) . "\n" .
+                    $this->getFailureContext($response));
             }
         }
     }
@@ -277,7 +309,7 @@ abstract class LlmTestCase extends FunctionalTestCase
 
     /**
      * Assert that the response follows one of the acceptable patterns
-     * 
+     *
      * @param LlmResponse $response
      * @param array $acceptablePatterns Array of tool sequences, each can be partial
      * @param string $description Description of what patterns are expected
@@ -285,21 +317,20 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected function assertFollowsPattern(LlmResponse $response, array $acceptablePatterns, string $description = ''): void
     {
         $actualSequence = array_map(fn($call) => $call['name'], $response->getToolCalls());
-        
+
         foreach ($acceptablePatterns as $pattern) {
             if ($this->matchesPattern($actualSequence, $pattern)) {
                 return; // Pattern matched!
             }
         }
-        
+
         // No pattern matched
         $this->fail(
             "Response does not follow any acceptable pattern" . ($description ? " ($description)" : "") . ".\n\n" .
-            "Expected patterns:\n" . 
+            "Expected one of:\n" .
             implode("\n", array_map(fn($p) => '  - ' . implode(' → ', $p), $acceptablePatterns)) . "\n\n" .
             "Actual sequence: " . implode(' → ', $actualSequence) . "\n\n" .
-            "Prompt: " . $this->lastPrompt . "\n\n" .
-            $this->getToolCallsDebugString($response)
+            $this->getFailureContext($response)
         );
     }
 
@@ -485,7 +516,7 @@ abstract class LlmTestCase extends FunctionalTestCase
     
     /**
      * Assert that a specific tool was called before another tool
-     * 
+     *
      * @param string $firstTool Tool that should be called first
      * @param string $secondTool Tool that should be called after
      * @param string $message Optional failure message
@@ -495,29 +526,34 @@ abstract class LlmTestCase extends FunctionalTestCase
         $history = $this->getToolCallHistory();
         $firstIndex = array_search($firstTool, $history);
         $secondIndex = array_search($secondTool, $history);
-        
+
+        $historyStr = implode(' → ', $history);
+        $contextSuffix = "\nTool history: $historyStr\n" . $this->getFailureContext();
+
         if ($firstIndex === false) {
-            $this->fail($message ?: "Expected tool '$firstTool' was not called");
+            $this->fail(($message ?: "Expected tool '$firstTool' was not called") . $contextSuffix);
         }
-        
+
         if ($secondIndex === false) {
-            $this->fail($message ?: "Expected tool '$secondTool' was not called");
+            $this->fail(($message ?: "Expected tool '$secondTool' was not called") . $contextSuffix);
         }
-        
-        $this->assertLessThan($secondIndex, $firstIndex, 
-            $message ?: "Expected '$firstTool' to be called before '$secondTool'");
+
+        $this->assertLessThan($secondIndex, $firstIndex,
+            ($message ?: "Expected '$firstTool' to be called before '$secondTool'") . $contextSuffix);
     }
-    
+
     /**
      * Assert that a specific tool was called during exploration
-     * 
+     *
      * @param string $toolName Tool name to check
      * @param string $message Optional failure message
      */
     protected function assertToolWasCalled(string $toolName, string $message = ''): void
     {
         $history = $this->getToolCallHistory();
-        $this->assertContains($toolName, $history, 
-            $message ?: "Expected tool '$toolName' to be called during exploration");
+        $historyStr = implode(' → ', $history);
+        $this->assertContains($toolName, $history,
+            ($message ?: "Expected tool '$toolName' to be called during exploration") .
+            "\nTool history: $historyStr\n" . $this->getFailureContext());
     }
 }

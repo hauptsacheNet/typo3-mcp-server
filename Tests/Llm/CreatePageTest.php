@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Llm;
 
+use PHPUnit\Framework\Attributes\TestDox;
+
 /**
  * Test LLM's ability to create pages using MCP tools
- * 
+ *
  * @group llm
  */
 class CreatePageTest extends LlmTestCase
@@ -14,14 +16,12 @@ class CreatePageTest extends LlmTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        
+
         // Import test data with basic page structure
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/pages.csv');
     }
 
-    /**
-     * Test that LLM creates a simple page
-     */
+    #[TestDox('Prompt "Create a new page titled \'Test Page\' below the startpage" → GetPageTree for exploration, then WriteTable(create, pages, title=Test Page)')]
     public function testLlmCreatesSimplePage(): void
     {
         $prompt = "Create a new page titled 'Test Page' below the startpage";
@@ -64,9 +64,7 @@ class CreatePageTest extends LlmTestCase
         }
     }
 
-    /**
-     * Test that LLM creates a page under home with realistic prompt
-     */
+    #[TestDox('Prompt "Create a new page called \'New Service\' under the home page" → GetPageTree, then WriteTable(create, pages, pid=1, title=New Service)')]
     public function testLlmCreatesPageUnderHome(): void
     {
         // Realistic prompt without hints
@@ -134,9 +132,7 @@ class CreatePageTest extends LlmTestCase
         }
     }
 
-    /**
-     * Test that LLM handles complex page creation with multiple fields
-     */
+    #[TestDox('Prompt "Create a Products page with slug \'products\' and navigation title \'Our Products\'" → GetPageTree, then WriteTable(create, pages) with title, nav_title, and slug')]
     public function testLlmCreatesPageWithMetadata(): void
     {
         $prompt = "Create a Products page with slug 'products' and navigation title 'Our Products'";
@@ -172,11 +168,7 @@ class CreatePageTest extends LlmTestCase
         );
     }
 
-    /**
-     * Test that LLM can create nested pages
-     * Note: This is a challenging test as it requires the LLM to understand
-     * that it needs the ID from the first creation for the second
-     */
+    #[TestDox('Nested pages in a single prompt is skipped — LLM cannot get ID from first WriteTable for the second')]
     public function testLlmCreatesNestedPages(): void
     {
         $this->markTestSkipped(
@@ -186,9 +178,7 @@ class CreatePageTest extends LlmTestCase
         );
     }
 
-    /**
-     * Test error handling - LLM should check before creating duplicates
-     */
+    #[TestDox('Prompt "Check if an \'About Us\' page exists, create it if it doesn\'t" → explores via GetPageTree/Search, does NOT call WriteTable because page already exists')]
     public function testLlmAvoidsDuplicates(): void
     {
         $prompt = "Check if an 'About Us' page exists, create it if it doesn't";
