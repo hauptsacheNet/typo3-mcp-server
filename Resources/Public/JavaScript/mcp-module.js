@@ -565,7 +565,7 @@ class McpModule {
             method: 'GET',
             headers: { 'Accept': 'application/json' },
             mode: 'cors',
-            credentials: 'same-origin'
+            credentials: 'omit'
         })
             .then(response => {
                 if (response.ok) {
