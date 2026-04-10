@@ -90,6 +90,22 @@ This method gives you admin privileges by default. Add this to your mcp config f
 
 ## Development
 
+### Running Tests
+
+```bash
+# Functional tests (PHPUnit)
+composer test
+
+# E2E tests — spins up MySQL, TYPO3, and Playwright in Docker
+Build/runTests.sh -s e2e
+
+# E2E against an existing TYPO3 instance
+TYPO3_BASE_URL=https://my.ddev.site Build/runTests.sh -s e2e
+
+# See all options
+Build/runTests.sh -h
+```
+
 ### Adding New Tools
 
 Tools are defined in the `Classes/MCP/Tools` directory. Each tool follows the MCP tool specification and maps to specific TYPO3 functionality.

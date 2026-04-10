@@ -226,7 +226,7 @@ class McpEndpoint
             ]
         );
 
-        return $this->addCorsHeaders($response);
+        return $this->addCorsHeaders($response, $request);
     }
 
     /**
@@ -338,6 +338,6 @@ class McpEndpoint
             ->withStatus(200)
             ->withBody($body);
 
-        return $this->addCorsHeaders($response);
+        return $this->addCorsHeaders($response, $request);
     }
 }

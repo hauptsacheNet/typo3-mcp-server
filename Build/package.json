@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "engines": {
+    "node": ">=22.18.0 <23.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.52.0"
+  },
+  "scripts": {
+    "playwright:install": "playwright install",
+    "playwright:run": "playwright test",
+    "playwright:open": "playwright test --ui",
+    "playwright:report": "playwright show-report"
+  }
+}

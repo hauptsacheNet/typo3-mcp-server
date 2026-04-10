@@ -1,883 +1,649 @@
 /**
- * MCP Server Module JavaScript
+ * MCP Server Module - TYPO3 ES6 Module
  */
+import Modal from '@typo3/backend/modal.js';
+import Severity from '@typo3/backend/severity.js';
+import Notification from '@typo3/backend/notification.js';
+import AjaxRequest from '@typo3/core/ajax/ajax-request.js';
 
-function copyToClipboard(elementId, button) {
-    const element = document.getElementById(elementId);
-    if (!element) {
-        console.error('Element not found:', elementId);
-        return;
+class McpModule {
+    constructor() {
+        // ES6 modules via includeJavaScriptModules are typically deferred,
+        // but guard against edge cases where readyState may still be 'loading'.
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => this.initialize());
+        } else {
+            this.initialize();
+        }
     }
-    
-    let textToCopy = element.value;
-    let selectionStart = 0;
-    let selectionEnd = textToCopy.length;
-    
-    // Check if this is a server-only copy
-    const serverKey = button.getAttribute('data-copy-server-only');
-    if (serverKey) {
-        const result = extractServerConfigWithPosition(textToCopy, serverKey);
-        textToCopy = result.config;
-        selectionStart = result.start;
-        selectionEnd = result.end;
-    }
-    
-    // Select the relevant text in the textarea for visual feedback
-    element.focus();
-    element.setSelectionRange(selectionStart, selectionEnd);
-    
-    // Use modern clipboard API or fallback
-    if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(textToCopy).then(() => {
-            showCopyFeedback(button);
-        }).catch(err => {
-            console.error('Clipboard API failed:', err);
-            fallbackCopyWithText(textToCopy, button);
+
+    initialize() {
+        // Copy buttons
+        document.querySelectorAll('.copy-button[data-copy-target]').forEach(button => {
+            const targetId = button.getAttribute('data-copy-target');
+            if (targetId) {
+                button.addEventListener('click', () => this.copyToClipboard(targetId, button));
+            }
         });
-    } else {
-        // For fallback, use the already selected text
+
+        // Token management buttons
+        const refreshTokensBtn = document.getElementById('refresh-tokens-btn');
+        if (refreshTokensBtn) {
+            refreshTokensBtn.addEventListener('click', () => this.refreshTokens());
+        }
+
+        const revokeAllTokensBtn = document.getElementById('revoke-all-tokens-btn');
+        if (revokeAllTokensBtn) {
+            revokeAllTokensBtn.addEventListener('click', () => this.revokeAllTokens());
+        }
+
+        const createTokenBtn = document.getElementById('create-token-btn');
+        if (createTokenBtn) {
+            createTokenBtn.addEventListener('click', () => this.showCreateTokenModal());
+        }
+
+        // Delegated revoke button handler
+        document.addEventListener('click', (e) => {
+            const button = e.target.classList.contains('revoke-token-btn')
+                ? e.target
+                : e.target.closest('.revoke-token-btn');
+            if (!button) return;
+
+            const tokenId = button.getAttribute('data-token-id');
+            if (!tokenId) return;
+
+            Modal.advanced({
+                title: 'Revoke Token',
+                content: 'Are you sure you want to revoke this token? The associated MCP client will lose access immediately.',
+                severity: Severity.warning,
+                buttons: [
+                    {
+                        text: 'Cancel',
+                        btnClass: 'btn-default',
+                        trigger: () => Modal.dismiss()
+                    },
+                    {
+                        text: 'Revoke',
+                        btnClass: 'btn-warning',
+                        trigger: () => {
+                            Modal.dismiss();
+                            this.revokeToken(tokenId);
+                        }
+                    }
+                ]
+            });
+        });
+
+        // Check endpoint statuses
+        this.checkEndpointStatuses();
+    }
+
+    // =========================================================================
+    // Clipboard
+    // =========================================================================
+
+    copyToClipboard(elementId, button) {
+        const element = document.getElementById(elementId);
+        if (!element) {
+            console.error('Element not found:', elementId);
+            return;
+        }
+
+        let textToCopy = element.value;
+        let selectionStart = 0;
+        let selectionEnd = textToCopy.length;
+
+        const serverKey = button.getAttribute('data-copy-server-only');
+        if (serverKey) {
+            const result = this.extractServerConfigWithPosition(textToCopy, serverKey);
+            textToCopy = result.config;
+            selectionStart = result.start;
+            selectionEnd = result.end;
+        }
+
+        element.focus();
+        element.setSelectionRange(selectionStart, selectionEnd);
+
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                this.showCopyFeedback(button);
+            }).catch(() => {
+                this.fallbackCopyWithText(textToCopy, button);
+            });
+        } else {
+            try {
+                const success = document.execCommand('copy');
+                if (success) {
+                    this.showCopyFeedback(button);
+                } else {
+                    Notification.warning('Copy failed', 'Please select the text manually and copy with Ctrl+C (Cmd+C on Mac).');
+                }
+            } catch {
+                Notification.warning('Copy failed', 'Please select the text manually and copy with Ctrl+C (Cmd+C on Mac).');
+            }
+        }
+    }
+
+    extractServerConfigWithPosition(fullConfig, serverKey) {
+        try {
+            const config = JSON.parse(fullConfig);
+            const serverConfig = config.mcpServers[serverKey];
+            const serverConfigJson = JSON.stringify(serverConfig, null, 2);
+
+            const serverKeyPattern = new RegExp(`"${serverKey}"\\s*:\\s*{`, 'g');
+            const match = serverKeyPattern.exec(fullConfig);
+
+            if (match) {
+                const colonIndex = fullConfig.indexOf(':', match.index);
+                let start = fullConfig.indexOf('{', colonIndex);
+                let braceCount = 1;
+                let end = start + 1;
+
+                while (end < fullConfig.length && braceCount > 0) {
+                    if (fullConfig[end] === '{') braceCount++;
+                    else if (fullConfig[end] === '}') braceCount--;
+                    end++;
+                }
+
+                return { config: serverConfigJson, start, end };
+            }
+
+            return { config: serverConfigJson, start: 0, end: fullConfig.length };
+        } catch {
+            return { config: fullConfig, start: 0, end: fullConfig.length };
+        }
+    }
+
+    fallbackCopyWithText(text, button) {
+        const tempTextarea = document.createElement('textarea');
+        tempTextarea.value = text;
+        tempTextarea.style.position = 'fixed';
+        tempTextarea.style.left = '-999999px';
+        tempTextarea.style.top = '-999999px';
+        document.body.appendChild(tempTextarea);
+
+        tempTextarea.focus();
+        tempTextarea.select();
+
         try {
             const success = document.execCommand('copy');
             if (success) {
-                showCopyFeedback(button);
+                this.showCopyFeedback(button);
             } else {
-                showManualCopyMessage();
+                Notification.warning('Copy failed', 'Please select the text manually and copy with Ctrl+C (Cmd+C on Mac).');
             }
-        } catch (err) {
-            console.error('execCommand copy failed:', err);
-            showManualCopyMessage();
+        } catch {
+            Notification.warning('Copy failed', 'Please select the text manually and copy with Ctrl+C (Cmd+C on Mac).');
+        } finally {
+            document.body.removeChild(tempTextarea);
         }
     }
-}
 
-function extractServerConfigWithPosition(fullConfig, serverKey) {
-    try {
-        const config = JSON.parse(fullConfig);
-        const serverConfig = config.mcpServers[serverKey];
-        const serverConfigJson = JSON.stringify(serverConfig, null, 2);
-        
-        // Find the position of the server config in the original text
-        // Look for the server key followed by the opening brace
-        const serverKeyPattern = new RegExp(`"${serverKey}"\\s*:\\s*{`, 'g');
-        const match = serverKeyPattern.exec(fullConfig);
-        
-        if (match) {
-            // Find the start of the server config object (after the colon)
-            const colonIndex = fullConfig.indexOf(':', match.index);
-            let start = fullConfig.indexOf('{', colonIndex);
-            
-            // Find the matching closing brace
-            let braceCount = 1;
-            let end = start + 1;
-            
-            while (end < fullConfig.length && braceCount > 0) {
-                if (fullConfig[end] === '{') {
-                    braceCount++;
-                } else if (fullConfig[end] === '}') {
-                    braceCount--;
+    showCopyFeedback(button) {
+        if (!button) return;
+
+        const originalWidth = button.offsetWidth;
+        const iconMarkup = button.querySelector('.icon-markup');
+        const textNodes = Array.from(button.childNodes).filter(node => node.nodeType === Node.TEXT_NODE);
+        const lastTextNode = textNodes[textNodes.length - 1];
+
+        const originalIconText = iconMarkup ? iconMarkup.textContent : '';
+        const originalButtonText = lastTextNode ? lastTextNode.textContent : '';
+
+        button.style.width = originalWidth + 'px';
+
+        if (iconMarkup) iconMarkup.textContent = '✅';
+        if (lastTextNode) lastTextNode.textContent = ' Copied!';
+
+        button.classList.add('btn-success');
+        button.classList.remove('btn-outline-secondary');
+
+        setTimeout(() => {
+            if (iconMarkup) iconMarkup.textContent = originalIconText;
+            if (lastTextNode) lastTextNode.textContent = originalButtonText;
+            button.classList.remove('btn-success');
+            button.classList.add('btn-outline-secondary');
+            button.style.width = '';
+        }, 2000);
+    }
+
+    // =========================================================================
+    // Token CRUD
+    // =========================================================================
+
+    refreshTokens() {
+        new AjaxRequest(TYPO3.settings.ajaxUrls.mcp_server_get_tokens)
+            .post({})
+            .then(async (response) => {
+                const data = await response.resolve();
+                if (data.success) {
+                    this.updateTokensTable(data.tokens);
+                } else {
+                    Notification.error('Refresh failed', 'Failed to refresh tokens: ' + data.message);
                 }
-                end++;
-            }
-            
-            return {
-                config: serverConfigJson,
-                start: start,
-                end: end
-            };
-        }
-        
-        // Fallback if position finding fails
-        return {
-            config: serverConfigJson,
-            start: 0,
-            end: fullConfig.length
-        };
-        
-    } catch (err) {
-        console.error('Failed to extract server config:', err);
-        return {
-            config: fullConfig,
-            start: 0,
-            end: fullConfig.length
-        };
-    }
-}
-
-function fallbackCopyWithText(text, button) {
-    // Create a temporary textarea with the text to copy
-    const tempTextarea = document.createElement('textarea');
-    tempTextarea.value = text;
-    tempTextarea.style.position = 'fixed';
-    tempTextarea.style.left = '-999999px';
-    tempTextarea.style.top = '-999999px';
-    document.body.appendChild(tempTextarea);
-    
-    tempTextarea.focus();
-    tempTextarea.select();
-    
-    try {
-        const success = document.execCommand('copy');
-        if (success) {
-            showCopyFeedback(button);
-        } else {
-            showManualCopyMessage();
-        }
-    } catch (err) {
-        console.error('execCommand copy failed:', err);
-        showManualCopyMessage();
-    } finally {
-        document.body.removeChild(tempTextarea);
-    }
-}
-
-function fallbackCopy(element) {
-    try {
-        // Modern clipboard API fallback
-        if (navigator.clipboard && window.isSecureContext) {
-            navigator.clipboard.writeText(element.value).then(() => {
-                showCopyFeedback(event.target.closest('button'));
-            }).catch(err => {
-                console.error('Clipboard API failed:', err);
-                showManualCopyMessage();
+            })
+            .catch((error) => {
+                Notification.error('Network error', 'Error refreshing tokens: ' + (error.message || 'Unknown error'));
             });
-        } else {
-            showManualCopyMessage();
-        }
-    } catch (err) {
-        console.error('All copy methods failed:', err);
-        showManualCopyMessage();
-    }
-}
-
-function showCopyFeedback(button) {
-    if (!button) return;
-    
-    const originalWidth = button.offsetWidth;
-    
-    // Find the icon markup span and last text node (the visible button text)
-    const iconMarkup = button.querySelector('.icon-markup');
-    const textNodes = Array.from(button.childNodes).filter(node => node.nodeType === Node.TEXT_NODE);
-    const lastTextNode = textNodes[textNodes.length - 1]; // Assume last text node is the button text
-    
-    // Store original values
-    const originalIconText = iconMarkup ? iconMarkup.textContent : '';
-    const originalButtonText = lastTextNode ? lastTextNode.textContent : '';
-    
-    // Set fixed width to prevent size changes
-    button.style.width = originalWidth + 'px';
-    
-    // Update icon and text
-    if (iconMarkup) {
-        iconMarkup.textContent = '✅';
-    }
-    if (lastTextNode) {
-        lastTextNode.textContent = ' Copied!';
-    }
-    
-    button.classList.add('btn-success');
-    button.classList.remove('btn-outline-secondary');
-    
-    setTimeout(() => {
-        // Restore original content
-        if (iconMarkup) {
-            iconMarkup.textContent = originalIconText;
-        }
-        if (lastTextNode) {
-            lastTextNode.textContent = originalButtonText;
-        }
-        
-        button.classList.remove('btn-success');
-        button.classList.add('btn-outline-secondary');
-        // Remove fixed width to restore normal behavior
-        button.style.width = '';
-    }, 2000);
-}
-
-function showManualCopyMessage() {
-    alert('Copy failed. Please select the text manually and copy with Ctrl+C (Cmd+C on Mac).');
-}
-
-/**
- * Handle token generation
- */
-function generateToken() {
-    showLoading(true);
-    hideMessages();
-    
-    const generateBtn = document.getElementById('generate-token-btn');
-    if (generateBtn) {
-        generateBtn.disabled = true;
-    }
-    
-    fetch(TYPO3.settings.ajaxUrls['mcp_server_generate_token'], {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        showLoading(false);
-        
-        if (data.success) {
-            showSuccessMessage('Token generated successfully! The page will reload to show the updated status.');
-            // Reload page after 2 seconds to show updated token status
-            setTimeout(() => {
-                window.location.reload();
-            }, 2000);
-        } else {
-            showErrorMessage(data.message || 'Failed to generate token');
-            if (generateBtn) {
-                generateBtn.disabled = false;
-            }
-        }
-    })
-    .catch(error => {
-        showLoading(false);
-        showErrorMessage('Network error: ' + error.message);
-        if (generateBtn) {
-            generateBtn.disabled = false;
-        }
-    });
-}
-
-/**
- * Handle token refresh
- */
-function refreshToken() {
-    showLoading(true);
-    hideMessages();
-    
-    const refreshBtn = document.getElementById('refresh-token-btn');
-    if (refreshBtn) {
-        refreshBtn.disabled = true;
-    }
-    
-    fetch(TYPO3.settings.ajaxUrls['mcp_server_refresh_token'], {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        showLoading(false);
-        
-        if (data.success) {
-            showSuccessMessage('Token refreshed successfully! The page will reload to show the updated status.');
-            // Reload page after 2 seconds to show updated token status
-            setTimeout(() => {
-                window.location.reload();
-            }, 2000);
-        } else {
-            showErrorMessage(data.message || 'Failed to refresh token');
-            if (refreshBtn) {
-                refreshBtn.disabled = false;
-            }
-        }
-    })
-    .catch(error => {
-        showLoading(false);
-        showErrorMessage('Network error: ' + error.message);
-        if (refreshBtn) {
-            refreshBtn.disabled = false;
-        }
-    });
-}
-
-/**
- * Show loading indicator
- */
-function showLoading(show = true) {
-    const messagesContainer = document.getElementById('token-messages');
-    const loadingDiv = document.getElementById('token-loading');
-    const successDiv = document.getElementById('token-success');
-    const errorDiv = document.getElementById('token-error');
-    
-    if (messagesContainer && loadingDiv) {
-        if (show) {
-            messagesContainer.style.display = 'block';
-            loadingDiv.style.display = 'block';
-            if (successDiv) successDiv.style.display = 'none';
-            if (errorDiv) errorDiv.style.display = 'none';
-        } else {
-            loadingDiv.style.display = 'none';
-        }
-    }
-}
-
-/**
- * Show success message
- */
-function showSuccessMessage(message, autoHide = false) {
-    const messagesContainer = document.getElementById('token-messages');
-    const successDiv = document.getElementById('token-success');
-    const errorDiv = document.getElementById('token-error');
-    
-    if (messagesContainer && successDiv) {
-        messagesContainer.style.display = 'block';
-        successDiv.style.display = 'block';
-        successDiv.textContent = message;
-        if (errorDiv) errorDiv.style.display = 'none';
-        
-        if (autoHide) {
-            setTimeout(() => {
-                messagesContainer.style.display = 'none';
-            }, 3000);
-        }
-    }
-}
-
-/**
- * Show error message
- */
-function showErrorMessage(message) {
-    const messagesContainer = document.getElementById('token-messages');
-    const errorDiv = document.getElementById('token-error');
-    const successDiv = document.getElementById('token-success');
-    
-    if (messagesContainer && errorDiv) {
-        messagesContainer.style.display = 'block';
-        errorDiv.style.display = 'block';
-        errorDiv.textContent = message;
-        if (successDiv) successDiv.style.display = 'none';
-    }
-}
-
-/**
- * Hide all messages
- */
-function hideMessages() {
-    const successDiv = document.getElementById('token-success');
-    const errorDiv = document.getElementById('token-error');
-    const loadingDiv = document.getElementById('token-loading');
-    
-    if (successDiv) {
-        successDiv.style.display = 'none';
-    }
-    if (errorDiv) {
-        errorDiv.style.display = 'none';
-    }
-    if (loadingDiv) {
-        loadingDiv.style.display = 'none';
-    }
-}
-
-// Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', function() {
-    // Add event listeners to all copy buttons using data attributes
-    const copyButtons = document.querySelectorAll('.copy-button[data-copy-target]');
-    copyButtons.forEach(button => {
-        const targetId = button.getAttribute('data-copy-target');
-        if (targetId) {
-            button.addEventListener('click', () => copyToClipboard(targetId, button));
-        }
-    });
-    
-    // Add event listeners for token management buttons
-    const generateBtn = document.getElementById('generate-token-btn');
-    if (generateBtn) {
-        generateBtn.addEventListener('click', generateToken);
-    }
-    
-    const refreshBtn = document.getElementById('refresh-token-btn');
-    if (refreshBtn) {
-        refreshBtn.addEventListener('click', refreshToken);
-    }
-    
-    // Add event listener for token refresh (OAuth tokens table)
-    const refreshTokensBtn = document.getElementById('refresh-tokens-btn');
-    if (refreshTokensBtn) {
-        refreshTokensBtn.addEventListener('click', refreshTokens);
-    }
-    
-    // Add event listener for revoke all tokens
-    const revokeAllTokensBtn = document.getElementById('revoke-all-tokens-btn');
-    if (revokeAllTokensBtn) {
-        revokeAllTokensBtn.addEventListener('click', revokeAllTokens);
-    }
-    
-    // Add event listener for create mcp-remote token
-    const createMcpRemoteTokenBtn = document.getElementById('create-mcp-remote-token-btn');
-    if (createMcpRemoteTokenBtn) {
-        createMcpRemoteTokenBtn.addEventListener('click', createMcpRemoteToken);
     }
 
-    // Add event listener for create n8n token
-    const createN8nTokenBtn = document.getElementById('create-n8n-token-btn');
-    if (createN8nTokenBtn) {
-        createN8nTokenBtn.addEventListener('click', createN8nToken);
+    revokeToken(tokenId) {
+        const tokenIdInt = parseInt(tokenId, 10);
+
+        if (!tokenIdInt || tokenIdInt <= 0) {
+            Notification.error('Invalid token', 'Invalid token ID: ' + tokenId);
+            return;
+        }
+
+        new AjaxRequest(TYPO3.settings.ajaxUrls.mcp_server_revoke_token)
+            .post({ tokenId: tokenIdInt })
+            .then(async (response) => {
+                const data = await response.resolve();
+                if (data.success) {
+                    Notification.success('Token revoked', data.message);
+                    this.refreshTokens();
+                } else {
+                    Notification.error('Revoke failed', 'Failed to revoke token: ' + data.message);
+                }
+            })
+            .catch((error) => {
+                Notification.error('Network error', 'Error revoking token: ' + (error.message || 'Unknown error'));
+            });
     }
 
-    // Add event listener for create manus token
-    const createManusTokenBtn = document.getElementById('create-manus-token-btn');
-    if (createManusTokenBtn) {
-        createManusTokenBtn.addEventListener('click', createManusToken);
-    }
-
-    // Add event delegation for token revocation buttons (dynamically created)
-    document.addEventListener('click', function(e) {
-        if (e.target.classList.contains('revoke-token-btn') || e.target.closest('.revoke-token-btn')) {
-            const button = e.target.classList.contains('revoke-token-btn') ? e.target : e.target.closest('.revoke-token-btn');
-            const tokenId = button.getAttribute('data-token-id');
-            
-            console.log('Revoke button clicked, tokenId:', tokenId, 'button:', button);
-            
-            if (tokenId && confirm('Are you sure you want to revoke this token? The associated MCP client will lose access immediately.')) {
-                revokeToken(tokenId);
-            }
-        }
-    });
-    
-    // Check OAuth endpoints status
-    checkEndpointStatuses();
-});
-
-/**
- * Token Management Functions for OAuth Tokens Table
- */
-
-/**
- * Refresh the OAuth tokens table
- */
-function refreshTokens() {
-    showLoading();
-    
-    fetch(TYPO3.settings.ajaxUrls.mcp_server_get_tokens, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-    })
-    .then(response => response.json())
-    .then(data => {
-        showLoading(false);
-        if (data.success) {
-            updateTokensTable(data.tokens);
-        } else {
-            showErrorMessage('Failed to refresh tokens: ' + data.message);
-        }
-    })
-    .catch(error => {
-        showLoading(false);
-        showErrorMessage('Error refreshing tokens: ' + error.message);
-    });
-}
-
-/**
- * Revoke a specific token
- */
-function revokeToken(tokenId) {
-    showLoading();
-    
-    // Ensure tokenId is an integer
-    const tokenIdInt = parseInt(tokenId, 10);
-    
-    if (!tokenIdInt || tokenIdInt <= 0) {
-        showErrorMessage('Invalid token ID: ' + tokenId);
-        showLoading(false);
-        return;
-    }
-    
-    fetch(TYPO3.settings.ajaxUrls.mcp_server_revoke_token, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            tokenId: tokenIdInt
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        showLoading(false);
-        if (data.success) {
-            showSuccessMessage(data.message, true);
-            refreshTokens(); // Refresh the token list
-        } else {
-            showErrorMessage('Failed to revoke token: ' + data.message);
-        }
-    })
-    .catch(error => {
-        showLoading(false);
-        showErrorMessage('Error revoking token: ' + error.message);
-    });
-}
-
-/**
- * Revoke all tokens for the current user
- */
-function revokeAllTokens() {
-    if (!confirm('Are you sure you want to revoke ALL tokens? This will disconnect all MCP clients and require re-authentication.')) {
-        return;
-    }
-    
-    showLoading();
-    
-    fetch(TYPO3.settings.ajaxUrls.mcp_server_revoke_all_tokens, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        showLoading(false);
-        if (data.success) {
-            showSuccessMessage(data.message, true);
-            refreshTokens(); // Refresh the token list to show empty state
-        } else {
-            showErrorMessage('Failed to revoke all tokens: ' + data.message);
-        }
-    })
-    .catch(error => {
-        showLoading(false);
-        showErrorMessage('Error revoking all tokens: ' + error.message);
-    });
-}
-
-/**
- * Update the tokens table with new data
- */
-function updateTokensTable(tokens) {
-    const container = document.getElementById('tokens-container');
-    
-    if (!container) {
-        console.error('Tokens container not found');
-        return;
-    }
-    
-    if (tokens.length === 0) {
-        container.innerHTML = `
-            <div id="no-tokens-message" class="text-center text-muted py-4">
-                <div class="mb-3">
-                    <span style="font-size: 2rem;">🔑</span>
-                </div>
-                <p>No active OAuth tokens found.</p>
-                <p class="small">Use the Remote MCP Setup above to connect your first MCP client.</p>
-            </div>
-        `;
-    } else {
-        const tableHTML = `
-            <div class="table-responsive">
-                <table class="table table-striped">
-                    <thead>
-                        <tr>
-                            <th>Client Name</th>
-                            <th>Created</th>
-                            <th>Last Used</th>
-                            <th>Expires</th>
-                            <th>Token</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tokens-table-body">
-                        ${tokens.map(token => `
-                            <tr data-token-id="${token.uid}">
-                                <td><strong>${token.client_name}</strong></td>
-                                <td><small class="text-muted">${token.created}</small></td>
-                                <td><small class="text-muted">${token.last_used}</small></td>
-                                <td><small class="text-muted">${token.expires}</small></td>
-                                <td><code class="small">${token.token_preview}</code></td>
-                                <td>
-                                    <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="${token.uid}">
-                                        <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-delete" data-identifier="actions-delete">
-                                            <span class="icon-markup">🗑️</span>
-                                        </span>
-                                        Revoke
-                                    </button>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>
-        `;
-        container.innerHTML = tableHTML;
-    }
-}
-
-/**
- * Create mcp-remote token
- */
-function createMcpRemoteToken() {
-    showLoading();
-
-    const button = document.getElementById('create-mcp-remote-token-btn');
-    if (button) {
-        button.disabled = true;
-    }
-
-    fetch(TYPO3.settings.ajaxUrls.mcp_server_create_token, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        showLoading(false);
-        if (data.success) {
-            showSuccessMessage('mcp-remote token created successfully! Refreshing page to show the token URL.');
-            // Reload page after 2 seconds to show updated token status
-            setTimeout(() => {
-                window.location.reload();
-            }, 2000);
-        } else {
-            showErrorMessage(data.message || 'Failed to create mcp-remote token');
-            if (button) {
-                button.disabled = false;
-            }
-        }
-    })
-    .catch(error => {
-        showLoading(false);
-        showErrorMessage('Error creating token: ' + error.message);
-        if (button) {
-            button.disabled = false;
-        }
-    });
-}
-
-/**
- * Create n8n token
- */
-function createN8nToken() {
-    showLoading();
-
-    const button = document.getElementById('create-n8n-token-btn');
-    if (button) {
-        button.disabled = true;
-    }
-
-    fetch(TYPO3.settings.ajaxUrls.mcp_server_create_token, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            clientType: 'n8n token'
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        showLoading(false);
-        if (data.success) {
-            showSuccessMessage('n8n token created successfully! Refreshing page to show the token.');
-            // Reload page after 2 seconds to show updated token status
-            setTimeout(() => {
-                window.location.reload();
-            }, 2000);
-        } else {
-            showErrorMessage(data.message || 'Failed to create n8n token');
-            if (button) {
-                button.disabled = false;
-            }
-        }
-    })
-    .catch(error => {
-        showLoading(false);
-        showErrorMessage('Error creating token: ' + error.message);
-        if (button) {
-            button.disabled = false;
-        }
-    });
-}
-
-/**
- * Create manus token
- */
-function createManusToken() {
-    showLoading();
-
-    const button = document.getElementById('create-manus-token-btn');
-    if (button) {
-        button.disabled = true;
-    }
-
-    fetch(TYPO3.settings.ajaxUrls.mcp_server_create_token, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            clientType: 'manus token'
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        showLoading(false);
-        if (data.success) {
-            showSuccessMessage('manus token created successfully! Refreshing page to show the token.');
-            // Reload page after 2 seconds to show updated token status
-            setTimeout(() => {
-                window.location.reload();
-            }, 2000);
-        } else {
-            showErrorMessage(data.message || 'Failed to create manus token');
-            if (button) {
-                button.disabled = false;
-            }
-        }
-    })
-    .catch(error => {
-        showLoading(false);
-        showErrorMessage('Error creating token: ' + error.message);
-        if (button) {
-            button.disabled = false;
-        }
-    });
-}
-
-/**
- * Check OAuth endpoint statuses
- */
-function checkEndpointStatuses() {
-    const endpointElements = document.querySelectorAll('.endpoint-status');
-    
-    endpointElements.forEach(element => {
-        const endpoint = element.getAttribute('data-endpoint');
-        const checkContent = element.getAttribute('data-check-content') === 'true';
-        const checkAuth = element.getAttribute('data-check-auth') === 'true';
-        
-        if (endpoint) {
-            if (checkAuth) {
-                checkMcpEndpointAuth(element, endpoint);
-            } else {
-                checkEndpoint(element, endpoint, checkContent);
-            }
-        }
-    });
-}
-
-/**
- * Check a single endpoint
- */
-function checkEndpoint(element, endpoint, checkContent) {
-    // Set checking state
-    element.classList.add('checking');
-    element.classList.remove('success', 'warning', 'error');
-    
-    const statusIcon = element.querySelector('.status-icon');
-    const statusTooltip = element.querySelector('.status-tooltip');
-    
-    // Make the request
-    fetch(endpoint, {
-        method: 'GET',
-        headers: {
-            'Accept': 'application/json'
-        },
-        mode: 'cors',
-        credentials: 'same-origin'
-    })
-    .then(response => {
-        if (response.ok) {
-            // Endpoint is reachable
-            if (checkContent) {
-                return response.text().then(text => {
-                    // Check if our MCP endpoint is mentioned
-                    if (text.includes('/mcp')) {
-                        setEndpointStatus(element, 'success', 'Endpoint is working correctly');
-                    } else {
-                        setEndpointStatus(element, 'warning', 'Endpoint is reachable but does not mention MCP endpoint');
+    revokeAllTokens() {
+        Modal.advanced({
+            title: 'Revoke All Tokens',
+            content: 'Are you sure you want to revoke ALL tokens? This will disconnect all MCP clients and require re-authentication.',
+            severity: Severity.warning,
+            buttons: [
+                {
+                    text: 'Cancel',
+                    btnClass: 'btn-default',
+                    trigger: () => Modal.dismiss()
+                },
+                {
+                    text: 'Revoke All',
+                    btnClass: 'btn-warning',
+                    trigger: () => {
+                        Modal.dismiss();
+                        new AjaxRequest(TYPO3.settings.ajaxUrls.mcp_server_revoke_all_tokens)
+                            .post({})
+                            .then(async (response) => {
+                                const data = await response.resolve();
+                                if (data.success) {
+                                    Notification.success('Tokens revoked', data.message);
+                                    this.refreshTokens();
+                                } else {
+                                    Notification.error('Revoke failed', 'Failed to revoke all tokens: ' + data.message);
+                                }
+                            })
+                            .catch((error) => {
+                                Notification.error('Network error', 'Error revoking all tokens: ' + (error.message || 'Unknown error'));
+                            });
                     }
-                });
-            } else {
-                setEndpointStatus(element, 'success', 'Endpoint is reachable');
-            }
-        } else {
-            // Endpoint returned an error
-            setEndpointStatus(element, 'error', `Endpoint returned ${response.status} ${response.statusText}`);
-        }
-    })
-    .catch(error => {
-        // Network error or CORS issue
-        if (error.message.includes('CORS') || error.message.includes('blocked')) {
-            setEndpointStatus(element, 'error', 'Endpoint may be blocked by CORS policy or security settings');
-        } else {
-            setEndpointStatus(element, 'error', `Network error: ${error.message}`);
-        }
-    });
-}
-
-/**
- * Set endpoint status
- */
-function setEndpointStatus(element, status, message) {
-    element.classList.remove('checking', 'success', 'warning', 'error');
-    element.classList.add(status);
-    
-    const statusTooltip = element.querySelector('.status-tooltip');
-    if (statusTooltip) {
-        statusTooltip.textContent = message;
+                }
+            ]
+        });
     }
-}
 
-/**
- * Check MCP endpoint with Authorization header test
- */
-function checkMcpEndpointAuth(element, endpoint) {
-    // Set checking state
-    element.classList.add('checking');
-    element.classList.remove('success', 'warning', 'error');
-    
-    // Create a test request with a dummy Bearer token
-    // Use credentials: 'omit' to avoid sending HTTP basic auth credentials,
-    // which would be replaced by our Bearer header and cause logout issues
-    fetch(endpoint + '?test=auth', {
-        method: 'GET',
-        headers: {
-            'Accept': 'application/json',
-            'Authorization': 'Bearer test-header-check-12345'
-        },
-        mode: 'cors',
-        credentials: 'omit'
-    })
-    .then(response => {
-        // We expect this to fail with 401 since it's a fake token
-        // But we can check if our test mode returns header info
-        return response.json().then(data => {
-            // Check if the response indicates the header was received
-            if (data.headers_received && data.headers_received.authorization) {
-                setEndpointStatus(element, 'success', 'MCP endpoint is accessible and can receive Authorization headers');
-                // Hide the warning since headers work
-                const warningDiv = document.getElementById('auth-header-warning');
-                if (warningDiv) {
-                    warningDiv.style.display = 'none';
-                }
-            } else {
-                setEndpointStatus(element, 'error', 'MCP endpoint cannot receive Authorization headers - see warning below');
-                // Show the warning
-                const warningDiv = document.getElementById('auth-header-warning');
-                if (warningDiv) {
-                    warningDiv.style.display = 'block';
-                }
+    /**
+     * Show modal to name the new token before creating it.
+     */
+    showCreateTokenModal() {
+        const container = document.createElement('div');
+        container.style.padding = '10px';
+
+        const label = document.createElement('label');
+        label.className = 'form-label';
+        label.setAttribute('for', 'modal-token-name-input');
+        label.textContent = 'Token name';
+        container.appendChild(label);
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'form-control';
+        input.id = 'modal-token-name-input';
+        input.maxLength = 100;
+        input.placeholder = 'e.g. n8n, manus, my-app';
+        container.appendChild(input);
+
+        const hint = document.createElement('p');
+        hint.className = 'text-muted small mt-2 mb-0';
+        hint.textContent = 'Choose a name to identify this token later. It will appear in the token list.';
+        container.appendChild(hint);
+
+        const submit = () => {
+            const name = input.value.trim();
+            if (!name) {
+                Notification.warning('Name required', 'Please enter a name for the token.');
+                return;
             }
-        }).catch(() => {
-            // If JSON parsing fails, check the status code
-            if (response.status === 401) {
-                // A 401 may indicate HTTP basic auth is blocking the request
-                setEndpointStatus(element, 'warning', 'MCP endpoint returned 401 - if behind HTTP basic auth, the Authorization header may be blocked');
-                const warningDiv = document.getElementById('auth-header-warning');
-                if (warningDiv) {
-                    warningDiv.style.display = 'block';
-                }
-            } else {
-                setEndpointStatus(element, 'error', `MCP endpoint returned ${response.status} ${response.statusText}`);
+            Modal.dismiss();
+            this.createToken(name);
+        };
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                submit();
             }
         });
-    })
-    .catch(error => {
-        // Network error or CORS issue
-        if (error.message.includes('CORS') || error.message.includes('blocked')) {
-            setEndpointStatus(element, 'error', 'MCP endpoint may be blocked by CORS policy or security settings');
+
+        Modal.advanced({
+            title: 'Create Token',
+            content: container,
+            severity: Severity.info,
+            buttons: [
+                {
+                    text: 'Cancel',
+                    btnClass: 'btn-default',
+                    trigger: () => Modal.dismiss()
+                },
+                {
+                    text: 'Create',
+                    btnClass: 'btn-primary',
+                    trigger: submit
+                }
+            ]
+        });
+
+        // Focus the input after the Bootstrap modal transition completes.
+        // TYPO3's Modal moves our content to the top frame, so use
+        // input.closest('.modal') to find the actual modal element.
+        setTimeout(() => {
+            const modalEl = input.closest('.modal');
+            if (modalEl) {
+                modalEl.addEventListener('shown.bs.modal', () => input.focus(), { once: true });
+            }
+        }, 0);
+    }
+
+    /**
+     * Create a token via AJAX and show the "show once" modal.
+     */
+    createToken(clientName) {
+        new AjaxRequest(TYPO3.settings.ajaxUrls.mcp_server_create_token)
+            .post({ clientName })
+            .then(async (response) => {
+                const data = await response.resolve();
+                if (data.success && data.token) {
+                    this.showTokenModal(data.token, clientName);
+                    this.refreshTokens();
+                } else {
+                    Notification.error('Token creation failed', data.message || 'Unknown error');
+                }
+            })
+            .catch((error) => {
+                Notification.error('Network error', 'Error creating token: ' + (error.message || 'Unknown error'));
+            });
+    }
+
+    /**
+     * Display a TYPO3 Modal with the plain token (shown only once).
+     */
+    showTokenModal(plainToken, clientName) {
+        const container = document.createElement('div');
+        container.style.padding = '10px';
+
+        const warning = document.createElement('div');
+        warning.className = 'alert alert-warning';
+        const warningStrong = document.createElement('strong');
+        warningStrong.textContent = 'This token will only be shown once.';
+        warning.appendChild(warningStrong);
+        warning.appendChild(document.createTextNode(' Copy it now and store it securely. You will not be able to see it again.'));
+        container.appendChild(warning);
+
+        if (clientName) {
+            const label = document.createElement('p');
+            const strong = document.createElement('strong');
+            strong.textContent = 'Token name: ';
+            label.appendChild(strong);
+            label.appendChild(document.createTextNode(clientName));
+            container.appendChild(label);
+        }
+
+        const inputGroup = document.createElement('div');
+        inputGroup.className = 'input-group mb-3';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'form-control';
+        input.value = plainToken;
+        input.readOnly = true;
+        input.style.fontFamily = 'monospace';
+        input.id = 'modal-token-value';
+        inputGroup.appendChild(input);
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'btn btn-outline-secondary';
+        copyBtn.type = 'button';
+        copyBtn.textContent = 'Copy';
+        copyBtn.addEventListener('click', () => {
+            const onSuccess = () => {
+                copyBtn.textContent = 'Copied!';
+                copyBtn.classList.add('btn-success');
+                copyBtn.classList.remove('btn-outline-secondary');
+            };
+            // The modal lives in the top frame (TYPO3 Modal API), so use
+            // input.ownerDocument for execCommand — not the iframe's document.
+            const doc = input.ownerDocument;
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(plainToken).then(onSuccess).catch(() => {
+                    input.focus();
+                    input.select();
+                    doc.execCommand('copy');
+                    onSuccess();
+                });
+            } else {
+                input.focus();
+                input.select();
+                if (doc.execCommand('copy')) {
+                    onSuccess();
+                } else {
+                    copyBtn.textContent = 'Select & copy with Ctrl+C';
+                }
+            }
+        });
+        inputGroup.appendChild(copyBtn);
+        container.appendChild(inputGroup);
+
+        Modal.advanced({
+            title: 'Token Created',
+            content: container,
+            severity: Severity.ok,
+            staticBackdrop: true,
+            buttons: [
+                {
+                    text: 'I have copied the token',
+                    btnClass: 'btn-primary',
+                    trigger: () => {
+                        Modal.dismiss();
+                    }
+                }
+            ]
+        });
+
+        // Focus and select the token value after the modal transition so
+        // the user can immediately Cmd+C / Ctrl+C.
+        setTimeout(() => {
+            const modalEl = input.closest('.modal');
+            if (modalEl) {
+                modalEl.addEventListener('shown.bs.modal', () => {
+                    input.focus();
+                    input.select();
+                }, { once: true });
+            }
+        }, 0);
+    }
+
+    // =========================================================================
+    // Token Table
+    // =========================================================================
+
+    /**
+     * Escape HTML special characters to prevent XSS when building innerHTML.
+     */
+    escapeHtml(str) {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(String(str ?? '')));
+        return div.innerHTML;
+    }
+
+    updateTokensTable(tokens) {
+        const container = document.getElementById('tokens-container');
+        if (!container) return;
+
+        if (!tokens || tokens.length === 0) {
+            container.innerHTML = `
+                <div id="no-tokens-message" class="text-center text-muted py-4">
+                    <p>No active tokens found.</p>
+                    <p class="small">Click <strong>Create Token</strong> above to create your first token.</p>
+                </div>
+            `;
         } else {
-            setEndpointStatus(element, 'error', `Network error: ${error.message}`);
+            const esc = (s) => this.escapeHtml(String(s ?? ''));
+            container.innerHTML = `
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Client Name</th>
+                                <th>Created</th>
+                                <th>Last Used</th>
+                                <th>Expires</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${tokens.map(token => `
+                                <tr data-token-id="${esc(token.uid)}">
+                                    <td><strong>${esc(token.client_name)}</strong></td>
+                                    <td><small class="text-muted">${esc(token.created)}</small></td>
+                                    <td><small class="text-muted">${esc(token.last_used)}</small></td>
+                                    <td><small class="text-muted">${esc(token.expires)}</small></td>
+                                    <td>
+                                        <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="${esc(token.uid)}" aria-label="Revoke token for ${esc(token.client_name)}">
+                                            <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-delete" data-identifier="actions-delete"><span class="icon-markup">🗑️</span></span>
+                                            Revoke
+                                        </button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
         }
-        // Show the warning on any error
-        const warningDiv = document.getElementById('auth-header-warning');
-        if (warningDiv) {
-            warningDiv.style.display = 'block';
+    }
+
+    // =========================================================================
+    // Endpoint Status Checks (use raw fetch — these are cross-origin requests)
+    // =========================================================================
+
+    checkEndpointStatuses() {
+        document.querySelectorAll('.endpoint-status').forEach(element => {
+            const endpoint = element.getAttribute('data-endpoint');
+            const checkContent = element.getAttribute('data-check-content') === 'true';
+            const checkAuth = element.getAttribute('data-check-auth') === 'true';
+
+            if (endpoint) {
+                if (checkAuth) {
+                    this.checkMcpEndpointAuth(element, endpoint);
+                } else {
+                    this.checkEndpoint(element, endpoint, checkContent);
+                }
+            }
+        });
+    }
+
+    checkEndpoint(element, endpoint, checkContent) {
+        element.classList.add('checking');
+        element.classList.remove('success', 'warning', 'error');
+
+        fetch(endpoint, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            mode: 'cors',
+            credentials: 'omit'
+        })
+            .then(response => {
+                if (response.ok) {
+                    if (checkContent) {
+                        return response.text().then(text => {
+                            if (text.includes('/mcp')) {
+                                this.setEndpointStatus(element, 'success', 'Endpoint is working correctly');
+                            } else {
+                                this.setEndpointStatus(element, 'warning', 'Endpoint is reachable but does not mention MCP endpoint');
+                            }
+                        });
+                    }
+                    return this.setEndpointStatus(element, 'success', 'Endpoint is reachable');
+                } else {
+                    this.setEndpointStatus(element, 'error', `Endpoint returned ${response.status} ${response.statusText}`);
+                }
+            })
+            .catch(error => {
+                if (error.message.includes('CORS') || error.message.includes('blocked')) {
+                    this.setEndpointStatus(element, 'error', 'Endpoint may be blocked by CORS policy or security settings');
+                } else {
+                    this.setEndpointStatus(element, 'error', `Network error: ${error.message}`);
+                }
+            });
+    }
+
+    setEndpointStatus(element, status, message) {
+        element.classList.remove('checking', 'success', 'warning', 'error');
+        element.classList.add(status);
+
+        const statusTooltip = element.querySelector('.status-tooltip');
+        if (statusTooltip) {
+            statusTooltip.textContent = message;
         }
-    });
+    }
+
+    checkMcpEndpointAuth(element, endpoint) {
+        element.classList.add('checking');
+        element.classList.remove('success', 'warning', 'error');
+
+        fetch(endpoint + '?test=auth', {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json',
+                'Authorization': 'Bearer test-header-check-12345'
+            },
+            mode: 'cors',
+            credentials: 'same-origin'
+        })
+            .then(response => {
+                return response.json().then(data => {
+                    if (data.headers_received && data.headers_received.authorization) {
+                        this.setEndpointStatus(element, 'success', 'MCP endpoint is accessible and can receive Authorization headers');
+                        const warningDiv = document.getElementById('auth-header-warning');
+                        if (warningDiv) warningDiv.style.display = 'none';
+                    } else {
+                        this.setEndpointStatus(element, 'error', 'MCP endpoint cannot receive Authorization headers - see warning below');
+                        const warningDiv = document.getElementById('auth-header-warning');
+                        if (warningDiv) warningDiv.style.display = 'block';
+                    }
+                }).catch(() => {
+                    if (response.status === 401) {
+                        this.setEndpointStatus(element, 'warning', 'MCP endpoint is reachable but Authorization header status unknown');
+                    } else {
+                        this.setEndpointStatus(element, 'error', `MCP endpoint returned ${response.status} ${response.statusText}`);
+                    }
+                });
+            })
+            .catch(error => {
+                if (error.message.includes('CORS') || error.message.includes('blocked')) {
+                    this.setEndpointStatus(element, 'error', 'MCP endpoint may be blocked by CORS policy or security settings');
+                } else {
+                    this.setEndpointStatus(element, 'error', `Network error: ${error.message}`);
+                }
+                const warningDiv = document.getElementById('auth-header-warning');
+                if (warningDiv) warningDiv.style.display = 'block';
+            });
+    }
 }
+
+export default new McpModule();
