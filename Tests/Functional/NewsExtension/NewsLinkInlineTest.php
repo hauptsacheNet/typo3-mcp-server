@@ -306,7 +306,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
             ],
         ]);
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('must contain record data arrays', $result->jsonSerialize()['content'][0]->text);
+        $this->assertStringContainsString('must be a record data array or a positive integer UID', $result->jsonSerialize()['content'][0]->text);
         
         // Test empty record data
         $result = $writeTool->execute([
