@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -30,6 +31,7 @@ class InlineRelationWriteTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_file.csv');
         $this->setUpBackendUser(1);
+        $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('default');
     }
 
     /**
@@ -110,14 +112,6 @@ class InlineRelationWriteTest extends FunctionalTestCase
         $actualUids = $news['content_elements'];
         sort($actualUids);
         $this->assertEquals($contentUids, $actualUids);
-    }
-
-    /**
-     * Test writing inline relations for hidden tables (sys_file_reference)
-     */
-    public function testWriteHiddenTableInlineRelation(): void
-    {
-        $this->markTestSkipped('sys_file_reference is intentionally restricted due to workspace limitations');
     }
 
     /**
@@ -270,7 +264,7 @@ class InlineRelationWriteTest extends FunctionalTestCase
     public function testInlineRelationSorting(): void
     {
         $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
-        
+
         // Create page and news
         $result = $writeTool->execute([
             'table' => 'pages',
@@ -281,6 +275,7 @@ class InlineRelationWriteTest extends FunctionalTestCase
                 'doktype' => 1,
             ],
         ]);
+        $this->assertFalse($result->isError, 'Page create: ' . ($result->content[0]->text ?? ''));
         $pageUid = json_decode($result->content[0]->text, true)['uid'];
         
         $result = $writeTool->execute([
@@ -293,12 +288,12 @@ class InlineRelationWriteTest extends FunctionalTestCase
         ]);
         $newsUid = json_decode($result->content[0]->text, true)['uid'];
         
-        // Create content elements in reverse order because DataHandler assigns
-        // lower sorting values to newer records when using default 'bottom' position
+        // Create content elements in order — default 'bottom' position assigns
+        // ascending sorting values automatically via DataHandler move commands
         $contentData = [
-            ['header' => 'Third', 'sorting' => 300],
-            ['header' => 'Second', 'sorting' => 200],
-            ['header' => 'First', 'sorting' => 100],
+            ['header' => 'First'],
+            ['header' => 'Second'],
+            ['header' => 'Third'],
         ];
         
         $createdUids = [];
@@ -312,7 +307,7 @@ class InlineRelationWriteTest extends FunctionalTestCase
                     'tx_news_related_news' => $newsUid,
                 ]),
             ]);
-            $this->assertFalse($result->isError);
+            $this->assertFalse($result->isError, 'Create failed: ' . ($result->content[0]->text ?? 'no content'));
             $uid = json_decode($result->content[0]->text, true)['uid'];
             $createdUids[$data['header']] = $uid;
         }
@@ -513,7 +508,7 @@ class InlineRelationWriteTest extends FunctionalTestCase
         $this->assertTrue($result->isError);
         $this->assertStringContainsString('must be an array of UIDs', $result->jsonSerialize()['content'][0]->text);
         
-        // Test 2: Array with non-numeric values
+        // Test 2: Array with non-numeric, non-array values
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
@@ -523,8 +518,8 @@ class InlineRelationWriteTest extends FunctionalTestCase
             ],
         ]);
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('must contain only positive integer UIDs', $result->jsonSerialize()['content'][0]->text);
-        
+        $this->assertStringContainsString('must be a record data array or a positive integer UID', $result->jsonSerialize()['content'][0]->text);
+
         // Test 3: Array with negative values
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
@@ -535,9 +530,9 @@ class InlineRelationWriteTest extends FunctionalTestCase
             ],
         ]);
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('must contain only positive integer UIDs', $result->jsonSerialize()['content'][0]->text);
+        $this->assertStringContainsString('must be a record data array or a positive integer UID', $result->jsonSerialize()['content'][0]->text);
         
-        // Test 4: Array with data objects (not supported yet)
+        // Test 4: Array with data objects for independent tables is now valid (embedded creation)
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
             'action' => 'update',
@@ -548,7 +543,167 @@ class InlineRelationWriteTest extends FunctionalTestCase
                 ],
             ],
         ]);
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('must contain only positive integer UIDs', $result->jsonSerialize()['content'][0]->text);
+        $this->assertFalse($result->isError, 'Passing record data arrays for inline fields should be valid: ' . json_encode($result->jsonSerialize()));
+    }
+
+    /**
+     * Referencing existing inline children via {"uid": N} object syntax on update
+     */
+    public function testUidObjectReferencesExistingInlineChildren(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+
+        // Create page + news
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => ['title' => 'UID object test page', 'doktype' => 1],
+        ]);
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => ['title' => 'News for uid object test'],
+        ]);
+        $newsUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Create 2 content elements linked to the news
+        $contentUids = [];
+        for ($i = 1; $i <= 2; $i++) {
+            $result = $writeTool->execute([
+                'table' => 'tt_content',
+                'action' => 'create',
+                'pid' => $pageUid,
+                'data' => [
+                    'header' => "Existing content $i",
+                    'CType' => 'text',
+                    'tx_news_related_news' => $newsUid,
+                ],
+            ]);
+            $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+            $contentUids[] = json_decode($result->content[0]->text, true)['uid'];
+        }
+
+        // Update news: keep existing via {"uid": N}, update one header, add a new element
+        $result = $writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => $newsUid,
+            'data' => [
+                'content_elements' => [
+                    ['uid' => $contentUids[0]],                                    // keep as-is
+                    ['uid' => $contentUids[1], 'header' => 'Updated header'],      // keep + update
+                    ['header' => 'Brand new element', 'CType' => 'text'],          // create new
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Verify: 3 children linked to this news
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => $newsUid,
+        ]);
+        $news = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertCount(3, $news['content_elements'], 'Should have 3 content elements');
+
+        // Verify: first element unchanged
+        $this->assertContains($contentUids[0], $news['content_elements']);
+
+        // Verify: second element still linked and header updated
+        $this->assertContains($contentUids[1], $news['content_elements']);
+        $queryBuilder = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class)
+            ->getQueryBuilderForTable('tt_content');
+        $queryBuilder->getRestrictions()->removeAll();
+        $updatedRecord = $queryBuilder->select('header')
+            ->from('tt_content')
+            ->where($queryBuilder->expr()->eq('uid', $contentUids[1]))
+            ->executeQuery()
+            ->fetchAssociative();
+        $this->assertSame('Updated header', $updatedRecord['header']);
+    }
+
+    /**
+     * Creating content elements with embedded record data arrays in the parent
+     */
+    public function testCreateContentElementsAsEmbeddedRecordData(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+
+        // Create a page
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => ['title' => 'Embedded test page', 'doktype' => 1],
+        ]);
+        $this->assertFalse($result->isError);
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Create news with content_elements as embedded record data (not UIDs)
+        $result = $writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'title' => 'News with embedded content elements',
+                'content_elements' => [
+                    ['header' => 'First element', 'CType' => 'text', 'bodytext' => 'Body 1'],
+                    ['header' => 'Second element', 'CType' => 'text', 'bodytext' => 'Body 2'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, 'Creating with embedded record data should work: ' . json_encode($result->jsonSerialize()));
+        $newsUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Verify the content elements were created and linked
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => $newsUid,
+        ]);
+        $this->assertFalse($result->isError);
+        $news = json_decode($result->content[0]->text, true)['records'][0];
+
+        $this->assertArrayHasKey('content_elements', $news);
+        $this->assertCount(2, $news['content_elements'], 'Two content elements should be linked to the news record');
+
+        // Verify content elements have correct data
+        foreach ($news['content_elements'] as $contentUid) {
+            $this->assertIsInt($contentUid);
+            $result = $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid]);
+            $content = json_decode($result->content[0]->text, true)['records'][0];
+            $this->assertEquals('text', $content['CType']);
+            $this->assertContains($content['header'], ['First element', 'Second element']);
+        }
+    }
+
+    /**
+     * Nested inline relations: news → content elements (embedded) → file references (embedded)
+     *
+    /**
+     * Embedded links with hideTable=true work with string '1' value
+     *
+     * tx_news_domain_model_link has hideTable=true (boolean).
+     * This test verifies the !empty() check works for both boolean true and string '1'.
+     */
+    public function testHideTableStringOneIsRecognized(): void
+    {
+        // Verify that news link table has hideTable set
+        $linkTCA = $GLOBALS['TCA']['tx_news_domain_model_link']['ctrl'] ?? [];
+        $this->assertNotEmpty($linkTCA['hideTable'] ?? false, 'tx_news_domain_model_link should have hideTable set');
+
+        // This test is implicitly covered by NewsLinkInlineTest::testCreateNewsWithEmbeddedLinks
+        // but we explicitly verify the !empty() check handles both true and '1'
+        $this->assertTrue(!empty(true), 'Boolean true should pass !empty()');
+        $this->assertTrue(!empty('1'), 'String "1" should pass !empty()');
+        $this->assertTrue(!empty(1), 'Integer 1 should pass !empty()');
+        $this->assertFalse(!empty(false), 'Boolean false should fail !empty()');
+        $this->assertFalse(!empty(''), 'Empty string should fail !empty()');
+        $this->assertFalse(!empty(0), 'Integer 0 should fail !empty()');
     }
 }

@@ -92,7 +92,14 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         return [
-            'description' => 'Read records from TYPO3 tables with filtering, pagination, and relation embedding. By default, returns records from ALL languages mixed together (matching TYPO3\'s list module behavior). Use the language parameter to filter to a specific language. For page content, use pid filter instead of individual record lookups.',
+            'description' => 'Read records from TYPO3 tables with filtering, pagination, and relation embedding. ' .
+                'Returns records from ALL languages mixed together by default (like TYPO3\'s list module). Use the language parameter to filter. ' .
+                'Hidden records are always included (like the TYPO3 backend); only deleted records are excluded. ' .
+                'INLINE RELATIONS: Embedded inline fields (hideTable/passthrough) return full child record data arrays. Independent inline fields return only UIDs. ' .
+                'MM RELATIONS: Basic support — does not resolve foreign_table_where conditions or complex TYPO3 relation scenarios. ' .
+                'WORKSPACE: Returns live UIDs for workspace-overlaid records (transparent for subsequent WriteTable calls). ' .
+                'OUTPUT: {table, tableLabel, records[], total, limit, offset, hasMore}. Max limit: 1000. ' .
+                'For page content, use pid filter instead of individual record lookups.',
             'inputSchema' => [
                 'type' => 'object',
                 'properties' => $properties,
@@ -805,7 +812,7 @@ class ReadTableTool extends AbstractRecordTool
 
         // Check if foreign table is hidden (dependent records that should be embedded)
         $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-        $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+        $isHiddenTable = !empty($foreignTableTCA['ctrl']['hideTable']);
 
         // Get all related records
         $foreignSortBy = $fieldConfig['config']['foreign_sortby'] ?? '';
