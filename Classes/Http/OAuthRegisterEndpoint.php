@@ -22,13 +22,13 @@ class OAuthRegisterEndpoint
     {
         // Handle preflight OPTIONS request
         if ($request->getMethod() === 'OPTIONS') {
-            return $this->handlePreflightRequest();
+            return $this->handlePreflightRequest($request);
         }
 
         try {
             // Only accept POST requests
             if ($request->getMethod() !== 'POST') {
-                return $this->createErrorResponse('invalid_request', 'Method not allowed', 405);
+                return $this->createErrorResponse($request, 'invalid_request', 'Method not allowed', 405);
             }
 
             // Get request body
@@ -36,7 +36,7 @@ class OAuthRegisterEndpoint
             $clientData = json_decode($body, true);
 
             if (!$clientData) {
-                return $this->createErrorResponse('invalid_request', 'Invalid JSON in request body');
+                return $this->createErrorResponse($request, 'invalid_request', 'Invalid JSON in request body');
             }
 
             // Validate required fields (minimal validation for MCP)
@@ -73,14 +73,14 @@ class OAuthRegisterEndpoint
                 ]
             );
             
-            return $this->addCorsHeaders($response);
+            return $this->addCorsHeaders($response, $request);
 
         } catch (\Throwable $e) {
-            return $this->createErrorResponse('server_error', $e->getMessage(), 500);
+            return $this->createErrorResponse($request, 'server_error', $e->getMessage(), 500);
         }
     }
 
-    private function createErrorResponse(string $error, string $description = '', int $statusCode = 400): ResponseInterface
+    private function createErrorResponse(ServerRequestInterface $request, string $error, string $description = '', int $statusCode = 400): ResponseInterface
     {
         $errorData = [
             'error' => $error,
@@ -97,6 +97,6 @@ class OAuthRegisterEndpoint
             ['Content-Type' => 'application/json']
         );
         
-        return $this->addCorsHeaders($response);
+        return $this->addCorsHeaders($response, $request);
     }
 }
