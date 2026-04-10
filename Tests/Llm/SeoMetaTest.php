@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Llm;
 
+use PHPUnit\Framework\Attributes\TestDox;
+
 /**
  * Test LLM's ability to manage SEO and meta tags using MCP tools
- * 
+ *
  * @group llm
  */
 class SeoMetaTest extends LlmTestCase
@@ -14,14 +16,12 @@ class SeoMetaTest extends LlmTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        
+
         // Import test data with pages
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/pages.csv');
     }
 
-    /**
-     * Test that LLM adds missing meta descriptions
-     */
+    #[TestDox('Prompt "Add meta descriptions to pages that don\'t have them" → explores pages, then WriteTable(update, pages) with non-empty description field')]
     public function testLlmAddsMissingMetaDescriptions(): void
     {
         $prompt = "Add meta descriptions to pages that don't have them";
@@ -90,9 +90,7 @@ class SeoMetaTest extends LlmTestCase
         $this->assertNotEmpty($writeCall['data']['description']);
     }
 
-    /**
-     * Test that LLM optimizes page titles
-     */
+    #[TestDox('Prompt "Update the contact page title to be more SEO-friendly" → explores page context, then WriteTable(update, pages) with title or seo_title')]
     public function testLlmOptimizesPageTitles(): void
     {
         $prompt = "Update the page title of the contact page to be more SEO-friendly";
@@ -125,9 +123,7 @@ class SeoMetaTest extends LlmTestCase
         $this->assertTrue($hasTitle, "Expected title or seo_title to be updated");
     }
 
-    /**
-     * Test that LLM adds Open Graph tags
-     */
+    #[TestDox('Prompt "Update the home page to add a meta description for social media sharing" → explores, then WriteTable(update, pages) with og_* fields or description')]
     public function testLlmAddsOpenGraphTags(): void
     {
         $prompt = "Update the home page to add a meta description for social media sharing";
@@ -178,9 +174,7 @@ class SeoMetaTest extends LlmTestCase
         }
     }
 
-    /**
-     * Test that LLM improves page slugs
-     */
+    #[TestDox('Prompt "Make the URL slug for the team page more SEO-friendly" → explores page context, then WriteTable(update, pages) with new slug different from /about/team')]
     public function testLlmImprovesPageSlugs(): void
     {
         $prompt = "Make the URL slug for the team page more SEO-friendly";

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Llm;
 
+use PHPUnit\Framework\Attributes\TestDox;
+
 /**
  * Test LLM's ability to create and manage news articles using MCP tools
- * 
+ *
  * @group llm
  */
 class NewsTest extends LlmTestCase
@@ -27,9 +29,7 @@ class NewsTest extends LlmTestCase
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_records.csv');
     }
 
-    /**
-     * Test that LLM can create a news article about website launch
-     */
+    #[TestDox('Prompt "Write a news article that the website launched today" → discovers news extension, then WriteTable(create, tx_news_domain_model_news) on Blog/Press/Storage page with launch content')]
     public function testLlmCreatesWebsiteLaunchNews(): void
     {
         $prompt = "Write a news article that the website launched today (21 July 2025)";
@@ -99,9 +99,7 @@ class NewsTest extends LlmTestCase
         }
     }
 
-    /**
-     * Test that LLM can create news with appropriate category
-     */
+    #[TestDox('Prompt "Create a company announcement about product launch and categorize it" → explores, then WriteTable(create, tx_news_domain_model_news) with product launch content and category handling')]
     public function testLlmCreatesNewsWithCategory(): void
     {
         $prompt = "Create a company announcement about our new product launch next week and categorize it appropriately";
@@ -172,9 +170,7 @@ class NewsTest extends LlmTestCase
         }
     }
 
-    /**
-     * Test that LLM can add news to press/blog/updates section
-     */
+    #[TestDox('Prompt "Add a news article about summer sale where news and announcements go" → explores to find news section, then WriteTable(create, tx_news_domain_model_news) on pid 8/12/30')]
     public function testLlmAddsNewsToNewsSection(): void
     {
         $prompt = "Add a news article about our summer sale to the website where news and announcements go";

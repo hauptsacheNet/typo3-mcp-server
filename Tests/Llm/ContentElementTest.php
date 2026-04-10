@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Llm;
 
+use PHPUnit\Framework\Attributes\TestDox;
+
 /**
  * Test LLM's ability to create and manage content elements using MCP tools
- * 
+ *
  * @group llm
  */
 class ContentElementTest extends LlmTestCase
@@ -14,15 +16,13 @@ class ContentElementTest extends LlmTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        
+
         // Import test data with pages and content
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/tt_content.csv');
     }
 
-    /**
-     * Test that LLM creates simple text content
-     */
+    #[TestDox('Prompt "Add a welcome message to the contact page (Monday-Friday 9-5)" → explores page context, then WriteTable(tt_content, CType=text/textmedia) with business hours in bodytext')]
     public function testLlmCreatesSimpleTextContent(): void
     {
         $prompt = "Add a welcome message to the contact page that says we're available Monday to Friday, 9 AM to 5 PM";
@@ -84,9 +84,7 @@ class ContentElementTest extends LlmTestCase
         $this->assertMatchesRegularExpression('/5|five/i', $bodytext, "Should mention 5 PM");
     }
 
-    /**
-     * Test that LLM creates content in specific column
-     */
+    #[TestDox('Prompt "Add business hours to the right column of the contact page" → explores page context, then WriteTable(tt_content) with colPos=1 or 2 for right column')]
     public function testLlmCreatesContentInRightColumn(): void
     {
         $prompt = "Add our business hours (weekdays 8:30 AM to 6:00 PM, closed weekends) to the right column of the contact page";
@@ -147,9 +145,7 @@ class ContentElementTest extends LlmTestCase
         }
     }
 
-    /**
-     * Test that LLM creates header element
-     */
+    #[TestDox('Prompt "Add a section header \'Our Services\' to the home page" → explores page context, then WriteTable(tt_content, header=Our Services)')]
     public function testLlmCreatesHeaderElement(): void
     {
         $prompt = "Add a section header 'Our Services' to the home page";
@@ -188,9 +184,7 @@ class ContentElementTest extends LlmTestCase
         $this->assertFalse($writeResult['isError'] ?? false);
     }
 
-    /**
-     * Test that LLM updates existing content
-     */
+    #[TestDox('Prompt "Make the welcome header on the home page sound more friendly" → explores, reads existing content, then WriteTable(update, tt_content) with changed header')]
     public function testLlmUpdatesExistingContent(): void
     {
         $prompt = "Make the welcome header on the home page sound more friendly";
@@ -225,9 +219,7 @@ class ContentElementTest extends LlmTestCase
         $this->assertNotEmpty($newHeader);
     }
 
-    /**
-     * Test that LLM reorders content elements
-     */
+    #[TestDox('Prompt "On the team page, reorder content so introduction appears before team members" → explores, then WriteTable(update) with sorting changes')]
     public function testLlmReordersContent(): void
     {
         $prompt = "On the team page, change the order of content elements so the team introduction appears before the team members";
