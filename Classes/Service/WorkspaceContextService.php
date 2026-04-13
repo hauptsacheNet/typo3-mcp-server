@@ -178,7 +178,7 @@ class WorkspaceContextService
                 'members' => '',
                 'db_mountpoints' => '', // Inherit from user
                 'file_mountpoints' => '', // Inherit from user
-                'publish_access' => 1, // Allow publishing
+                'publish_access' => 0, // No publishing restrictions (matches TCA default)
                 'stagechg_notification' => 0, // No email notifications by default
                 'freeze' => 0, // Not frozen
                 'live_edit' => 0, // No live edit
