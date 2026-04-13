@@ -493,9 +493,11 @@ class SearchTool extends AbstractRecordTool
             return [$specificTable];
         }
 
-        // Get all readable tables (includes non-workspace-capable tables for read operations)
-        $accessibleTables = $this->tableAccessService->getReadableTables();
-        
+        // Use the same access set as ReadTableTool so search never surfaces
+        // records the caller could not read via ReadTableTool. $includeReadOnly
+        // is true so read-only (but accessible) tables remain searchable.
+        $accessibleTables = $this->tableAccessService->getAccessibleTables(true);
+
         // Filter for tables that have searchable fields
         $searchableTables = [];
         foreach ($accessibleTables as $tableName => $accessInfo) {
