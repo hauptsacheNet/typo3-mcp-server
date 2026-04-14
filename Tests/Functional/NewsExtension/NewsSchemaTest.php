@@ -130,14 +130,12 @@ class NewsSchemaTest extends FunctionalTestCase
     {
         $tool = new GetTableSchemaTool();
         
-        // News extends sys_file_reference, but this table is restricted
+        // sys_file_reference is now accessible for FAL operations
         $result = $tool->execute([
             'table' => 'sys_file_reference'
         ]);
-        
-        // sys_file_reference is restricted for security reasons
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString('restricted', $result->content[0]->text);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
     }
 
     /**

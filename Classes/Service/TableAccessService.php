@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Service;
 
+use Hn\McpServer\Event\ModifyAvailableFieldsEvent;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
@@ -306,7 +308,12 @@ class TableAccessService implements SingletonInterface
                 unset($fields[$fieldName]);
             }
         }
-        
+
+        // Allow extensions to modify the field list
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $event = $eventDispatcher->dispatch(new ModifyAvailableFieldsEvent($table, $type, $fields));
+        $fields = $event->getFields();
+
         return $fields;
     }
     
@@ -423,6 +430,7 @@ class TableAccessService implements SingletonInterface
             // Allow some safe root-level tables
             $allowedRootTables = [
                 'sys_file_storage', // File storage configuration
+                'sys_file_reference', // FAL reference table - needed for file operations
                 'sys_domain', // Domain configuration
                 'sys_category', // Category system - safe for read operations
             ];
@@ -447,7 +455,6 @@ class TableAccessService implements SingletonInterface
             'cache_hash', // Cache tables - managed by system
             'sys_be_shortcuts', // User shortcuts - user-specific
             'sys_news', // System news - admin-only
-            'sys_file_reference', // FAL reference table - file handling not supported yet
         ];
         
         if (in_array($table, $restrictedTables)) {
@@ -599,10 +606,15 @@ class TableAccessService implements SingletonInterface
     {
         $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
 
-        // Block file fields - file handling not supported yet
         $fieldType = $fieldConfig['config']['type'] ?? '';
+
+        // Treat file fields like inline relations (both use sys_file_reference)
         if ($fieldType === 'file') {
-            return false;
+            $foreignTable = $fieldConfig['config']['foreign_table'] ?? 'sys_file_reference';
+            if (!$this->canAccessTable($foreignTable)) {
+                return false;
+            }
+            return true;
         }
 
         // Block inline relations where foreign table isn't writable
@@ -885,24 +897,24 @@ class TableAccessService implements SingletonInterface
             return ['1' => 'Default'];
         }
 
-        // Defense-in-depth: foreign type notation should already be caught by
-        // getTypeFieldName() returning null, but guard here in case that changes.
+        // Handle foreign type notation (e.g. "uid_local:type" in sys_file_reference).
+        // The type is derived from a related record's field and has no local column or items list.
         if (str_contains($typeField, ':')) {
             return ['0' => 'Default'];
         }
 
         $typeConfig = $GLOBALS['TCA'][$table]['columns'][$typeField]['config'] ?? [];
         $items = $typeConfig['items'] ?? [];
-        
+
         // Use the shared parseSelectItems method
         $parsed = $this->parseSelectItems($items);
-        
+
         // Convert to the expected format (value => label)
         $types = [];
         foreach ($parsed['values'] as $value) {
             $types[$value] = $parsed['labels'][$value] ?? $value;
         }
-        
+
         return $types;
     }
     

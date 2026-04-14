@@ -143,7 +143,25 @@ class TcaFormattingUtility
             case 'inline':
                 // Add foreign table if available
                 if (isset($config['foreign_table'])) {
-                    $result .= " [foreign table: " . $config['foreign_table'] . "]";
+                    $foreignTable = $config['foreign_table'];
+                    $foreignField = $config['foreign_field'] ?? '';
+                    $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
+                    $isHiddenTable = !empty($foreignTableTCA['ctrl']['hideTable']);
+                    $foreignFieldType = $foreignTableTCA['columns'][$foreignField]['config']['type'] ?? '';
+                    $isPassthrough = ($foreignFieldType === 'passthrough');
+
+                    $result .= " [foreign table: " . $foreignTable . "]";
+                    if (!empty($foreignField)) {
+                        $result .= " [foreign_field: " . $foreignField . "]";
+                    }
+
+                    if ($isHiddenTable || $isPassthrough) {
+                        $result .= " [EMBEDDED: when creating pass record data arrays;"
+                            . " when updating pass existing UIDs to keep them"
+                            . " and new record data arrays to add — order defines sorting]";
+                    } else {
+                        $result .= " [INDEPENDENT: pass existing UIDs to link, or record data arrays to create and link]";
+                    }
                 }
                 break;
                 
