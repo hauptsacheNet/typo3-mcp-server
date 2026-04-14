@@ -309,8 +309,67 @@ class WriteTableTool extends AbstractRecordTool
             // Resolve live UID to workspace UID if needed, since DataHandler works with real UIDs
             $wsUid = $this->resolveToWorkspaceUid($table, $referenceUid);
             $newRecordData['pid'] = -$wsUid;
+        } elseif (strpos($position, 'before:') === 0) {
+            $referenceUid = (int)substr($position, strlen('before:'));
+            $sortingField = $this->tableAccessService->getSortingFieldName($table);
+
+            if ($sortingField !== null) {
+                // Look up the reference record to get its page and sorting value
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable($table);
+                $queryBuilder->getRestrictions()->removeAll()
+                    ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+
+                $refRecord = $queryBuilder
+                    ->select('uid', 'pid', $sortingField)
+                    ->from($table)
+                    ->where(
+                        $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($referenceUid, ParameterType::INTEGER))
+                    )
+                    ->executeQuery()
+                    ->fetchAssociative();
+
+                if ($refRecord) {
+                    $refPid = (int)$refRecord['pid'];
+                    $refSorting = (int)$refRecord[$sortingField];
+
+                    // Find the record immediately before the reference in sorting order
+                    $qb2 = GeneralUtility::makeInstance(ConnectionPool::class)
+                        ->getQueryBuilderForTable($table);
+                    $qb2->getRestrictions()->removeAll()
+                        ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+
+                    $predecessorRecord = $qb2
+                        ->select('uid')
+                        ->from($table)
+                        ->where(
+                            $qb2->expr()->eq('pid', $qb2->createNamedParameter($refPid, ParameterType::INTEGER)),
+                            $qb2->expr()->lt($sortingField, $qb2->createNamedParameter($refSorting, ParameterType::INTEGER))
+                        )
+                        ->orderBy($sortingField, 'DESC')
+                        ->addOrderBy('uid', 'DESC')
+                        ->setMaxResults(1)
+                        ->executeQuery()
+                        ->fetchAssociative();
+
+                    if ($predecessorRecord) {
+                        // Insert after the predecessor = before the reference
+                        $wsUid = $this->resolveToWorkspaceUid($table, (int)$predecessorRecord['uid']);
+                        $newRecordData['pid'] = -$wsUid;
+                    } else {
+                        // Reference is the first record on its page — insert at top
+                        $newRecordData['pid'] = $refPid;
+                    }
+                } else {
+                    // Reference record not found — fall back to user-provided pid
+                    $newRecordData['pid'] = $pid;
+                }
+            } else {
+                // Table has no sorting field — fall back to user-provided pid
+                $newRecordData['pid'] = $pid;
+            }
         } else {
-            // 'top', 'before:UID', or default — use positive pid (DataHandler inserts at top)
+            // 'top' or default — use positive pid (DataHandler inserts at top)
             $newRecordData['pid'] = $pid;
         }
 
@@ -408,38 +467,7 @@ class WriteTableTool extends AbstractRecordTool
                 }
             }
         }
-        
-        
-        // Handle before positioning via move command (after is already handled via negative pid)
-        if (strpos($position, 'before:') === 0) {
-            $referenceUid = (int)substr($position, strlen('before:'));
 
-            // Set up the command map for moving the record
-            $cmdMap = [];
-            $cmdMap[$table][$parentUid]['move'] = [
-                'action' => 'before',
-                'target' => $referenceUid,
-            ];
-
-            // Initialize a new DataHandler for the move operation
-            $moveDataHandler = GeneralUtility::makeInstance(DataHandler::class);
-            $moveDataHandler->BE_USER = $GLOBALS['BE_USER'];
-            $moveDataHandler->start([], $cmdMap);
-            $moveDataHandler->process_cmdmap();
-
-            // Check for errors in the move operation
-            if (!empty($moveDataHandler->errorLog)) {
-                // The record was created but positioning failed
-                $liveUid = $this->getLiveUid($table, $parentUid);
-                return $this->createJsonResult([
-                    'action' => 'create',
-                    'table' => $table,
-                    'uid' => $liveUid,
-                    'warning' => 'Record created but positioning failed: ' . implode(', ', $moveDataHandler->errorLog)
-                ]);
-            }
-        }
-        
         // Get the live UID for workspace transparency
         $liveUid = $this->getLiveUid($table, $parentUid);
         

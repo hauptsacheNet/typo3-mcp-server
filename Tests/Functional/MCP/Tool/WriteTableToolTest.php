@@ -662,12 +662,23 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
-     * Test creating content before a specific element
+     * Test that before:UID positions the record between the preceding element
+     * and the reference element — not at the top of the page.
+     *
+     * Fixture data on page 1 (colPos 0):
+     *   uid 100, sorting 256 (Welcome Header)
+     *   uid 101, sorting 512 (About Section)
+     *   uid 104, sorting 768 (Hidden Content, hidden=1)
+     *
+     * Inserting before:101 must place the new record:
+     *   - On pid 1 (not pid 0)
+     *   - With sorting BETWEEN uid 100 (256) and uid 101 (512)
+     *     i.e. sorting > 256 AND sorting < 512
      */
     public function testCreateContentBeforeElement(): void
     {
         $tool = new WriteTableTool();
-        
+
         $result = $tool->execute([
             'action' => 'create',
             'table' => 'tt_content',
@@ -679,31 +690,111 @@ class WriteTableToolTest extends AbstractFunctionalTest
                 'colPos' => 0
             ]
         ]);
-        
-        $this->assertFalse($result->isError, json_encode($result->content));
-        
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
         $data = json_decode($result->content[0]->text, true);
         $this->assertIsArray($data);
         $this->assertEquals('create', $data['action']);
         $this->assertIsInt($data['uid']);
-        
-        // Verify the sorting is set (positioning might not work perfectly in test env)
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('tt_content');
-        
-        $record = $queryBuilder->select('sorting')
-            ->from('tt_content')
-            ->where(
-                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($data['uid'], ParameterType::INTEGER))
-            )
-            ->executeQuery()
-            ->fetchAssociative();
-        
-        $this->assertIsArray($record);
-        $this->assertArrayHasKey('sorting', $record);
-        // The sorting should be set, even if positioning didn't work perfectly
-        $this->assertIsInt($record['sorting']);
-        $this->assertGreaterThan(0, $record['sorting']);
+
+        $newUid = $data['uid'];
+
+        // Helper: read a single record's pid+sorting (ignoring workspace restrictions)
+        $readRecord = function (int $uid): array {
+            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('tt_content');
+            $qb->getRestrictions()->removeAll()
+                ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            $row = $qb->select('pid', 'sorting')
+                ->from('tt_content')
+                ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid, ParameterType::INTEGER)))
+                ->executeQuery()
+                ->fetchAssociative();
+            $this->assertIsArray($row, "Record $uid must exist");
+            return $row;
+        };
+
+        $newRecord = $readRecord($newUid);
+        $prevRecord = $readRecord(100);  // element before the reference
+        $refRecord  = $readRecord(101);  // the reference element
+
+        // Critical: PID must be 1, not 0
+        $this->assertEquals(1, (int)$newRecord['pid'],
+            'Record created with before:101 must be on pid 1, not pid ' . $newRecord['pid']);
+
+        // The new record must sit between uid 100 and uid 101 in sorting order.
+        $this->assertGreaterThan(
+            (int)$prevRecord['sorting'],
+            (int)$newRecord['sorting'],
+            'New record sorting (' . $newRecord['sorting'] . ') must be greater than '
+            . 'record 100 sorting (' . $prevRecord['sorting'] . ') — it should be between 100 and 101, not at the top'
+        );
+        $this->assertLessThan(
+            (int)$refRecord['sorting'],
+            (int)$newRecord['sorting'],
+            'New record sorting (' . $newRecord['sorting'] . ') must be less than '
+            . 'record 101 sorting (' . $refRecord['sorting'] . ')'
+        );
+    }
+
+    /**
+     * Test creating content before the first element on a page.
+     *
+     * Fixture data on page 1 (colPos 0):
+     *   uid 100, sorting 256 (Welcome Header) — first element
+     *
+     * Inserting before:100 must place the record on pid 1 with sorting < 256.
+     */
+    public function testCreateContentBeforeFirstElement(): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => 1,
+            'position' => 'before:100',
+            'data' => [
+                'CType' => 'textmedia',
+                'header' => 'Before First Element',
+                'colPos' => 0
+            ]
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertIsArray($data);
+        $newUid = $data['uid'];
+
+        // Read the new record and the reference record
+        $readRecord = function (int $uid): array {
+            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('tt_content');
+            $qb->getRestrictions()->removeAll()
+                ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            $row = $qb->select('pid', 'sorting')
+                ->from('tt_content')
+                ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid, ParameterType::INTEGER)))
+                ->executeQuery()
+                ->fetchAssociative();
+            $this->assertIsArray($row, "Record $uid must exist");
+            return $row;
+        };
+
+        $newRecord = $readRecord($newUid);
+        $refRecord = $readRecord(100);
+
+        $this->assertEquals(1, (int)$newRecord['pid'],
+            'Record created with before:100 must be on pid 1');
+
+        // The new record must have lower sorting than the first element
+        $this->assertLessThan(
+            (int)$refRecord['sorting'],
+            (int)$newRecord['sorting'],
+            'Record created with before:100 must have lower sorting than record 100'
+        );
     }
 
     /**
