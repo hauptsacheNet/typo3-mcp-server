@@ -48,7 +48,9 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Install Composer dependencies
-        run: composer install --no-interaction --prefer-dist --no-dev
+        # --no-scripts skips post-install-cmd (Build/setup-typo3.sh), which bootstraps
+        # a TYPO3 test instance and fails under --no-dev (missing typo3/cms-fluid).
+        run: composer install --no-interaction --prefer-dist --no-dev --no-scripts
 
       - name: Install tailor
         run: composer global require typo3/tailor:^1 --prefer-dist --no-progress
