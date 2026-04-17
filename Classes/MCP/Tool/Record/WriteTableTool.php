@@ -70,6 +70,7 @@ class WriteTableTool extends AbstractRecordTool
                     'data' => [
                         'type' => 'object',
                         'description' => 'Record data with field names as keys and their values (required for "create", "update", and "translate" actions). ' .
+                            'For "translate" the data must include sys_language_uid; any additional fields (e.g. header, bodytext, title) are applied to the new translation. ' .
                             'Uses the same field syntax as ReadTable output. Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' .
                             'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
                             'For text fields in update actions, instead of providing the full text, you can provide an array of search-and-replace operations: ' .
@@ -225,9 +226,7 @@ class WriteTableTool extends AbstractRecordTool
                 return $this->deleteRecord($table, $uid);
 
             case 'translate':
-                // The language UID has already been converted from ISO code if needed
-                $targetLanguageUid = (int)$data['sys_language_uid'];
-                return $this->translateRecord($table, $uid, $targetLanguageUid);
+                return $this->translateRecord($table, $uid, $data);
                 
             default:
                 // This should never happen due to earlier validation
@@ -614,107 +613,179 @@ class WriteTableTool extends AbstractRecordTool
     }
     
     /**
-     * Translate a record to another language
+     * Translate a record to another language.
+     *
+     * Additional fields in $data (beyond sys_language_uid) are applied to the
+     * new translation — DataHandler's localize command only copies the source
+     * values, so translated text provided by the caller would otherwise be
+     * silently dropped.
      */
-    protected function translateRecord(string $table, int $uid, int $targetLanguageUid): CallToolResult
+    protected function translateRecord(string $table, int $uid, array $data): CallToolResult
     {
-        // Check if table supports translations
         $languageField = $this->tableAccessService->getLanguageFieldName($table);
         if (!$languageField) {
             return $this->createErrorResult('Table ' . $table . ' does not support translations');
         }
 
-        // Check if translation parent field exists
         $translationParentField = $this->tableAccessService->getTranslationParentFieldName($table);
         if (!$translationParentField) {
             return $this->createErrorResult('Table ' . $table . ' does not have a translation parent field configured');
         }
 
-        // Get the record to be translated
+        $targetLanguageUid = (int)($data['sys_language_uid'] ?? 0);
+        $targetIsoCode = $this->languageService->getIsoCodeFromUid($targetLanguageUid) ?? $targetLanguageUid;
+
         $record = BackendUtility::getRecord($table, $uid);
         if (!$record) {
             return $this->createErrorResult('Record not found');
         }
 
-        // Check if this is already a translation
         if (!empty($record[$translationParentField]) && $record[$translationParentField] > 0) {
-            return $this->createErrorResult('Cannot translate a record that is already a translation. Translate the original record instead.');
+            return $this->createErrorResult('Cannot translate a record that is already a translation. Translate the original record (UID: ' . $record[$translationParentField] . ') instead.');
         }
 
-        // Check if translation already exists
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable($table);
-
-        $existingTranslation = $queryBuilder
-            ->select('uid')
-            ->from($table)
-            ->where(
-                $queryBuilder->expr()->eq($translationParentField, $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
-                $queryBuilder->expr()->eq($languageField, $queryBuilder->createNamedParameter($targetLanguageUid, ParameterType::INTEGER))
-            )
-            ->setMaxResults(1)
-            ->executeQuery()
-            ->fetchOne();
-
-        if ($existingTranslation) {
-            $targetIsoCode = $this->languageService->getIsoCodeFromUid($targetLanguageUid) ?? $targetLanguageUid;
-            return $this->createErrorResult('Translation already exists for language "' . $targetIsoCode . '" (UID: ' . $existingTranslation . ')');
+        // Skeleton translations of content on an untranslated page never render
+        // in the frontend — refuse them and point the caller at translating the
+        // page first.
+        if ($table !== 'pages') {
+            $pageTranslationError = $this->ensureParentPageIsTranslated((int)($record['pid'] ?? 0), $targetLanguageUid, $targetIsoCode);
+            if ($pageTranslationError !== null) {
+                return $this->createErrorResult($pageTranslationError);
+            }
         }
 
-        // Use DataHandler to create the translation
+        $existingTranslationUid = $this->findExistingTranslation($table, $uid, $targetLanguageUid);
+        if ($existingTranslationUid !== null) {
+            return $this->createErrorResult(
+                'Translation already exists for language "' . $targetIsoCode . '" on ' . $table . ' (UID: ' . $existingTranslationUid
+                . '). Use the "update" action on that UID to edit the existing translation instead.'
+            );
+        }
+
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $dataHandler->BE_USER = $GLOBALS['BE_USER'];
-
-        // Use the localize command to create a translation
-        $cmdMap = [
+        $dataHandler->start([], [
             $table => [
-                $uid => [
-                    'localize' => $targetLanguageUid
-                ]
-            ]
-        ];
-
-        $dataHandler->start([], $cmdMap);
+                $uid => ['localize' => $targetLanguageUid],
+            ],
+        ]);
         $dataHandler->process_cmdmap();
 
-        // Check for errors
         if (!empty($dataHandler->errorLog)) {
             return $this->createErrorResult('Error creating translation: ' . implode(', ', $dataHandler->errorLog));
         }
 
-        // Get the UID of the newly created translation
-        $newTranslationUid = null;
-        if (isset($dataHandler->copyMappingArray[$table][$uid])) {
-            $newTranslationUid = $dataHandler->copyMappingArray[$table][$uid];
-        }
-
+        $newTranslationUid = $dataHandler->copyMappingArray[$table][$uid] ?? null;
         if (!$newTranslationUid) {
-            // Try to find the translation we just created
-            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getQueryBuilderForTable($table);
+            $newTranslationUid = $this->findExistingTranslation($table, $uid, $targetLanguageUid);
+        }
+        if (!$newTranslationUid) {
+            return $this->createErrorResult('Translation created but UID not found');
+        }
+        $newTranslationUid = (int)$newTranslationUid;
 
-            $newTranslationUid = $queryBuilder
-                ->select('uid')
-                ->from($table)
-                ->where(
-                    $queryBuilder->expr()->eq($translationParentField, $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
-                    $queryBuilder->expr()->eq($languageField, $queryBuilder->createNamedParameter($targetLanguageUid, ParameterType::INTEGER))
-                )
-                ->orderBy('uid', 'DESC')
-                ->setMaxResults(1)
-                ->executeQuery()
-                ->fetchOne();
+        // Strip metadata from caller data before handing it to updateRecord so
+        // an LLM echoing the source record back cannot smuggle uid/pid/version
+        // fields into the update.
+        $extraFields = $data;
+        unset(
+            $extraFields['uid'],
+            $extraFields['pid'],
+            $extraFields['sys_language_uid'],
+            $extraFields[$languageField],
+            $extraFields[$translationParentField]
+        );
+        foreach (array_keys($extraFields) as $field) {
+            if (is_string($field) && str_starts_with($field, 't3ver_')) {
+                unset($extraFields[$field]);
+            }
         }
 
-        $targetIsoCode = $this->languageService->getIsoCodeFromUid($targetLanguageUid) ?? $targetLanguageUid;
+        if (!empty($extraFields)) {
+            // Reuse the regular update path — validation, inline relations,
+            // search/replace, l10n_state and workspace UID resolution.
+            $updateResult = $this->updateRecord($table, $newTranslationUid, $extraFields);
+            if ($updateResult->isError) {
+                // Roll the skeleton back so the caller is not left with a
+                // half-translated record that a retry would then refuse as
+                // "already exists".
+                $this->deleteLocalizationSkeleton($table, $newTranslationUid);
+                $updateError = $updateResult->content[0]->text ?? 'unknown error';
+                return $this->createErrorResult(
+                    'Applying translated fields failed (translation was rolled back): ' . $updateError
+                );
+            }
+        }
 
         return $this->createJsonResult([
             'action' => 'translate',
             'table' => $table,
             'sourceUid' => $uid,
-            'translationUid' => $newTranslationUid ?: 'Translation created but UID not found',
+            'translationUid' => $newTranslationUid,
             'targetLanguage' => $targetIsoCode,
         ]);
+    }
+
+    /**
+     * Find an existing translation of $liveUid in $targetLanguageUid, taking
+     * the current workspace into account. Returns the UID the caller should
+     * use (live UID when one exists, otherwise the workspace UID).
+     */
+    protected function findExistingTranslation(string $table, int $liveUid, int $targetLanguageUid): ?int
+    {
+        $rows = BackendUtility::getRecordLocalization($table, $liveUid, $targetLanguageUid);
+        if (empty($rows)) {
+            return null;
+        }
+        $row = $rows[0];
+        if (!empty($row['t3ver_oid'])) {
+            return (int)$row['t3ver_oid'];
+        }
+        return (int)$row['uid'];
+    }
+
+    /**
+     * Delete a freshly-created translation skeleton via DataHandler so a failed
+     * field update does not leave an orphaned placeholder behind.
+     */
+    protected function deleteLocalizationSkeleton(string $table, int $uid): void
+    {
+        $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+        $dataHandler->start([], [$table => [$uid => ['delete' => 1]]]);
+        $dataHandler->process_cmdmap();
+    }
+
+    /**
+     * Ensure the page $pid has a translation in $targetLanguageUid. Returns an
+     * error message if it does not, or null if the page is already in the
+     * target language or has a translation there.
+     */
+    protected function ensureParentPageIsTranslated(int $pid, int $targetLanguageUid, string $targetIsoCode): ?string
+    {
+        if ($pid <= 0) {
+            return null;
+        }
+
+        $pagesTranslationParentField = $this->tableAccessService->getTranslationParentFieldName('pages') ?? 'l10n_parent';
+        $page = BackendUtility::getRecord('pages', $pid, 'uid,sys_language_uid,' . $pagesTranslationParentField);
+        if (!$page) {
+            return null;
+        }
+
+        if ((int)($page['sys_language_uid'] ?? 0) === $targetLanguageUid) {
+            return null;
+        }
+
+        $liveParentUid = (int)($page[$pagesTranslationParentField] ?? 0) ?: $pid;
+
+        if ($this->findExistingTranslation('pages', $liveParentUid, $targetLanguageUid) !== null) {
+            return null;
+        }
+
+        return 'Cannot create translation: the parent page (UID: ' . $liveParentUid . ') has no translation for language "'
+            . $targetIsoCode . '". Call translate on table "pages" with uid=' . $liveParentUid . ' and sys_language_uid="'
+            . $targetIsoCode . '" first, then translate its content.';
     }
 
     /**

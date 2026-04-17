@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\Tests\Functional\Fixtures\Builders\PageBuilder;
 use Symfony\Component\Yaml\Yaml;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -34,6 +35,18 @@ class WriteTableLanguageTest extends FunctionalTestCase
         
         // Set up backend user
         $this->setUpBackendUser(1);
+
+        // DataHandler::localize() (and other paths) call getLanguageService(),
+        // which requires $GLOBALS['LANG'] to be initialised.
+        $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('default');
+
+        // Pre-translate page 1 (where the default tt_content fixtures live)
+        // into German and French. Page 2 is intentionally left untranslated so
+        // the negative-path test can exercise the untranslated-page check.
+        (new PageBuilder($this->getConnectionPool()))
+            ->withTitle('Startseite')->withLanguage(1)->withL10nParent(1)->withSlug('/de')->create();
+        (new PageBuilder($this->getConnectionPool()))
+            ->withTitle('Accueil')->withLanguage(2)->withL10nParent(1)->withSlug('/fr')->create();
     }
 
     /**
@@ -407,14 +420,180 @@ class WriteTableLanguageTest extends FunctionalTestCase
         ]);
         
         $this->assertFalse($updateResult->isError, json_encode($updateResult->jsonSerialize()));
-        
+
         // Verify the update - need to use BackendUtility to get workspace overlay
         $record = \TYPO3\CMS\Backend\Utility\BackendUtility::getRecord('tt_content', $germanUid);
-        
+
         $this->assertNotFalse($record, 'German translation record not found');
         $this->assertEquals('Aktualisierter deutscher Titel', $record['header']);
         $this->assertEquals('Aktualisierter deutscher Inhalt', $record['bodytext']);
         $this->assertEquals(1, $record['sys_language_uid']); // Still German
         $this->assertEquals($originalUid, $record['l18n_parent']); // Still linked to original
+    }
+
+    /**
+     * The translate action must apply additional fields from `data` to the new
+     * translation. DataHandler's localize command only copies the source values,
+     * so an LLM that passes a translated `bodytext`/`header` expects them to
+     * end up on the translation — otherwise the tool creates useless copies.
+     */
+    public function testTranslateAppliesDataFieldsToTranslation(): void
+    {
+        $tool = new WriteTableTool();
+
+        $createResult = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => 1,
+            'data' => [
+                'CType' => 'text',
+                'header' => 'Original English Header',
+                'bodytext' => 'Original English body text',
+            ]
+        ]);
+        $this->assertFalse($createResult->isError, json_encode($createResult->jsonSerialize()));
+        $originalUid = json_decode($createResult->content[0]->text, true)['uid'];
+
+        $translateResult = $tool->execute([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $originalUid,
+            'data' => [
+                'sys_language_uid' => 'de',
+                'header' => 'Deutsche Überschrift',
+                'bodytext' => 'Deutscher Fließtext',
+            ]
+        ]);
+
+        $this->assertFalse($translateResult->isError, json_encode($translateResult->jsonSerialize()));
+        $translateData = json_decode($translateResult->content[0]->text, true);
+        $translationUid = $translateData['translationUid'];
+        $this->assertIsInt($translationUid, 'Translation failed: ' . var_export($translationUid, true));
+
+        $translation = \TYPO3\CMS\Backend\Utility\BackendUtility::getRecord('tt_content', $translationUid);
+        $this->assertIsArray($translation);
+        $this->assertEquals('Deutsche Überschrift', $translation['header']);
+        $this->assertEquals('Deutscher Fließtext', $translation['bodytext']);
+        $this->assertEquals(1, $translation['sys_language_uid']);
+        $this->assertEquals($originalUid, $translation['l18n_parent']);
+    }
+
+    /**
+     * When a translation already exists the user should be told that — and
+     * hinted at using the update action on the existing translation instead of
+     * silently failing with a DataHandler error.
+     */
+    public function testTranslateExistingTranslationSuggestsUpdate(): void
+    {
+        $tool = new WriteTableTool();
+
+        $createResult = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => 1,
+            'data' => [
+                'CType' => 'text',
+                'header' => 'Original',
+            ]
+        ]);
+        $originalUid = json_decode($createResult->content[0]->text, true)['uid'];
+
+        $firstTranslate = $tool->execute([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $originalUid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Erste Übersetzung']
+        ]);
+        $this->assertFalse($firstTranslate->isError, json_encode($firstTranslate->jsonSerialize()));
+        $existingTranslationUid = json_decode($firstTranslate->content[0]->text, true)['translationUid'];
+
+        $secondTranslate = $tool->execute([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $originalUid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Zweiter Versuch']
+        ]);
+
+        $this->assertTrue($secondTranslate->isError);
+        $errorMessage = $secondTranslate->error ?? ($secondTranslate->content[0]->text ?? '');
+        $this->assertStringContainsString('Translation already exists', $errorMessage);
+        $this->assertStringContainsString((string)$existingTranslationUid, $errorMessage);
+        $this->assertStringContainsString('update', $errorMessage);
+    }
+
+    /**
+     * Pages are translatable too. A translate call with a translated title must
+     * land on the new page translation, not be silently dropped.
+     */
+    public function testTranslatePageAppliesDataFields(): void
+    {
+        $tool = new WriteTableTool();
+
+        $translateResult = $tool->execute([
+            'action' => 'translate',
+            'table' => 'pages',
+            'uid' => 2, // "About"
+            'data' => [
+                'sys_language_uid' => 'de',
+                'title' => 'Über uns',
+                'nav_title' => 'Über',
+            ]
+        ]);
+
+        $this->assertFalse($translateResult->isError, json_encode($translateResult->jsonSerialize()));
+        $translateData = json_decode($translateResult->content[0]->text, true);
+        $translationUid = $translateData['translationUid'];
+        $this->assertIsInt($translationUid, 'Translation failed: ' . var_export($translationUid, true));
+
+        $translation = \TYPO3\CMS\Backend\Utility\BackendUtility::getRecord('pages', $translationUid);
+        $this->assertIsArray($translation);
+        $this->assertEquals('Über uns', $translation['title']);
+        $this->assertEquals('Über', $translation['nav_title']);
+        $this->assertEquals(1, $translation['sys_language_uid']);
+        $this->assertEquals(2, $translation['l10n_parent']);
+    }
+
+    /**
+     * Translating content on a page whose own page record has not been
+     * translated yet is a frequent mistake: the resulting tt_content row has
+     * no backing page translation, so it will never render in the frontend.
+     * We expect a clear error pointing the user at translating the page first.
+     */
+    public function testTranslateContentOnUntranslatedPageIsRejected(): void
+    {
+        $tool = new WriteTableTool();
+
+        // Create content on page 2 (About) — page 2 has no German translation.
+        $createResult = $tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => 2,
+            'data' => [
+                'CType' => 'text',
+                'header' => 'About content',
+            ]
+        ]);
+        $this->assertFalse($createResult->isError, json_encode($createResult->jsonSerialize()));
+        $contentUid = json_decode($createResult->content[0]->text, true)['uid'];
+
+        $translateResult = $tool->execute([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+            'data' => [
+                'sys_language_uid' => 'de',
+                'header' => 'Deutscher Header',
+            ]
+        ]);
+
+        $this->assertTrue(
+            $translateResult->isError,
+            'Expected error when translating content on untranslated page, got: '
+            . json_encode($translateResult->jsonSerialize())
+        );
+        $errorMessage = $translateResult->error ?? ($translateResult->content[0]->text ?? '');
+        $this->assertStringContainsString('parent page', $errorMessage);
+        $this->assertStringContainsString('(UID: 2)', $errorMessage);
+        $this->assertStringContainsString('"de"', $errorMessage);
     }
 }

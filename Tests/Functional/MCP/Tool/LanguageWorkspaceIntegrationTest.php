@@ -57,6 +57,10 @@ class LanguageWorkspaceIntegrationTest extends FunctionalTestCase
         $this->writeTool = new WriteTableTool();
         $this->readTool = new ReadTableTool();
         $this->workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
+
+        // The translate action requires the parent page to be translated too.
+        (new \Hn\McpServer\Tests\Functional\Fixtures\Builders\PageBuilder($this->getConnectionPool()))
+            ->withTitle('Startseite')->withLanguage(1)->withL10nParent(1)->withSlug('/de')->create();
     }
     
     /**
