@@ -569,21 +569,11 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $data = json_decode($result->content[0]->text, true);
         $newUid = $data['uid'];
 
-        $readRecord = function (int $uid): array {
-            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getQueryBuilderForTable('tt_content');
-            $qb->getRestrictions()->removeAll()
-                ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-            $row = $qb->select('pid', 'sorting')
-                ->from('tt_content')
-                ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid, ParameterType::INTEGER)))
-                ->executeQuery()
-                ->fetchAssociative();
-            $this->assertIsArray($row, "Record $uid must exist");
-            return $row;
-        };
-
-        $newRecord = $readRecord($newUid);
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $newRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => $newUid])
+            ->fetchAssociative();
+        $this->assertIsArray($newRecord, "New record $newUid must exist");
 
         $this->assertEquals(1, (int)$newRecord['pid'],
             'Record created with position=bottom must be on the provided pid');
@@ -683,23 +673,15 @@ class WriteTableToolTest extends AbstractFunctionalTest
 
         $newUid = $data['uid'];
 
-        $readRecord = function (int $uid): array {
-            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getQueryBuilderForTable('tt_content');
-            $qb->getRestrictions()->removeAll()
-                ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-            $row = $qb->select('pid', 'sorting')
-                ->from('tt_content')
-                ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid, ParameterType::INTEGER)))
-                ->executeQuery()
-                ->fetchAssociative();
-            $this->assertIsArray($row, "Record $uid must exist");
-            return $row;
-        };
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $newRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => $newUid])->fetchAssociative();
+        $refRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => 100])->fetchAssociative();
+        $nextRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => 101])->fetchAssociative();
 
-        $newRecord = $readRecord($newUid);
-        $refRecord = $readRecord(100);
-        $nextRecord = $readRecord(101);
+        $this->assertIsArray($newRecord);
+        $this->assertIsArray($refRecord);
+        $this->assertIsArray($nextRecord);
 
         $this->assertEquals(1, (int)$newRecord['pid'],
             'Record created with after:100 must be on pid 1');
@@ -746,22 +728,13 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $data = json_decode($result->content[0]->text, true);
         $newUid = $data['uid'];
 
-        $readRecord = function (int $uid): array {
-            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getQueryBuilderForTable('tt_content');
-            $qb->getRestrictions()->removeAll()
-                ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-            $row = $qb->select('pid', 'sorting')
-                ->from('tt_content')
-                ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid, ParameterType::INTEGER)))
-                ->executeQuery()
-                ->fetchAssociative();
-            $this->assertIsArray($row, "Record $uid must exist");
-            return $row;
-        };
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $newRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => $newUid])->fetchAssociative();
+        $refRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => 103])->fetchAssociative();
 
-        $newRecord = $readRecord($newUid);
-        $refRecord = $readRecord(103);
+        $this->assertIsArray($newRecord);
+        $this->assertIsArray($refRecord);
 
         $this->assertEquals(2, (int)$newRecord['pid'],
             'Record created with after:103 must be on pid 2');
@@ -811,24 +784,15 @@ class WriteTableToolTest extends AbstractFunctionalTest
 
         $newUid = $data['uid'];
 
-        // Helper: read a single record's pid+sorting (ignoring workspace restrictions)
-        $readRecord = function (int $uid): array {
-            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getQueryBuilderForTable('tt_content');
-            $qb->getRestrictions()->removeAll()
-                ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-            $row = $qb->select('pid', 'sorting')
-                ->from('tt_content')
-                ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid, ParameterType::INTEGER)))
-                ->executeQuery()
-                ->fetchAssociative();
-            $this->assertIsArray($row, "Record $uid must exist");
-            return $row;
-        };
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $newRecord  = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => $newUid])->fetchAssociative();
+        $prevRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => 100])->fetchAssociative();
+        $refRecord  = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => 101])->fetchAssociative();
 
-        $newRecord = $readRecord($newUid);
-        $prevRecord = $readRecord(100);  // element before the reference
-        $refRecord  = $readRecord(101);  // the reference element
+        $this->assertIsArray($newRecord);
+        $this->assertIsArray($prevRecord);
+        $this->assertIsArray($refRecord);
 
         // Critical: PID must be 1, not 0
         $this->assertEquals(1, (int)$newRecord['pid'],
@@ -879,23 +843,13 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $this->assertIsArray($data);
         $newUid = $data['uid'];
 
-        // Read the new record and the reference record
-        $readRecord = function (int $uid): array {
-            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getQueryBuilderForTable('tt_content');
-            $qb->getRestrictions()->removeAll()
-                ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-            $row = $qb->select('pid', 'sorting')
-                ->from('tt_content')
-                ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid, ParameterType::INTEGER)))
-                ->executeQuery()
-                ->fetchAssociative();
-            $this->assertIsArray($row, "Record $uid must exist");
-            return $row;
-        };
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $newRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => $newUid])->fetchAssociative();
+        $refRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => 100])->fetchAssociative();
 
-        $newRecord = $readRecord($newUid);
-        $refRecord = $readRecord(100);
+        $this->assertIsArray($newRecord);
+        $this->assertIsArray($refRecord);
 
         $this->assertEquals(1, (int)$newRecord['pid'],
             'Record created with before:100 must be on pid 1');
@@ -939,14 +893,9 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $this->assertIsInt($data['uid']);
         $newUid = $data['uid'];
 
-        $qb = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('tt_content');
-        $qb->getRestrictions()->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-        $newRecord = $qb->select('pid', 'sorting')
-            ->from('tt_content')
-            ->where($qb->expr()->eq('uid', $qb->createNamedParameter($newUid, ParameterType::INTEGER)))
-            ->executeQuery()
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $newRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => $newUid])
             ->fetchAssociative();
 
         $this->assertIsArray($newRecord);
@@ -1006,14 +955,9 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $data = json_decode($result->content[0]->text, true);
         $newUid = $data['uid'];
 
-        $qb = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('tt_content');
-        $qb->getRestrictions()->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-        $newRecord = $qb->select('pid', 'sorting')
-            ->from('tt_content')
-            ->where($qb->expr()->eq('uid', $qb->createNamedParameter($newUid, ParameterType::INTEGER)))
-            ->executeQuery()
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $newRecord = $connection->select(['pid', 'sorting'], 'tt_content', ['uid' => $newUid])
             ->fetchAssociative();
 
         $this->assertIsArray($newRecord);
