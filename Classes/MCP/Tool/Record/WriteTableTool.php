@@ -314,37 +314,36 @@ class WriteTableTool extends AbstractRecordTool
             $sortingField = $this->tableAccessService->getSortingFieldName($table);
 
             if ($sortingField !== null) {
-                // Look up the reference record to get its page and sorting value
-                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-                    ->getQueryBuilderForTable($table);
-                $queryBuilder->getRestrictions()->removeAll()
-                    ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
-
-                $refRecord = $queryBuilder
-                    ->select('uid', 'pid', $sortingField)
-                    ->from($table)
-                    ->where(
-                        $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($referenceUid, ParameterType::INTEGER))
-                    )
-                    ->executeQuery()
-                    ->fetchAssociative();
+                // Workspace-aware lookup: resolve to workspace version for correct pid/sorting
+                $refRecord = BackendUtility::getRecord($table, $referenceUid);
+                if ($refRecord) {
+                    BackendUtility::workspaceOL($table, $refRecord);
+                }
 
                 if ($refRecord) {
                     $refPid = (int)$refRecord['pid'];
                     $refSorting = (int)$refRecord[$sortingField];
+                    $refUid = (int)$refRecord['uid'];
 
-                    // Find the record immediately before the reference in sorting order
+                    // Find the predecessor: workspace-aware, with UID tiebreak for equal sorting
                     $qb2 = GeneralUtility::makeInstance(ConnectionPool::class)
                         ->getQueryBuilderForTable($table);
                     $qb2->getRestrictions()->removeAll()
-                        ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+                        ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+                        ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
                     $predecessorRecord = $qb2
                         ->select('uid')
                         ->from($table)
                         ->where(
                             $qb2->expr()->eq('pid', $qb2->createNamedParameter($refPid, ParameterType::INTEGER)),
-                            $qb2->expr()->lt($sortingField, $qb2->createNamedParameter($refSorting, ParameterType::INTEGER))
+                            $qb2->expr()->or(
+                                $qb2->expr()->lt($sortingField, $qb2->createNamedParameter($refSorting, ParameterType::INTEGER)),
+                                $qb2->expr()->and(
+                                    $qb2->expr()->eq($sortingField, $qb2->createNamedParameter($refSorting, ParameterType::INTEGER)),
+                                    $qb2->expr()->lt('uid', $qb2->createNamedParameter($refUid, ParameterType::INTEGER))
+                                )
+                            )
                         )
                         ->orderBy($sortingField, 'DESC')
                         ->addOrderBy('uid', 'DESC')
@@ -353,9 +352,8 @@ class WriteTableTool extends AbstractRecordTool
                         ->fetchAssociative();
 
                     if ($predecessorRecord) {
-                        // Insert after the predecessor = before the reference
-                        $wsUid = $this->resolveToWorkspaceUid($table, (int)$predecessorRecord['uid']);
-                        $newRecordData['pid'] = -$wsUid;
+                        // WorkspaceRestriction already returns the correct UID for the context
+                        $newRecordData['pid'] = -(int)$predecessorRecord['uid'];
                     } else {
                         // Reference is the first record on its page — insert at top
                         $newRecordData['pid'] = $refPid;
