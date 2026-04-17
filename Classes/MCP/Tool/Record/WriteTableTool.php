@@ -1147,6 +1147,33 @@ class WriteTableTool extends AbstractRecordTool
     }
     
     /**
+     * Flatten a nested FlexForm settings array into dot-notated keys.
+     *
+     * Input:  ['filter' => ['newsTypes' => '250', 'topics' => '12']]
+     * Prefix: 'settings'
+     * Output: ['settings.filter.newsTypes' => '250', 'settings.filter.topics' => '12']
+     *
+     * TYPO3's Extbase plugin settings reader builds a nested array from
+     * dot-separated FlexForm field names, so every leaf must be written as
+     * its own "settings.a.b.c" field — not as a nested XML sub-tree.
+     *
+     * @return array<string, scalar|null>
+     */
+    protected function flattenFlexFormSettings(array $data, string $prefix): array
+    {
+        $flat = [];
+        foreach ($data as $key => $value) {
+            $path = $prefix . '.' . $key;
+            if (is_array($value)) {
+                $flat += $this->flattenFlexFormSettings($value, $path);
+            } else {
+                $flat[$path] = $value;
+            }
+        }
+        return $flat;
+    }
+
+    /**
      * Check if a field is a FlexForm field
      */
     protected function isFlexFormField(string $table, string $fieldName): bool
@@ -1362,14 +1389,18 @@ class WriteTableTool extends AbstractRecordTool
                         ]
                     ];
                     
-                    // Process settings fields
+                    // Process settings fields — flatten nested arrays with dot notation.
+                    // TYPO3 FlexForm fields use dotted paths (e.g. "settings.filter.newsTypes")
+                    // which the Extbase settings parser un-nests back into $settings['filter']['newsTypes'].
+                    // Without dot-flattening, array2xml concatenates the keys without a separator,
+                    // producing unreadable fields like "settingsfilternewsTypes".
                     if (isset($flexFormArray['settings']) && is_array($flexFormArray['settings'])) {
-                        foreach ($flexFormArray['settings'] as $settingKey => $settingValue) {
-                            $flexFormData['data']['sDEF']['lDEF']['settings.' . $settingKey]['vDEF'] = $settingValue;
+                        foreach ($this->flattenFlexFormSettings($flexFormArray['settings'], 'settings') as $flatKey => $leafValue) {
+                            $flexFormData['data']['sDEF']['lDEF'][$flatKey]['vDEF'] = $leafValue;
                         }
                     }
-                    
-                    // Process other fields
+
+                    // Process other top-level scalar fields (non-settings, non-arrays)
                     foreach ($flexFormArray as $key => $val) {
                         if ($key !== 'settings' && !is_array($val)) {
                             $flexFormData['data']['sDEF']['lDEF'][$key]['vDEF'] = $val;
