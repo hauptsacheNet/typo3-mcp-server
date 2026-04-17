@@ -252,6 +252,14 @@ class McpEndpoint
             $beUser->user = $userData;
             $GLOBALS['BE_USER'] = $beUser;
 
+            // CRITICAL: Initialize an (anonymous) user session.
+            // Normal TYPO3 requests go through BackendUserAuthenticator middleware which wires
+            // up a real UserSession. Token auth bypasses that, so DataHandler write paths
+            // that touch $beUser->setAndSaveSessionData() (FlashMessageQueue, BackendFormProtection)
+            // crash with "Call to a member function set() on null" on UPDATE operations.
+            // An anonymous in-memory session is discarded at request end — sufficient for stateless MCP.
+            $beUser->initializeUserSessionManager();
+
             // CRITICAL: Fetch group data to populate permissions
             // This computes tables_select, tables_modify, non_exclude_fields, webmounts, etc.
             // Without this, non-admin users have no permissions computed from their groups
