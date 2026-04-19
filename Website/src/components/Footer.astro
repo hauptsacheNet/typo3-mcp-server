@@ -2,7 +2,7 @@
 import GlassPanel from './GlassPanel.astro';
 import Period from './Period.astro';
 
-const base = import.meta.env.BASE_URL;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
 
 <GlassPanel class="hn-footer" tag="footer">

@@ -3,7 +3,16 @@ import Period from './Period.astro';
 import Button from './Button.astro';
 import GlassPanel from './GlassPanel.astro';
 
-const base = import.meta.env.BASE_URL;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+const integrations = [
+  'Claude Desktop',
+  'Cursor',
+  'n8n',
+  'manus',
+  'Windsurf',
+  'Any MCP Client',
+];
 ---
 
 <section class="hn-hero">
@@ -11,14 +20,22 @@ const base = import.meta.env.BASE_URL;
   <img src={`${base}/rocket.svg`} alt="" class="hn-hero__rocket" />
   <div class="hn-hero__content">
     <h1 class="hn-hero__headline">
-      AI for TYPO3<Period />
+      Connect TYPO3<br />to Any AI<Period />
     </h1>
     <GlassPanel class="hn-hero__sub">
-      <p>Let AI assistants manage your content safely through TYPO3 workspaces.</p>
+      <p>One MCP endpoint connects your TYPO3 site to Claude, Cursor, n8n, and any AI tool — safely through workspaces.</p>
     </GlassPanel>
     <div class="hn-hero__actions">
       <Button href="#get-started" variant="primary">Install Now</Button>
       <Button href="https://github.com/hauptsacheNet/typo3-mcp-server" variant="ghost">View on GitHub</Button>
+    </div>
+    <div class="hn-hero__integrations">
+      <span class="hn-hero__integrations-label">Works with</span>
+      <div class="hn-hero__integrations-list">
+        {integrations.map((name) => (
+          <span class="hn-hero__integration">{name}</span>
+        ))}
+      </div>
     </div>
   </div>
   <div class="hn-hero__scroll" aria-hidden="true">

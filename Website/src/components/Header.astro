@@ -2,7 +2,7 @@
 import Period from './Period.astro';
 import Button from './Button.astro';
 
-const base = import.meta.env.BASE_URL;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
 
 <header class="hn-nav">
