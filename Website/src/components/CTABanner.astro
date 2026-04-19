@@ -1,0 +1,24 @@
+---
+import GlassPanel from './GlassPanel.astro';
+import Button from './Button.astro';
+import CodeBlock from './CodeBlock.astro';
+---
+
+<GlassPanel class="hn-cta" tag="section" id="get-started">
+  <div class="hn-cta__text">
+    <h2 class="hn-h2">
+      <span class="hn-period hn-period--large">.</span>
+      <span>Get Started</span>
+    </h2>
+    <p>Install the extension and connect your AI assistant in under five minutes.</p>
+    <div style="margin-top: 16px;">
+      <CodeBlock>
+        <span class="hn-code__prompt">$ </span>composer require hn/typo3-mcp-server
+      </CodeBlock>
+    </div>
+  </div>
+  <div class="hn-cta__actions">
+    <Button href="https://github.com/hauptsacheNet/typo3-mcp-server" variant="primary">View on GitHub</Button>
+    <Button href="https://github.com/hauptsacheNet/typo3-mcp-server/blob/main/TECHNICAL_OVERVIEW.md" variant="ghost">Read the Docs</Button>
+  </div>
+</GlassPanel>

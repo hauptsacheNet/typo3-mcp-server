@@ -21,6 +21,11 @@
 /Build/test-results
 /Build/tests/playwright/.auth/login.json
 
+# Website
+/Website/node_modules
+/Website/dist
+/Website/.astro
+
 # other
 *.local
 .DS_Store

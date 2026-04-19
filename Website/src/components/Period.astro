@@ -1,0 +1,9 @@
+---
+interface Props {
+  large?: boolean;
+}
+
+const { large = false } = Astro.props;
+---
+
+<span class={`hn-period ${large ? 'hn-period--large' : ''}`}>.</span>

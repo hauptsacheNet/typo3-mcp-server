@@ -1,0 +1,11 @@
+---
+interface Props {
+  class?: string;
+}
+
+const { class: className = '' } = Astro.props;
+---
+
+<div class={`hn-code ${className}`.trim()}>
+  <pre><slot /></pre>
+</div>

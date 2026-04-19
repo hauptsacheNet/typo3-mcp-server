@@ -1,0 +1,46 @@
+---
+import GlassPanel from './GlassPanel.astro';
+import Period from './Period.astro';
+
+const cases = [
+  {
+    variant: 'default' as const,
+    tag: 'Content Quality',
+    tagClass: '',
+    title: 'Fix Spelling Mistakes',
+    body: 'Point your AI at a page. It reads all content, identifies errors, and creates corrected versions in a workspace -- ready for your review.',
+  },
+  {
+    variant: 'blue' as const,
+    tag: 'Content Creation',
+    tagClass: 'hn-tag--blue',
+    title: 'Create News From Documents',
+    body: 'Hand your AI a document or brief. It creates properly structured news articles with categories, dates, and metadata -- all through the news extension.',
+  },
+  {
+    variant: 'turquoise' as const,
+    tag: 'Content Operations',
+    tagClass: 'hn-tag--turquoise',
+    title: 'Migrate and Reorganize',
+    body: 'Move content between pages, reorganize sections, apply templates across pages. Bulk operations that would take hours, done in minutes.',
+  },
+];
+---
+
+<section class="hn-section" id="use-cases" data-animate>
+  <h2 class="hn-h2">
+    <span class="hn-period hn-period--large">.</span>
+    <span>What You Can Do</span>
+  </h2>
+  <p class="hn-sub">Real tasks, handled by your AI assistant.</p>
+
+  <div class="hn-cases">
+    {cases.map((c) => (
+      <GlassPanel class="hn-case" variant={c.variant} tag="article">
+        <span class={`hn-tag ${c.tagClass}`}>{c.tag}</span>
+        <h3>{c.title}<Period /></h3>
+        <p>{c.body}</p>
+      </GlassPanel>
+    ))}
+  </div>
+</section>

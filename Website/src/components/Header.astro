@@ -1,0 +1,19 @@
+---
+import Period from './Period.astro';
+import Button from './Button.astro';
+
+const base = import.meta.env.BASE_URL;
+---
+
+<header class="hn-nav">
+  <a href={`${base}/`} class="hn-brand">
+    <img src={`${base}/rocket-ring.png`} alt="" class="hn-brand__mark" width="40" height="40" />
+    <span class="hn-brand__word">TYPO3 MCP Server</span>
+  </a>
+  <nav class="hn-menu">
+    <a href="#features" class="hn-menu__item">Features</a>
+    <a href="#how-it-works" class="hn-menu__item">How It Works</a>
+    <a href="#use-cases" class="hn-menu__item">Use Cases</a>
+  </nav>
+  <Button href="#get-started" variant="primary">Get Started</Button>
+</header>

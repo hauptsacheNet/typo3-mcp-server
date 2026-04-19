@@ -1,0 +1,20 @@
+---
+interface Props {
+  bordered?: boolean;
+  variant?: 'default' | 'blue' | 'turquoise';
+  class?: string;
+  tag?: 'div' | 'section' | 'article' | 'footer' | 'nav';
+  id?: string;
+}
+
+const { bordered = true, variant = 'default', class: className = '', tag = 'div', id } = Astro.props;
+
+const Tag = tag as any;
+
+const variantClass = variant === 'blue' ? 'glass--blue' : variant === 'turquoise' ? 'glass--turquoise' : '';
+const classes = `glass ${bordered ? 'glass--bordered' : ''} ${variantClass} ${className}`.trim();
+---
+
+<Tag class={classes} id={id}>
+  <slot />
+</Tag>

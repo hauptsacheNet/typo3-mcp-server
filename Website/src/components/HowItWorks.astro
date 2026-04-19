@@ -1,0 +1,61 @@
+---
+import CodeBlock from './CodeBlock.astro';
+
+const steps = [
+  {
+    num: '01',
+    title: 'Install',
+    body: 'Run composer require on your TYPO3 v13.4+ instance. No extra servers needed.',
+  },
+  {
+    num: '02',
+    title: 'Connect',
+    body: 'Open the MCP Server module in the TYPO3 backend. Copy the server URL into your AI client.',
+  },
+  {
+    num: '03',
+    title: 'Prompt',
+    body: 'Ask your AI to translate pages, create news, fix spelling, optimize SEO -- anything.',
+  },
+  {
+    num: '04',
+    title: 'Review',
+    body: 'All changes land in a workspace. Review in the TYPO3 backend and publish when ready.',
+  },
+];
+---
+
+<section class="hn-section" id="how-it-works" data-animate>
+  <h2 class="hn-h2">
+    <span class="hn-period hn-period--large">.</span>
+    <span>How It Works</span>
+  </h2>
+  <p class="hn-sub">From install to first AI edit in under five minutes.</p>
+
+  <div class="hn-workflow">
+    <div class="hn-workflow__line" aria-hidden="true"></div>
+    {steps.map((s) => (
+      <div class="hn-step">
+        <div class="hn-step__num">{s.num}</div>
+        <h4>{s.title}</h4>
+        <p>{s.body}</p>
+      </div>
+    ))}
+  </div>
+
+  <div style="margin-top: 48px;">
+    <CodeBlock>
+      <Fragment set:html={`<span class="hn-code__comment"># Install the extension</span>
+<span class="hn-code__prompt">$ </span>composer require hn/typo3-mcp-server
+
+<span class="hn-code__comment"># Add to your AI client config (e.g. Claude Desktop)</span>
+{
+  "mcpServers": {
+    "typo3": {
+      "url": "https://your-typo3.example.com/mcp"
+    }
+  }
+}`} />
+    </CodeBlock>
+  </div>
+</section>

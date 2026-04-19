@@ -1,0 +1,27 @@
+---
+import Period from './Period.astro';
+import Button from './Button.astro';
+import GlassPanel from './GlassPanel.astro';
+
+const base = import.meta.env.BASE_URL;
+---
+
+<section class="hn-hero">
+  <div class="hn-hero__glow" aria-hidden="true"></div>
+  <img src={`${base}/rocket.svg`} alt="" class="hn-hero__rocket" />
+  <div class="hn-hero__content">
+    <h1 class="hn-hero__headline">
+      AI for TYPO3<Period />
+    </h1>
+    <GlassPanel class="hn-hero__sub">
+      <p>Let AI assistants manage your content safely through TYPO3 workspaces.</p>
+    </GlassPanel>
+    <div class="hn-hero__actions">
+      <Button href="#get-started" variant="primary">Install Now</Button>
+      <Button href="https://github.com/hauptsacheNet/typo3-mcp-server" variant="ghost">View on GitHub</Button>
+    </div>
+  </div>
+  <div class="hn-hero__scroll" aria-hidden="true">
+    <span></span>
+  </div>
+</section>

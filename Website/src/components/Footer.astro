@@ -1,0 +1,39 @@
+---
+import GlassPanel from './GlassPanel.astro';
+import Period from './Period.astro';
+
+const base = import.meta.env.BASE_URL;
+---
+
+<GlassPanel class="hn-footer" tag="footer">
+  <div class="hn-footer__main">
+    <div class="hn-footer__brand">
+      <img src={`${base}/rocket-ring.png`} alt="" width="48" height="48" />
+      <div class="hn-footer__brand-text">
+        <span class="hn-footer__brand-name">TYPO3 MCP Server</span>
+        <span class="hn-footer__brand-sub">by hauptsache<Period />net</span>
+      </div>
+    </div>
+    <nav class="hn-footer__cols">
+      <div>
+        <h5>Resources</h5>
+        <a href="https://github.com/hauptsacheNet/typo3-mcp-server" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://github.com/hauptsacheNet/typo3-mcp-server/blob/main/TECHNICAL_OVERVIEW.md" target="_blank" rel="noopener noreferrer">Documentation</a>
+        <a href="https://extensions.typo3.org/extension/mcp_server" target="_blank" rel="noopener noreferrer">TYPO3 TER</a>
+      </div>
+      <div>
+        <h5>Community</h5>
+        <a href="https://typo3.slack.com/" target="_blank" rel="noopener noreferrer">TYPO3 Slack</a>
+        <a href="https://github.com/hauptsacheNet/typo3-mcp-server/issues" target="_blank" rel="noopener noreferrer">Issues</a>
+        <a href="https://github.com/hauptsacheNet/typo3-mcp-server/discussions" target="_blank" rel="noopener noreferrer">Discussions</a>
+      </div>
+      <div>
+        <h5>Made by</h5>
+        <a href="https://hauptsache.net" target="_blank" rel="noopener noreferrer">hauptsache<Period />net</a>
+      </div>
+    </nav>
+  </div>
+  <div class="hn-footer__quote">
+    &bdquo;Good code is like a joke &mdash; if you have to explain it, it&rsquo;s probably not that good.&rdquo;
+  </div>
+</GlassPanel>
