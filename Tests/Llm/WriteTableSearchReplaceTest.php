@@ -82,7 +82,8 @@ class WriteTableSearchReplaceTest extends LlmTestCase
         // Check that the header field was addressed
         $data = $this->extractWriteData($writeCall);
         $this->assertArrayHasKey('header', $data,
-            "[$modelKey] Expected header field in data");
+            "[$modelKey] Expected header field in data. Got keys: " . implode(', ', array_keys($data))
+            . "\nFull WriteTable arguments: " . json_encode($writeCall, JSON_PRETTY_PRINT));
 
         $headerValue = $data['header'];
 
