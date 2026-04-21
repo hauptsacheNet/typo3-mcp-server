@@ -186,49 +186,38 @@ class ContentElementTest extends LlmTestCase
     }
 
     #[DataProvider('modelProvider')]
-    #[TestDox('[$modelKey] Prompt "On the team page, reorder content so introduction appears before team members" → explores, then WriteTable(update) with sorting changes')]
+    #[TestDox('[$modelKey] Prompt "On the team page, the team members appear before the introduction — reorder them" → explores, then WriteTable(update) with position or sorting to fix order')]
     public function testLlmReordersContent(string $modelKey): void
     {
         $this->setModel($modelKey);
-        $prompt = "On the team page, change the order of content elements so the team introduction appears before the team members";
+        $prompt = "On the team page, the team members list currently appears before the team introduction. "
+            . "Please reorder the content so the introduction comes first.";
 
-        $response1 = $this->callLlm($prompt);
+        $response = $this->executeUntilToolFound(
+            $this->callLlm($prompt),
+            'WriteTable',
+            8,
+        );
 
-        $currentResponse = $response1;
-        $iterations = 0;
-        $foundWriteTable = false;
+        $writeCalls = $response->getToolCallsByName('WriteTable');
+        $this->assertGreaterThan(0, count($writeCalls),
+            "Expected WriteTable call to reorder content. "
+            . "Tool history: " . implode(' → ', $this->getToolCallHistory())
+            . "\nFinal response: " . $response->getContent());
 
-        while ($iterations < 5 && $currentResponse->hasToolCalls() && !$foundWriteTable) {
-            if ($currentResponse->getToolCallsByName('WriteTable')) {
-                $foundWriteTable = true;
+        $hasOrderingChange = false;
+        foreach ($writeCalls as $call) {
+            $args = $call['arguments'] ?? [];
+            $callData = $this->extractWriteData($args);
+            if (($args['action'] ?? '') === 'update' &&
+                (isset($callData['sorting']) || isset($args['position']))) {
+                $hasOrderingChange = true;
                 break;
             }
-
-            $currentResponse = $this->executeAndContinue($currentResponse);
-            $iterations++;
         }
 
-        if ($foundWriteTable) {
-            $writeCalls = $currentResponse->getToolCallsByName('WriteTable');
-            $this->assertGreaterThan(0, count($writeCalls), "Expected WriteTable calls");
-
-            $hasOrderingChange = false;
-            foreach ($writeCalls as $call) {
-                $callData = $this->extractWriteData($call['arguments']);
-                if ($call['arguments']['action'] === 'update' &&
-                    (isset($callData['sorting']) ||
-                     isset($call['arguments']['where']['uid']))) {
-                    $hasOrderingChange = true;
-                    break;
-                }
-            }
-
-            $this->assertTrue($hasOrderingChange, "Expected content ordering to be changed");
-        } else {
-            $finalContent = $currentResponse->getContent();
-            $this->assertNotEmpty($finalContent, "Expected LLM to provide response about reordering");
-
-            $this->markTestIncomplete("LLM described the change but didn't execute it");
-        }
+        $this->assertTrue($hasOrderingChange,
+            "Expected update with position or sorting field. "
+            . "WriteTable calls: " . json_encode(array_map(fn($c) => $c['arguments'], $writeCalls), JSON_PRETTY_PRINT));
     }
 }

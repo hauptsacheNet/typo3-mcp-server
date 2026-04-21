@@ -33,7 +33,6 @@ abstract class LlmTestCase extends FunctionalTestCase
         'gpt-oss-120b' => 'openai/gpt-oss-120b',
         'mistral-large-2512' => 'mistralai/mistral-large-2512',
         'gemini-3-flash' => 'google/gemini-3-flash-preview',
-        'kimi-k2' => 'moonshotai/kimi-k2',
     ];
 
     protected const MODEL_OPTIONS = [

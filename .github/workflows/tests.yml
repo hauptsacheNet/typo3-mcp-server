@@ -60,4 +60,4 @@ jobs:
       - name: Run LLM test suite
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: vendor/bin/paratest -c Tests/Llm/phpunit-llm.xml --testdox --no-progress -p 6
+        run: vendor/bin/paratest -c Tests/Llm/phpunit-llm.xml --testdox --no-progress -p 5
