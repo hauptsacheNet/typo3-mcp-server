@@ -37,7 +37,9 @@ class GetTableSchemaTool extends AbstractRecordTool
                     ],
                     'type' => [
                         'type' => 'string',
-                        'description' => 'Optional specific type to include (e.g., "text" for tt_content). If not provided, will show the first available type and a summary of all types.',
+                        'description' => 'Specific record type to show fields for (e.g., "textmedia" for tt_content). Each type has different fields. ' .
+                            'If omitted, shows fields for the first available type and lists all available types. ' .
+                            'Call again with a different type to see its fields. Types may be filtered by backend TSconfig (some types hidden from the list).',
                     ],
                 ],
                 'required' => ['table'],

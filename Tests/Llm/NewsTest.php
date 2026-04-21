@@ -70,7 +70,7 @@ class NewsTest extends LlmTestCase
         $this->assertFalse($writeResult['isError'] ?? false,
             'WriteTable failed: ' . $writeResult['content']);
 
-        $data = $writeCall['arguments']['data'];
+        $data = $this->extractWriteData($writeCall['arguments']);
 
         $allContent = ($data['title'] ?? '') . ' ' .
                      ($data['teaser'] ?? '') . ' ' .
@@ -131,7 +131,7 @@ class NewsTest extends LlmTestCase
         $this->assertFalse($writeResult['isError'] ?? false,
             'WriteTable failed: ' . $writeResult['content']);
 
-        $data = $newsWriteCall['arguments']['data'];
+        $data = $this->extractWriteData($newsWriteCall['arguments']);
 
         $allContent = ($data['title'] ?? '') . ' ' .
                      ($data['teaser'] ?? '') . ' ' .
@@ -195,7 +195,7 @@ class NewsTest extends LlmTestCase
         $this->assertFalse($writeResult['isError'] ?? false,
             'WriteTable failed: ' . $writeResult['content']);
 
-        $data = $newsWriteCall['arguments']['data'];
+        $data = $this->extractWriteData($newsWriteCall['arguments']);
 
         $allContent = ($data['title'] ?? '') . ' ' .
                      ($data['teaser'] ?? '') . ' ' .

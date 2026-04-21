@@ -27,11 +27,11 @@ abstract class LlmTestCase extends FunctionalTestCase
      * Models available via OpenRouter for multi-model tests
      */
     protected const MODELS = [
-        'haiku' => 'anthropic/claude-3-5-haiku',
-        'o4-mini' => 'openai/o4-mini',
-        'gpt-oss' => 'openai/gpt-oss-120b',
+        'haiku' => 'anthropic/claude-haiku-4.5',
+        'gpt' => 'openai/gpt-5.4',
+        'mistral' => 'mistralai/mistral-large-2512',
+        'gemini' => 'google/gemini-3-flash-preview',
         'kimi-k2' => 'moonshotai/kimi-k2',
-        'gemini-flash' => 'google/gemini-2.5-flash',
     ];
 
     protected array $coreExtensionsToLoad = [
@@ -107,10 +107,10 @@ abstract class LlmTestCase extends FunctionalTestCase
     {
         return [
             'Haiku' => ['haiku'],
-            'o4-mini' => ['o4-mini'],
-            'GPT-OSS' => ['gpt-oss'],
+            'GPT' => ['gpt'],
+            'Mistral' => ['mistral'],
+            'Gemini' => ['gemini'],
             'Kimi K2' => ['kimi-k2'],
-            'Gemini Flash' => ['gemini-flash'],
         ];
     }
 
@@ -207,13 +207,28 @@ abstract class LlmTestCase extends FunctionalTestCase
                 if ($expectedParams !== null) {
                     $actualParams = $toolCall['arguments'] ?? [];
 
-                    // Check if expected params are present in actual params
                     foreach ($expectedParams as $key => $value) {
+                        // For 'data' key, use extractWriteData() to handle models
+                        // that place record fields at top level instead of in 'data'
+                        if ($key === 'data' && is_array($value)) {
+                            $extractedData = $this->extractWriteData($actualParams);
+                            foreach ($value as $nestedKey => $nestedValue) {
+                                if (is_string($nestedKey)) {
+                                    $this->assertArrayHasKey($nestedKey, $extractedData,
+                                        "Expected data field '$nestedKey' not found in tool call '$toolName'.\n" .
+                                        $this->getFailureContext($response));
+                                    $this->assertEquals($nestedValue, $extractedData[$nestedKey],
+                                        "Data field '$nestedKey' value mismatch in tool call '$toolName'.\n" .
+                                        $this->getFailureContext($response));
+                                }
+                            }
+                            continue;
+                        }
+
                         $this->assertArrayHasKey($key, $actualParams,
                             "Expected parameter '$key' not found in tool call '$toolName'.\n" .
                             $this->getFailureContext($response));
 
-                        // For nested arrays, do partial matching
                         if (is_array($value) && is_array($actualParams[$key])) {
                             foreach ($value as $nestedKey => $nestedValue) {
                                 if (is_string($nestedKey)) {
@@ -305,6 +320,21 @@ abstract class LlmTestCase extends FunctionalTestCase
         }
         
         return $debug;
+    }
+
+    /**
+     * Extract the record data from a WriteTable tool call's arguments.
+     * Some models (e.g. OpenAI GPT) place record fields at the top level
+     * instead of nesting them inside the 'data' parameter.
+     */
+    protected function extractWriteData(array $arguments): array
+    {
+        if (isset($arguments['data']) && is_array($arguments['data'])) {
+            return $arguments['data'];
+        }
+
+        $knownKeys = ['action', 'table', 'pid', 'uid', 'data', 'position', 'where'];
+        return array_diff_key($arguments, array_flip($knownKeys));
     }
 
     /**
@@ -479,28 +509,38 @@ abstract class LlmTestCase extends FunctionalTestCase
      * @return LlmResponse Response containing the target tool or final response
      */
     protected function executeUntilToolFound(
-        LlmResponse $response, 
-        string $targetToolName, 
+        LlmResponse $response,
+        string $targetToolName,
         int $maxIterations = 5
     ): LlmResponse {
         $currentResponse = $response;
         $this->toolCallHistory = [];
-        
+
         for ($i = 0; $i < $maxIterations && $currentResponse->hasToolCalls(); $i++) {
-            // Track all tool calls for history
             foreach ($currentResponse->getToolCalls() as $toolCall) {
                 $this->toolCallHistory[] = $toolCall['name'];
             }
-            
-            // Check if target tool is found
-            if ($currentResponse->getToolCallsByName($targetToolName)) {
+
+            $targetCalls = $currentResponse->getToolCallsByName($targetToolName);
+            if ($targetCalls) {
+                // Validate that WriteTable calls include record data.
+                // Some models (e.g. GPT) omit the data parameter; execute all
+                // tools so the LLM gets the validation error and can retry.
+                if ($targetToolName === 'WriteTable') {
+                    $args = $targetCalls[0]['arguments'] ?? [];
+                    $action = $args['action'] ?? '';
+                    $data = $this->extractWriteData($args);
+                    if (in_array($action, ['create', 'update', 'translate']) && empty($data)) {
+                        $currentResponse = $this->executeAndContinue($currentResponse);
+                        continue;
+                    }
+                }
                 return $currentResponse;
             }
-            
-            // Execute all tools and continue
+
             $currentResponse = $this->executeAndContinue($currentResponse);
         }
-        
+
         return $currentResponse;
     }
     

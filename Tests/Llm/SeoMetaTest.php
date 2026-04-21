@@ -68,10 +68,11 @@ class SeoMetaTest extends LlmTestCase
             "Expected at least one WriteTable call to add meta descriptions, or explanation why none needed");
 
         $writeCall = $writeCalls[0]['arguments'];
+        $data = $this->extractWriteData($writeCall);
         $this->assertEquals('update', $writeCall['action']);
         $this->assertEquals('pages', $writeCall['table']);
-        $this->assertArrayHasKey('description', $writeCall['data']);
-        $this->assertNotEmpty($writeCall['data']['description']);
+        $this->assertArrayHasKey('description', $data);
+        $this->assertNotEmpty($data['description']);
     }
 
     #[DataProvider('modelProvider')]
@@ -100,7 +101,8 @@ class SeoMetaTest extends LlmTestCase
 
         $writeCall = $response->getToolCallsByName('WriteTable')[0]['arguments'];
 
-        $hasTitle = isset($writeCall['data']['title']) || isset($writeCall['data']['seo_title']);
+        $data = $this->extractWriteData($writeCall);
+        $hasTitle = isset($data['title']) || isset($data['seo_title']);
         $this->assertTrue($hasTitle, "Expected title or seo_title to be updated");
     }
 
@@ -134,9 +136,10 @@ class SeoMetaTest extends LlmTestCase
         ]);
 
         $writeCall = $response->getToolCallsByName('WriteTable')[0]['arguments'];
+        $data = $this->extractWriteData($writeCall);
 
         $hasOgFields = false;
-        foreach ($writeCall['data'] as $field => $value) {
+        foreach ($data as $field => $value) {
             if (str_contains(strtolower($field), 'og_') ||
                 str_contains(strtolower($field), 'twitter_') ||
                 str_contains(strtolower($field), 'social')) {
@@ -146,7 +149,7 @@ class SeoMetaTest extends LlmTestCase
         }
 
         if (!$hasOgFields) {
-            $this->assertArrayHasKey('description', $writeCall['data'],
+            $this->assertArrayHasKey('description', $data,
                 "Expected Open Graph or at least description field to be set");
         }
     }
@@ -176,9 +179,10 @@ class SeoMetaTest extends LlmTestCase
         ]);
 
         $writeCall = $response->getToolCallsByName('WriteTable')[0]['arguments'];
-        $this->assertArrayHasKey('slug', $writeCall['data']);
+        $data = $this->extractWriteData($writeCall);
+        $this->assertArrayHasKey('slug', $data);
 
-        $newSlug = $writeCall['data']['slug'];
+        $newSlug = $data['slug'];
         $this->assertNotEquals('/about/team', $newSlug);
 
         $this->assertMatchesRegularExpression('/^[\/a-z0-9\-]+$/', $newSlug,

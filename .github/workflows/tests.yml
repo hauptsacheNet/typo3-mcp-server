@@ -55,10 +55,9 @@ jobs:
         run: composer install --no-interaction --prefer-dist
 
       - name: Create web entry point
-        run: mkdir -p public && touch public/index.php
+        run: touch index.php
 
       - name: Run LLM test suite
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          TYPO3_PATH_ROOT: ${{ github.workspace }}/public
         run: vendor/bin/phpunit -c Tests/Llm/phpunit-llm.xml --testdox --no-progress

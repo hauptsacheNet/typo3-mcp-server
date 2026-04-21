@@ -89,7 +89,7 @@ class WriteTableTool extends AbstractRecordTool
                         'default' => 'bottom',
                     ],
                 ],
-                'required' => ['action', 'table'],
+                'required' => ['action', 'table', 'data'],
             ],
             'annotations' => [
                 'readOnlyHint' => false,
@@ -104,6 +104,15 @@ class WriteTableTool extends AbstractRecordTool
     protected function doExecute(array $params): CallToolResult
     {
         
+        // Some models (e.g. OpenAI GPT) place record fields at the top level
+        // instead of nesting them inside the 'data' parameter.
+        // Collect any unknown top-level keys into 'data' so the tool works regardless.
+        $knownKeys = ['action', 'table', 'pid', 'uid', 'data', 'position'];
+        $extraData = array_diff_key($params, array_flip($knownKeys));
+        if (!empty($extraData) && empty($params['data'])) {
+            $params['data'] = $extraData;
+        }
+
         // Get parameters
         $action = $params['action'] ?? '';
         $table = $params['table'] ?? '';
@@ -121,14 +130,20 @@ class WriteTableTool extends AbstractRecordTool
             throw new ValidationException(['Table name is required']);
         }
 
-        // Validate data parameter type
-        if (in_array($action, ['create', 'update', 'translate'], true) && isset($params['data'])) {
-            if (!is_array($params['data'])) {
+        // Validate data parameter for create/update/translate
+        if (in_array($action, ['create', 'update', 'translate'], true)) {
+            if (isset($params['data']) && !is_array($params['data'])) {
                 $dataType = gettype($params['data']);
                 throw new ValidationException([
                     "Invalid data parameter: Expected an object/array with field names as keys, but received {$dataType}. " .
                     "The data parameter must be an object like {\"title\": \"My Title\", \"bodytext\": \"Content\"}, " .
                     "not a plain string. Each field name should be a key with its corresponding value."
+                ]);
+            }
+            if (empty($data)) {
+                throw new ValidationException([
+                    "The data parameter must contain record fields for {$action} actions. " .
+                    "Provide field names as keys, e.g. {\"title\": \"Page Title\", \"bodytext\": \"Content\"}."
                 ]);
             }
         }

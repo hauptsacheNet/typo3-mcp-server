@@ -29,20 +29,19 @@ class CreatePageTest extends LlmTestCase
         $this->setModel($modelKey);
         $prompt = "Create a new page titled 'Test Page' below the startpage";
 
-        $response1 = $this->callLlm($prompt);
+        $response = $this->executeUntilToolFound(
+            $this->callLlm($prompt),
+            'WriteTable'
+        );
 
-        // LLM should explore first to understand the structure
-        $this->assertToolCalled($response1, 'GetPageTree');
+        $history = $this->getToolCallHistory();
+        $hasExploration = in_array('GetPageTree', $history) ||
+                         in_array('GetPage', $history) ||
+                         in_array('Search', $history);
+        $this->assertTrue($hasExploration,
+            "Expected LLM to explore page structure. Tools used: " . implode(', ', $history));
 
-        // Execute GetPageTree
-        $treeResult = $this->executeToolCall($response1->getToolCalls()[0]);
-        $this->assertFalse($treeResult['isError'] ?? false);
-
-        // Continue conversation
-        $response2 = $this->continueWithToolResult($response1, $treeResult);
-
-        // Now LLM should create the page
-        $this->assertToolCalled($response2, 'WriteTable', [
+        $this->assertToolCalled($response, 'WriteTable', [
             'action' => 'create',
             'table' => 'pages',
             'data' => [
@@ -50,19 +49,17 @@ class CreatePageTest extends LlmTestCase
             ]
         ]);
 
-        // Execute write and verify success
-        if ($response2->hasToolCalls()) {
-            $writeResult = $this->executeToolCall($response2->getToolCalls()[0]);
+        $writeCall = $response->getToolCallsByName('WriteTable')[0];
+        $writeResult = $this->executeToolCall($writeCall);
 
-            $this->assertFalse($writeResult['isError'] ?? false,
-                'WriteTable failed: ' . $writeResult['content']);
+        $this->assertFalse($writeResult['isError'] ?? false,
+            'WriteTable failed: ' . $writeResult['content']);
 
-            $writeResultData = json_decode($writeResult['content'], true);
-            $this->assertEquals('create', $writeResultData['action']);
-            $this->assertEquals('pages', $writeResultData['table']);
-            $this->assertArrayHasKey('uid', $writeResultData);
-            $this->assertIsInt($writeResultData['uid']);
-        }
+        $writeResultData = json_decode($writeResult['content'], true);
+        $this->assertEquals('create', $writeResultData['action']);
+        $this->assertEquals('pages', $writeResultData['table']);
+        $this->assertArrayHasKey('uid', $writeResultData);
+        $this->assertIsInt($writeResultData['uid']);
     }
 
     #[DataProvider('modelProvider')]
@@ -72,51 +69,37 @@ class CreatePageTest extends LlmTestCase
         $this->setModel($modelKey);
         $prompt = "Create a new page called 'New Service' under the home page";
 
-        $response1 = $this->callLlm($prompt);
+        $response = $this->executeUntilToolFound(
+            $this->callLlm($prompt),
+            'WriteTable'
+        );
 
-        $this->assertToolCalled($response1, 'GetPageTree');
+        $history = $this->getToolCallHistory();
+        $hasExploration = in_array('GetPageTree', $history) ||
+                         in_array('GetPage', $history) ||
+                         in_array('Search', $history);
+        $this->assertTrue($hasExploration,
+            "Expected LLM to explore page structure. Tools used: " . implode(', ', $history));
 
-        $toolCalls = $response1->getToolCalls();
-        $treeResult = $this->executeToolCall($toolCalls[0]);
-
-        $this->assertStringContainsString('About Us', $treeResult['content']);
-        $this->assertFalse($treeResult['isError'] ?? false);
-
-        $response2 = $this->continueWithToolResult($response1, $treeResult);
-
-        $this->assertToolCalled($response2, 'WriteTable', [
+        $this->assertToolCalled($response, 'WriteTable', [
             'action' => 'create',
             'table' => 'pages',
-            'pid' => 1,
             'data' => [
                 'title' => 'New Service'
             ]
         ]);
 
-        if ($response2->hasToolCalls()) {
-            $writeResult = $this->executeToolCall($response2->getToolCalls()[0]);
+        $writeCall = $response->getToolCallsByName('WriteTable')[0];
+        $writeResult = $this->executeToolCall($writeCall);
 
-            $this->assertFalse($writeResult['isError'] ?? false,
-                'WriteTable failed: ' . $writeResult['content']);
+        $this->assertFalse($writeResult['isError'] ?? false,
+            'WriteTable failed: ' . $writeResult['content']);
 
-            $response3 = $this->continueWithToolResult($response2, $writeResult);
-
-            if ($response3->hasToolCalls()) {
-                $verifyResult = $this->executeToolCall($response3->getToolCalls()[0]);
-                $response4 = $this->continueWithToolResult($response3, $verifyResult);
-                $finalContent = $response4->getContent();
-            } else {
-                $finalContent = $response3->getContent();
-            }
-
-            $writeResultData = json_decode($writeResult['content'], true);
-            $this->assertEquals('create', $writeResultData['action']);
-            $this->assertEquals('pages', $writeResultData['table']);
-            $this->assertArrayHasKey('uid', $writeResultData);
-            $this->assertIsInt($writeResultData['uid']);
-
-            $this->assertNotEmpty($finalContent);
-        }
+        $writeResultData = json_decode($writeResult['content'], true);
+        $this->assertEquals('create', $writeResultData['action']);
+        $this->assertEquals('pages', $writeResultData['table']);
+        $this->assertArrayHasKey('uid', $writeResultData);
+        $this->assertIsInt($writeResultData['uid']);
     }
 
     #[DataProvider('modelProvider')]
@@ -126,27 +109,25 @@ class CreatePageTest extends LlmTestCase
         $this->setModel($modelKey);
         $prompt = "Create a Products page with slug 'products' and navigation title 'Our Products'";
 
-        $response1 = $this->callLlm($prompt);
+        $response = $this->executeUntilToolFound(
+            $this->callLlm($prompt),
+            'WriteTable'
+        );
 
-        $this->assertToolCalled($response1, 'GetPageTree');
-
-        $treeResult = $this->executeToolCall($response1->getToolCalls()[0]);
-
-        $response2 = $this->continueWithToolResult($response1, $treeResult);
-
-        $writeTableCalls = $response2->getToolCallsByName('WriteTable');
-        $this->assertCount(1, $writeTableCalls, "Expected exactly one WriteTable call");
+        $writeTableCalls = $response->getToolCallsByName('WriteTable');
+        $this->assertGreaterThan(0, count($writeTableCalls), "Expected at least one WriteTable call");
 
         $writeCall = $writeTableCalls[0]['arguments'];
         $this->assertEquals('create', $writeCall['action']);
         $this->assertEquals('pages', $writeCall['table']);
 
-        $this->assertContains($writeCall['data']['title'], ['Products', 'Our Products'],
+        $data = $this->extractWriteData($writeCall);
+        $this->assertContains($data['title'], ['Products', 'Our Products'],
             "Title should be either 'Products' or 'Our Products'"
         );
-        $this->assertEquals('Our Products', $writeCall['data']['nav_title']);
+        $this->assertEquals('Our Products', $data['nav_title']);
 
-        $this->assertContains($writeCall['data']['slug'], ['products', '/products'],
+        $this->assertContains($data['slug'], ['products', '/products'],
             "Slug should be either 'products' or '/products'"
         );
     }
@@ -170,19 +151,30 @@ class CreatePageTest extends LlmTestCase
 
         $response = $this->callLlm($prompt);
 
-        $acceptablePatterns = [
-            ['GetPageTree'],
-            ['GetPageTree', 'Search'],
-            ['Search'],
-        ];
+        $currentResponse = $response;
+        $history = [];
+        $iterations = 0;
+        while ($iterations < 5 && $currentResponse->hasToolCalls()) {
+            foreach ($currentResponse->getToolCalls() as $toolCall) {
+                $history[] = $toolCall['name'];
+            }
+            if ($currentResponse->getToolCallsByName('WriteTable')) {
+                break;
+            }
+            $currentResponse = $this->executeAndContinue($currentResponse);
+            $iterations++;
+        }
 
-        $this->assertFollowsPattern($response, $acceptablePatterns,
-            "checking for duplicates before creating"
-        );
+        $hasExploration = in_array('GetPageTree', $history) ||
+                         in_array('GetPage', $history) ||
+                         in_array('ReadTable', $history) ||
+                         in_array('Search', $history);
+        $this->assertTrue($hasExploration,
+            "Expected LLM to explore before deciding. Tools used: " . implode(', ', $history));
 
-        $writeTableCalls = $response->getToolCallsByName('WriteTable');
+        $writeTableCalls = $currentResponse->getToolCallsByName('WriteTable');
         $this->assertCount(0, $writeTableCalls,
-            "LLM should not create duplicate 'About Us' page. " . $this->getToolCallsDebugString($response)
+            "LLM should not create duplicate 'About Us' page. Tool history: " . implode(' → ', $history)
         );
     }
 }

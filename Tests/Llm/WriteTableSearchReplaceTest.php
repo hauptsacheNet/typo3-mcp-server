@@ -76,9 +76,6 @@ class WriteTableSearchReplaceTest extends LlmTestCase
             "[$modelKey] Expected update action"
         );
 
-        $this->assertArrayHasKey('data', $writeCall,
-            "[$modelKey] Expected data parameter in WriteTable call");
-
         // Execute the tool call and verify success
         $writeResult = $this->executeToolCall($writeCalls[0]);
         $this->assertFalse(
@@ -87,7 +84,7 @@ class WriteTableSearchReplaceTest extends LlmTestCase
         );
 
         // Check that the header field was addressed
-        $data = $writeCall['data'];
+        $data = $this->extractWriteData($writeCall);
         $this->assertArrayHasKey('header', $data,
             "[$modelKey] Expected header field in data");
 
@@ -169,7 +166,7 @@ class WriteTableSearchReplaceTest extends LlmTestCase
             "[$modelKey] WriteTable failed: " . $writeResult['content']
         );
 
-        $data = $writeCall['data'] ?? [];
+        $data = $this->extractWriteData($writeCall);
 
         // Verify header was addressed (either as string or search/replace)
         if (isset($data['header'])) {

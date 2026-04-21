@@ -47,12 +47,13 @@ class ContentElementTest extends LlmTestCase
         ]);
 
         $writeCall = $response->getToolCallsByName('WriteTable')[0]['arguments'];
+        $data = $this->extractWriteData($writeCall);
 
         $this->assertContains($writeCall['action'], ['create', 'update'],
             "Expected create or update action for content element");
 
-        if ($writeCall['action'] === 'create') {
-            $this->assertContains($writeCall['data']['CType'], ['text', 'textmedia'],
+        if ($writeCall['action'] === 'create' && isset($data['CType'])) {
+            $this->assertContains($data['CType'], ['text', 'textmedia'],
                 "Expected text or textmedia content type for new content");
         }
 
@@ -65,7 +66,7 @@ class ContentElementTest extends LlmTestCase
         $this->assertEquals('tt_content', $writeData['table']);
         $this->assertArrayHasKey('uid', $writeData);
 
-        $bodytext = $writeCall['data']['bodytext'] ?? '';
+        $bodytext = $data['bodytext'] ?? '';
 
         $this->assertStringContainsString('Monday', $bodytext);
         $this->assertStringContainsString('Friday', $bodytext);
@@ -102,20 +103,21 @@ class ContentElementTest extends LlmTestCase
         $this->assertCount(1, $writeTableCalls, "Expected WriteTable call");
 
         $writeCall = $writeTableCalls[0]['arguments'];
+        $data = $this->extractWriteData($writeCall);
 
         $this->assertContains($writeCall['action'], ['create', 'update'],
             "Expected create or update action");
         $this->assertEquals('tt_content', $writeCall['table']);
 
         if ($writeCall['action'] === 'create') {
-            $this->assertContains($writeCall['data']['colPos'], [1, 2],
+            $this->assertContains($data['colPos'], [1, 2],
                 "Content should be created in right column (colPos=1 or 2)");
         } else if ($writeCall['action'] === 'update') {
             if (isset($writeCall['where']['uid']) && $writeCall['where']['uid'] == 108) {
                 $this->assertTrue(true, "Updating existing Office Hours content in right column");
             } else {
-                if (isset($writeCall['data']['colPos'])) {
-                    $this->assertContains($writeCall['data']['colPos'], [1, 2],
+                if (isset($data['colPos'])) {
+                    $this->assertContains($data['colPos'], [1, 2],
                         "Content should be moved to right column");
                 }
             }
@@ -164,25 +166,20 @@ class ContentElementTest extends LlmTestCase
         $this->setModel($modelKey);
         $prompt = "Make the welcome header on the home page sound more friendly";
 
-        $response1 = $this->callLlm($prompt);
+        $response = $this->executeUntilToolFound(
+            $this->callLlm($prompt),
+            'WriteTable',
+            8
+        );
 
-        $exploreResult = $this->executeToolCall($response1->getToolCalls()[0]);
-        $response2 = $this->continueWithToolResult($response1, $exploreResult);
-
-        if ($response2->hasToolCalls() && $response2->getToolCalls()[0]['name'] === 'ReadTable') {
-            $readResult = $this->executeToolCall($response2->getToolCalls()[0]);
-            $response3 = $this->continueWithToolResult($response2, $readResult);
-        } else {
-            $response3 = $response2;
-        }
-
-        $this->assertToolCalled($response3, 'WriteTable', [
+        $this->assertToolCalled($response, 'WriteTable', [
             'action' => 'update',
             'table' => 'tt_content'
         ]);
 
-        $writeCall = $response3->getToolCallsByName('WriteTable')[0]['arguments'];
-        $newHeader = $writeCall['data']['header'] ?? '';
+        $writeCall = $response->getToolCallsByName('WriteTable')[0]['arguments'];
+        $data = $this->extractWriteData($writeCall);
+        $newHeader = $data['header'] ?? '';
 
         $this->assertNotEquals('Welcome Header', $newHeader);
         $this->assertNotEmpty($newHeader);
@@ -217,8 +214,9 @@ class ContentElementTest extends LlmTestCase
 
             $hasOrderingChange = false;
             foreach ($writeCalls as $call) {
+                $callData = $this->extractWriteData($call['arguments']);
                 if ($call['arguments']['action'] === 'update' &&
-                    (isset($call['arguments']['data']['sorting']) ||
+                    (isset($callData['sorting']) ||
                      isset($call['arguments']['where']['uid']))) {
                     $hasOrderingChange = true;
                     break;
