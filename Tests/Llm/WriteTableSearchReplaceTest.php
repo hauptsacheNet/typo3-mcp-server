@@ -37,7 +37,7 @@ class WriteTableSearchReplaceTest extends LlmTestCase
     {
         $this->setModel($modelKey);
 
-        if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku') {
+        if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku-4.5') {
             $this->markTestSkipped("Model '$modelKey' requires OpenRouter. Set OPENROUTER_API_KEY.");
         }
 
@@ -133,7 +133,7 @@ class WriteTableSearchReplaceTest extends LlmTestCase
     {
         $this->setModel($modelKey);
 
-        if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku') {
+        if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku-4.5') {
             $this->markTestSkipped("Model '$modelKey' requires OpenRouter. Set OPENROUTER_API_KEY.");
         }
 
@@ -211,7 +211,7 @@ class WriteTableSearchReplaceTest extends LlmTestCase
     {
         $this->setModel($modelKey);
 
-        if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku') {
+        if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku-4.5') {
             $this->markTestSkipped("Model '$modelKey' requires OpenRouter. Set OPENROUTER_API_KEY.");
         }
 

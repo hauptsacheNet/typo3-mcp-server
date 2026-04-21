@@ -1385,7 +1385,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
         ]);
         
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Data is required', $result->content[0]->text);
+        $this->assertStringContainsString('data parameter must contain record fields for create actions', $result->content[0]->text);
     }
 
     /**

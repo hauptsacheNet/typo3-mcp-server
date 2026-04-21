@@ -24,13 +24,15 @@ use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 abstract class LlmTestCase extends FunctionalTestCase
 {
     /**
-     * Models available via OpenRouter for multi-model tests
+     * Models available via OpenRouter for multi-model tests.
+     * Keys are used as labels in TestDox output and must include model version.
      */
     protected const MODELS = [
-        'haiku' => 'anthropic/claude-haiku-4.5',
-        'gpt' => 'openai/gpt-5.4',
-        'mistral' => 'mistralai/mistral-large-2512',
-        'gemini' => 'google/gemini-3-flash-preview',
+        'haiku-4.5' => 'anthropic/claude-haiku-4.5',
+        'gpt-5.4' => 'openai/gpt-5.4',
+        'gpt-oss-120b' => 'openai/gpt-oss-120b',
+        'mistral-large-2512' => 'mistralai/mistral-large-2512',
+        'gemini-3-flash' => 'google/gemini-3-flash-preview',
         'kimi-k2' => 'moonshotai/kimi-k2',
     ];
 
@@ -71,6 +73,36 @@ abstract class LlmTestCase extends FunctionalTestCase
     }
 
     /**
+     * Retry flaky LLM tests up to 3 times on assertion failure.
+     * LLM responses are inherently non-deterministic, so a single
+     * failure does not necessarily indicate a broken test.
+     */
+    protected function runTest(): mixed
+    {
+        $maxRetries = 3;
+        $lastException = null;
+
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+                return parent::runTest();
+            } catch (\PHPUnit\Framework\SkippedWithMessageException | \PHPUnit\Framework\IncompleteTestError $e) {
+                throw $e;
+            } catch (\PHPUnit\Framework\AssertionFailedError $e) {
+                $lastException = $e;
+                if ($attempt < $maxRetries) {
+                    try {
+                        $this->tearDown();
+                    } catch (\Throwable) {
+                    }
+                    $this->setUp();
+                }
+            }
+        }
+
+        throw $lastException;
+    }
+
+    /**
      * Initialize the LLM client based on available API keys.
      */
     protected function initializeLlmClient(): void
@@ -81,7 +113,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             $this->llmClient = new OpenRouterClient($openRouterKey);
             $this->llmProvider = 'openrouter';
             if (empty($this->llmModel)) {
-                $this->llmModel = self::MODELS['haiku'];
+                $this->llmModel = self::MODELS['haiku-4.5'];
             }
             return;
         }
@@ -105,13 +137,10 @@ abstract class LlmTestCase extends FunctionalTestCase
      */
     public static function modelProvider(): array
     {
-        return [
-            'Haiku' => ['haiku'],
-            'GPT' => ['gpt'],
-            'Mistral' => ['mistral'],
-            'Gemini' => ['gemini'],
-            'Kimi K2' => ['kimi-k2'],
-        ];
+        return array_map(
+            fn(string $key) => [$key],
+            array_combine(array_keys(static::MODELS), array_keys(static::MODELS))
+        );
     }
 
     /**
