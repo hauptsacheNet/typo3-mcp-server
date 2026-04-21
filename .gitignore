@@ -3,6 +3,10 @@
 /public
 /var
 /vendor
+/typo3temp
+
+# entry point created by TYPO3 testing framework bootstrap
+/index.php
 
 # a lock file does not make sense for a library
 /composer.lock
