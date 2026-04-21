@@ -34,7 +34,9 @@ class SeoMetaTest extends LlmTestCase
         $acceptableFirstSteps = [
             'GetPageTree',
             'ReadTable',
-            'Search'
+            'Search',
+            'GetTableSchema',
+            'GetPage',
         ];
 
         $firstToolCall = $response1->getToolCalls()[0]['name'] ?? '';

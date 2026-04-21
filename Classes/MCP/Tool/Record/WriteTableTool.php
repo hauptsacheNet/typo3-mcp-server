@@ -146,7 +146,8 @@ class WriteTableTool extends AbstractRecordTool
                     "not a plain string. Each field name should be a key with its corresponding value."
                 ]);
             }
-            if (empty($data)) {
+            $positionProvided = !empty($params['position']) && ($params['position'] ?? 'bottom') !== 'bottom';
+            if (empty($data) && !($action === 'update' && $positionProvided)) {
                 throw new ValidationException([
                     "The data parameter must contain record fields for {$action} actions. " .
                     "Provide field names as keys, e.g. {\"title\": \"Page Title\", \"bodytext\": \"Content\"}."
@@ -200,7 +201,8 @@ class WriteTableTool extends AbstractRecordTool
                     throw new ValidationException(['Record UID is required for update action']);
                 }
 
-                if (empty($data) && empty($searchReplace)) {
+                $hasPosition = !empty($position) && $position !== 'bottom';
+                if (empty($data) && empty($searchReplace) && !$hasPosition) {
                     throw new ValidationException(['Data is required for update action']);
                 }
                 break;
