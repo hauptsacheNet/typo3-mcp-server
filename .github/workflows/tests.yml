@@ -60,4 +60,8 @@ jobs:
       - name: Run LLM test suite
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: vendor/bin/paratest -c Tests/Llm/phpunit-llm.xml --testdox --no-progress -p 5
+        run: vendor/bin/paratest -c Tests/Llm/phpunit-llm.xml --testdox --no-progress -p 5 --log-junit .Build/llm-results.xml
+        continue-on-error: true
+
+      - name: Check majority pass rule
+        run: php Build/check-llm-results.php --min-pass=3

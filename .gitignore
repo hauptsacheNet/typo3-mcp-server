@@ -18,6 +18,7 @@
 # TER build artifacts
 /dist
 /.build
+/.Build
 
 # Node / Playwright
 /Build/node_modules
