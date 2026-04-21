@@ -95,7 +95,7 @@ class WriteTableTool extends AbstractRecordTool
                         'default' => 'bottom',
                     ],
                 ],
-                'required' => ['action', 'table', 'data'],
+                'required' => ['action', 'table'],
             ],
             'annotations' => [
                 'readOnlyHint' => false,

@@ -38,8 +38,13 @@ if ($xml === false) {
 // Collect results grouped by base test name (without model suffix)
 $testCases = []; // baseName => ['total' => N, 'passed' => N, 'models' => [...]]
 
-foreach ($xml->testsuite as $suite) {
-    collectFromSuite($suite, $testCases);
+// Handle both <testsuites><testsuite>... and root <testsuite>... JUnit formats
+if ($xml->getName() === 'testsuite') {
+    collectFromSuite($xml, $testCases);
+} else {
+    foreach ($xml->testsuite as $suite) {
+        collectFromSuite($suite, $testCases);
+    }
 }
 
 function collectFromSuite(SimpleXMLElement $suite, array &$testCases): void
@@ -125,6 +130,13 @@ foreach ($testCases as $name => $result) {
 }
 
 echo "\n" . str_repeat('=', 80) . "\n";
+
+// Fail if no tests actually executed (e.g. missing API key caused all skips)
+$executedCount = count(array_filter($testCases, fn($r) => array_diff($r['models'], ['SKIP'])));
+if ($executedCount === 0) {
+    fwrite(STDERR, "\033[31mNo LLM tests were executed (all skipped). Check OPENROUTER_API_KEY.\033[0m\n");
+    exit(1);
+}
 
 if ($allPassed) {
     echo "\033[32mAll test cases pass majority rule ($minPass+ models per case)\033[0m\n";
