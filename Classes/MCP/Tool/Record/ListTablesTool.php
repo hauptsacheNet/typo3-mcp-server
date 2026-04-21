@@ -111,7 +111,7 @@ class ListTablesTool extends AbstractRecordTool
     {
         $result = "ACCESSIBLE TABLES IN TYPO3 (via MCP)\n";
         $result .= "=====================================\n\n";
-        
+
         $result .= "Tables accessible by the current user. Most are workspace-capable (changes require publishing).\n";
         $result .= "Tables marked as [READ-ONLY] can be read but not modified via WriteTable.\n\n";
         
