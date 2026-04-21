@@ -28,10 +28,10 @@ abstract class LlmTestCase extends FunctionalTestCase
      */
     protected const MODELS = [
         'haiku' => 'anthropic/claude-3-5-haiku',
-        'gpt-5.2' => 'openai/gpt-5.2',
+        'o4-mini' => 'openai/o4-mini',
         'gpt-oss' => 'openai/gpt-oss-120b',
         'kimi-k2' => 'moonshotai/kimi-k2',
-        'mistral-medium' => 'mistralai/mistral-medium-3',
+        'gemini-flash' => 'google/gemini-2.5-flash',
     ];
 
     protected array $coreExtensionsToLoad = [
@@ -107,10 +107,10 @@ abstract class LlmTestCase extends FunctionalTestCase
     {
         return [
             'Haiku' => ['haiku'],
-            'GPT-5.2' => ['gpt-5.2'],
+            'o4-mini' => ['o4-mini'],
             'GPT-OSS' => ['gpt-oss'],
             'Kimi K2' => ['kimi-k2'],
-            'Mistral Medium' => ['mistral-medium'],
+            'Gemini Flash' => ['gemini-flash'],
         ];
     }
 

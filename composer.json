@@ -55,7 +55,7 @@
             "paratest -c phpunit.xml.dist"
         ],
         "test:llm": [
-            "paratest -c Tests/Llm/phpunit-llm.xml"
+            "phpunit -c Tests/Llm/phpunit-llm.xml --testdox --no-progress"
         ],
         "build:ter": "bash Build/build-ter.sh"
     },

@@ -27,20 +27,6 @@ class WriteTableSearchReplaceTest extends LlmTestCase
     }
 
     /**
-     * Data provider that returns the models to test.
-     */
-    public static function modelProvider(): array
-    {
-        return [
-            'Haiku' => ['haiku'],
-            'GPT-5.2' => ['gpt-5.2'],
-            'GPT-OSS' => ['gpt-oss'],
-            'Kimi K2' => ['kimi-k2'],
-            'Mistral Medium' => ['mistral-medium'],
-        ];
-    }
-
-    /**
      * Content element 200 has header "Welcom to Our Compnay" (two typos).
      * The LLM should read the content, identify the errors, and use WriteTable
      * with either search-and-replace arrays or full string values to fix them.
