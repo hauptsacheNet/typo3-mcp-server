@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
@@ -35,10 +36,37 @@ jobs:
       - name: Run functional test suite
         run: composer test
 
+  llm-trigger:
+    runs-on: ubuntu-latest
+    name: Check LLM trigger
+    if: github.event_name == 'pull_request'
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Check if tool-related files changed
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Manual override via label
+          if ${{ contains(github.event.pull_request.labels.*.name, 'run-llm-tests') }}; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Auto-trigger when tool implementations or LLM tests change
+          FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
+          if echo "$FILES" | grep -qE '^(Classes/MCP/Tool/|Classes/Service/|Tests/Llm/)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   llm-tests:
+    needs: [llm-trigger]
+    if: always() && (github.event_name == 'push' || needs.llm-trigger.outputs.run == 'true')
     runs-on: ubuntu-latest
     name: LLM Tests
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-llm-tests'))
 
     steps:
       - name: Check out repository
