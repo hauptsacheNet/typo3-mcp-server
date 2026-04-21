@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
@@ -48,12 +47,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Manual override via label
-          if ${{ contains(github.event.pull_request.labels.*.name, 'run-llm-tests') }}; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           # Auto-trigger when tool implementations or LLM tests change
           FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           if echo "$FILES" | grep -qE '^(Classes/MCP/Tool/|Classes/Service/|Tests/Llm/)'; then
