@@ -37,10 +37,6 @@ class WriteTableSearchReplaceTest extends LlmTestCase
     {
         $this->setModel($modelKey);
 
-        if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku-4.5') {
-            $this->markTestSkipped("Model '$modelKey' requires OpenRouter. Set OPENROUTER_API_KEY.");
-        }
-
         $prompt = 'There are spelling errors in the header of a content element on the home page that says something about "welcome" and "company". Please find and fix the spelling mistakes.';
 
         $response = $this->executeUntilToolFound(
@@ -133,10 +129,6 @@ class WriteTableSearchReplaceTest extends LlmTestCase
     {
         $this->setModel($modelKey);
 
-        if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku-4.5') {
-            $this->markTestSkipped("Model '$modelKey' requires OpenRouter. Set OPENROUTER_API_KEY.");
-        }
-
         $prompt = 'The "Our Servces" content element on the home page has many spelling errors in both the header and body text. Please fix all the spelling mistakes.';
 
         $response = $this->executeUntilToolFound(
@@ -210,10 +202,6 @@ class WriteTableSearchReplaceTest extends LlmTestCase
     public function testLlmFindsAndFixesTyposNaturally(string $modelKey): void
     {
         $this->setModel($modelKey);
-
-        if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku-4.5') {
-            $this->markTestSkipped("Model '$modelKey' requires OpenRouter. Set OPENROUTER_API_KEY.");
-        }
 
         $prompt = 'I noticed there are some spelling mistakes on the home page. Can you find and fix them?';
 

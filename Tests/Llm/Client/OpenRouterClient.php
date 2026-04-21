@@ -61,6 +61,10 @@ class OpenRouterClient implements LlmClientInterface
             'tools' => $this->convertToolsToOpenAIFormat($tools),
         ];
 
+        if (isset($options['reasoning'])) {
+            $requestBody['reasoning'] = $options['reasoning'];
+        }
+
         return $this->sendRequest($requestBody);
     }
 
@@ -111,6 +115,10 @@ class OpenRouterClient implements LlmClientInterface
             'messages' => $this->conversationHistory,
             'tools' => $this->convertToolsToOpenAIFormat($tools),
         ];
+
+        if (isset($options['reasoning'])) {
+            $requestBody['reasoning'] = $options['reasoning'];
+        }
 
         return $this->sendRequest($requestBody);
     }

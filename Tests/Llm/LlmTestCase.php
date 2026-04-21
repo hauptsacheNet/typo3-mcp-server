@@ -36,6 +36,10 @@ abstract class LlmTestCase extends FunctionalTestCase
         'kimi-k2' => 'moonshotai/kimi-k2',
     ];
 
+    protected const MODEL_OPTIONS = [
+        'gpt-5.4' => ['reasoning' => ['effort' => 'high']],
+    ];
+
     protected array $coreExtensionsToLoad = [
         'workspaces',
         'frontend',
@@ -194,10 +198,19 @@ abstract class LlmTestCase extends FunctionalTestCase
         $this->lastResponse = $this->llmClient->complete(
             $prompt,
             $tools,
-            array_merge($defaults, $options)
+            array_merge($defaults, $this->getModelOptions(), $options)
         );
 
         return $this->lastResponse;
+    }
+
+    protected function getModelOptions(): array
+    {
+        $modelKey = array_search($this->llmModel, static::MODELS, true);
+        if ($modelKey !== false && isset(static::MODEL_OPTIONS[$modelKey])) {
+            return static::MODEL_OPTIONS[$modelKey];
+        }
+        return [];
     }
 
     /**
@@ -490,7 +503,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             $previousResponse,
             $toolResults,
             $this->getMcpToolsAsLlmFunctions(),
-            array_merge($defaults, $options)
+            array_merge($defaults, $this->getModelOptions(), $options)
         );
 
         return $this->lastResponse;
