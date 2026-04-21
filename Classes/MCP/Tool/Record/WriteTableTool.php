@@ -91,8 +91,7 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'position' => [
                         'type' => 'string',
-                        'description' => 'Sorting position for create and update actions: "top", "bottom" (default), "after:UID", or "before:UID". Use this to reorder records on a page.',
-                        'default' => 'bottom',
+                        'description' => 'Sorting position: "top", "bottom", "after:UID", or "before:UID". For create: defaults to "bottom" if omitted. For update: omit to keep current position, or specify to move the record.',
                     ],
                 ],
                 'required' => ['action', 'table'],
@@ -125,7 +124,7 @@ class WriteTableTool extends AbstractRecordTool
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
         $data = $params['data'] ?? [];
-        $position = $params['position'] ?? 'bottom';
+        $position = $params['position'] ?? null;
 
         // Validate parameters
         if (empty($action)) {
@@ -146,7 +145,7 @@ class WriteTableTool extends AbstractRecordTool
                     "not a plain string. Each field name should be a key with its corresponding value."
                 ]);
             }
-            $positionProvided = !empty($params['position']) && ($params['position'] ?? 'bottom') !== 'bottom';
+            $positionProvided = $position !== null;
             if (empty($data) && !($action === 'update' && $positionProvided)) {
                 throw new ValidationException([
                     "The data parameter must contain record fields for {$action} actions. " .
@@ -201,7 +200,7 @@ class WriteTableTool extends AbstractRecordTool
                     throw new ValidationException(['Record UID is required for update action']);
                 }
 
-                $hasPosition = !empty($position) && $position !== 'bottom';
+                $hasPosition = $position !== null;
                 if (empty($data) && empty($searchReplace) && !$hasPosition) {
                     throw new ValidationException(['Data is required for update action']);
                 }
@@ -261,7 +260,7 @@ class WriteTableTool extends AbstractRecordTool
     /**
      * Create a new record
      */
-    protected function createRecord(string $table, int $pid, array $data, string $position): CallToolResult
+    protected function createRecord(string $table, int $pid, array $data, ?string $position): CallToolResult
     {
         // Pre-validate page access for non-admin users
         $pageAccessError = $this->validatePageAccess($pid);
@@ -296,7 +295,7 @@ class WriteTableTool extends AbstractRecordTool
         // Use DataHandler's native pid-based positioning:
         // - Positive pid → record is placed at the TOP of that page (DataHandler default)
         // - Negative pid (-uid) → record is placed AFTER the record with that uid
-        if ($position === 'bottom') {
+        if ($position === 'bottom' || $position === null) {
             $sortingField = $this->tableAccessService->getSortingFieldName($table);
             if ($sortingField !== null && !isset($data[$sortingField])) {
                 // Find the last record on this page to insert after it
@@ -504,7 +503,7 @@ class WriteTableTool extends AbstractRecordTool
     /**
      * Update an existing record
      */
-    protected function updateRecord(string $table, int $uid, array $data, string $position = 'bottom'): CallToolResult
+    protected function updateRecord(string $table, int $uid, array $data, ?string $position = null): CallToolResult
     {
         // Validate the data
         $validationResult = $this->validateRecordData($table, $data, 'update', $uid);
@@ -604,7 +603,7 @@ class WriteTableTool extends AbstractRecordTool
         }
         
         // Handle position/reordering if requested
-        if ($position !== 'bottom') {
+        if ($position !== null) {
             $moveResult = $this->moveRecord($table, $workspaceUid, $position);
             if ($moveResult !== null) {
                 return $moveResult;
@@ -678,15 +677,41 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function resolvePositionToDestination(string $table, int $uid, string $position): ?int
     {
-        if ($position === 'bottom') {
-            return null;
-        }
-
         $record = BackendUtility::getRecord($table, $uid, 'pid');
         if ($record === null) {
             return null;
         }
         $pid = (int)$record['pid'];
+
+        if ($position === 'bottom') {
+            $sortingField = $this->tableAccessService->getSortingFieldName($table);
+            if ($sortingField === null) {
+                return null;
+            }
+            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable($table);
+            $qb->getRestrictions()->removeAll()
+                ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+                ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+
+            $lastRecord = $qb
+                ->select('uid')
+                ->from($table)
+                ->where(
+                    $qb->expr()->eq('pid', $qb->createNamedParameter($pid, ParameterType::INTEGER)),
+                    $qb->expr()->neq('uid', $qb->createNamedParameter($uid, ParameterType::INTEGER))
+                )
+                ->orderBy($sortingField, 'DESC')
+                ->addOrderBy('uid', 'DESC')
+                ->setMaxResults(1)
+                ->executeQuery()
+                ->fetchAssociative();
+
+            if ($lastRecord) {
+                return -(int)$lastRecord['uid'];
+            }
+            return null;
+        }
 
         if ($position === 'top') {
             return $pid;
