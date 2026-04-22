@@ -93,7 +93,7 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         return [
-            'description' => 'Read records from TYPO3 tables with filtering, pagination, and relation embedding. By default, returns records from ALL languages mixed together (matching TYPO3\'s list module behavior). Use the language parameter to filter to a specific language. For page content, use pid filter instead of individual record lookups.',
+            'description' => 'Read records from TYPO3 tables with filtering, pagination, and relation embedding. Also provides access to the fileadmin: read sys_file to browse available files and images. By default, returns records from ALL languages mixed together (matching TYPO3\'s list module behavior). Use the language parameter to filter to a specific language. For page content, use pid filter instead of individual record lookups.',
             'inputSchema' => [
                 'type' => 'object',
                 'properties' => $properties,
