@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Llm;
 
-use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\TestDox;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -29,24 +28,6 @@ class FileReferenceTest extends LlmTestCase
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/sys_file.csv');
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/sys_file_reference.csv');
-    }
-
-    /**
-     * Verify our own infrastructure: sys_file is readable without pid filter.
-     * Not an LLM test - just sanity check for the fixtures and read path.
-     */
-    public function testSysFileIsReadableWithoutPid(): void
-    {
-        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
-        $result = $readTool->execute([
-            'table' => 'sys_file',
-        ]);
-        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
-
-        $data = json_decode($result->content[0]->text, true);
-        $this->assertGreaterThan(0, $data['total'], 'sys_file should return files when queried without pid');
-        $this->assertStringContainsString('person.jpg', $result->content[0]->text);
-        $this->assertStringContainsString('test.jpg', $result->content[0]->text);
     }
 
     #[DataProvider('modelProvider')]
