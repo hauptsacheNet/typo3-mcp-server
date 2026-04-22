@@ -38,9 +38,14 @@ class WriteTableTool extends AbstractRecordTool
         $accessibleTables = $this->tableAccessService->getAccessibleTables(false);
         $tableNames = array_keys($accessibleTables);
         sort($tableNames); // Sort alphabetically for better readability
-        
+
+        $hasMultipleLanguages = count($this->languageService->getAvailableIsoCodes()) > 1;
+        $languageHint = $hasMultipleLanguages
+            ? ' Language fields (sys_language_uid) can be provided as ISO codes (e.g., "de", "fr") instead of numeric IDs.'
+            : '';
+
         return [
-            'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live. Language fields (sys_language_uid) can be provided as ISO codes (e.g., "de", "fr") instead of numeric IDs. ' .
+            'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live.' . $languageHint . ' ' .
                 'Before creating or updating content, always use GetPage to understand the page structure, existing content, and writing style. ' .
                 'Check existing content elements with ReadTable to ensure new content fits the page\'s tone and doesn\'t duplicate existing elements. ' .
                 'For content creation, verify the appropriate colPos by examining existing content layout. ' .
@@ -70,7 +75,8 @@ class WriteTableTool extends AbstractRecordTool
                     'data' => [
                         'type' => 'object',
                         'description' => 'Record data with field names as keys and their values (required for "create", "update", and "translate" actions). ' .
-                            'Uses the same field syntax as ReadTable output. Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' .
+                            'Uses the same field syntax as ReadTable output.' .
+                            ($hasMultipleLanguages ? ' Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs.' : '') . ' ' .
                             'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
                             'For text fields in update actions, instead of providing the full text, you can provide an array of search-and-replace operations: ' .
                             '[{"search": "old text", "replace": "new text"}]. Each operation can optionally include "replaceAll": true. ' .
@@ -85,8 +91,7 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'position' => [
                         'type' => 'string',
-                        'description' => 'Position for new records: "top", "bottom", "after:UID", or "before:UID"',
-                        'default' => 'bottom',
+                        'description' => 'Sorting position: "top", "bottom", "after:UID", or "before:UID". For create: defaults to "bottom" if omitted. For update: omit to keep current position, or specify to move the record.',
                     ],
                 ],
                 'required' => ['action', 'table'],
@@ -104,13 +109,22 @@ class WriteTableTool extends AbstractRecordTool
     protected function doExecute(array $params): CallToolResult
     {
         
+        // Some models (e.g. OpenAI GPT) place record fields at the top level
+        // instead of nesting them inside the 'data' parameter.
+        // Collect any unknown top-level keys into 'data' so the tool works regardless.
+        $knownKeys = ['action', 'table', 'pid', 'uid', 'data', 'position'];
+        $extraData = array_diff_key($params, array_flip($knownKeys));
+        if (!empty($extraData) && empty($params['data'])) {
+            $params['data'] = $extraData;
+        }
+
         // Get parameters
         $action = $params['action'] ?? '';
         $table = $params['table'] ?? '';
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
         $data = $params['data'] ?? [];
-        $position = $params['position'] ?? 'bottom';
+        $position = $params['position'] ?? null;
 
         // Validate parameters
         if (empty($action)) {
@@ -121,14 +135,21 @@ class WriteTableTool extends AbstractRecordTool
             throw new ValidationException(['Table name is required']);
         }
 
-        // Validate data parameter type
-        if (in_array($action, ['create', 'update', 'translate'], true) && isset($params['data'])) {
-            if (!is_array($params['data'])) {
+        // Validate data parameter for create/update/translate
+        if (in_array($action, ['create', 'update', 'translate'], true)) {
+            if (isset($params['data']) && !is_array($params['data'])) {
                 $dataType = gettype($params['data']);
                 throw new ValidationException([
                     "Invalid data parameter: Expected an object/array with field names as keys, but received {$dataType}. " .
                     "The data parameter must be an object like {\"title\": \"My Title\", \"bodytext\": \"Content\"}, " .
                     "not a plain string. Each field name should be a key with its corresponding value."
+                ]);
+            }
+            $positionProvided = $position !== null;
+            if (empty($data) && !($action === 'update' && $positionProvided)) {
+                throw new ValidationException([
+                    "The data parameter must contain record fields for {$action} actions. " .
+                    "Provide field names as keys, e.g. {\"title\": \"Page Title\", \"bodytext\": \"Content\"}."
                 ]);
             }
         }
@@ -179,7 +200,8 @@ class WriteTableTool extends AbstractRecordTool
                     throw new ValidationException(['Record UID is required for update action']);
                 }
 
-                if (empty($data) && empty($searchReplace)) {
+                $hasPosition = $position !== null;
+                if (empty($data) && empty($searchReplace) && !$hasPosition) {
                     throw new ValidationException(['Data is required for update action']);
                 }
                 break;
@@ -219,7 +241,7 @@ class WriteTableTool extends AbstractRecordTool
                     $resolvedFields = $this->resolveSearchReplace($table, $uid, $searchReplace);
                     $data = array_merge($data, $resolvedFields);
                 }
-                return $this->updateRecord($table, $uid, $data);
+                return $this->updateRecord($table, $uid, $data, $position);
                 
             case 'delete':
                 return $this->deleteRecord($table, $uid);
@@ -238,7 +260,7 @@ class WriteTableTool extends AbstractRecordTool
     /**
      * Create a new record
      */
-    protected function createRecord(string $table, int $pid, array $data, string $position): CallToolResult
+    protected function createRecord(string $table, int $pid, array $data, ?string $position): CallToolResult
     {
         // Pre-validate page access for non-admin users
         $pageAccessError = $this->validatePageAccess($pid);
@@ -273,7 +295,7 @@ class WriteTableTool extends AbstractRecordTool
         // Use DataHandler's native pid-based positioning:
         // - Positive pid → record is placed at the TOP of that page (DataHandler default)
         // - Negative pid (-uid) → record is placed AFTER the record with that uid
-        if ($position === 'bottom') {
+        if ($position === 'bottom' || $position === null) {
             $sortingField = $this->tableAccessService->getSortingFieldName($table);
             if ($sortingField !== null && !isset($data[$sortingField])) {
                 // Find the last record on this page to insert after it
@@ -466,6 +488,7 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
+
         // Get the live UID for workspace transparency
         $liveUid = $this->getLiveUid($table, $parentUid);
         
@@ -480,7 +503,7 @@ class WriteTableTool extends AbstractRecordTool
     /**
      * Update an existing record
      */
-    protected function updateRecord(string $table, int $uid, array $data): CallToolResult
+    protected function updateRecord(string $table, int $uid, array $data, ?string $position = null): CallToolResult
     {
         // Validate the data
         $validationResult = $this->validateRecordData($table, $data, 'update', $uid);
@@ -579,6 +602,14 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         
+        // Handle position/reordering if requested
+        if ($position !== null) {
+            $moveResult = $this->moveRecord($table, $workspaceUid, $position);
+            if ($moveResult !== null) {
+                return $moveResult;
+            }
+        }
+
         // Return the result with the original live UID
         return $this->createJsonResult([
             'action' => 'update',
@@ -613,6 +644,142 @@ class WriteTableTool extends AbstractRecordTool
         ]);
     }
     
+    /**
+     * Move a record to a new position using DataHandler's cmdmap.
+     *
+     * @return CallToolResult|null Error result on failure, null on success
+     */
+    protected function moveRecord(string $table, int $uid, string $position): ?CallToolResult
+    {
+        $destination = $this->resolvePositionToDestination($table, $uid, $position);
+        if ($destination === null) {
+            return null;
+        }
+
+        $cmdMap = [$table => [$uid => ['move' => $destination]]];
+        $moveDataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $moveDataHandler->BE_USER = $GLOBALS['BE_USER'];
+        $moveDataHandler->start([], $cmdMap);
+        $moveDataHandler->process_cmdmap();
+
+        if (!empty($moveDataHandler->errorLog)) {
+            return $this->createErrorResult('Error moving record: ' . implode(', ', $moveDataHandler->errorLog));
+        }
+
+        return null;
+    }
+
+    /**
+     * Convert a position string ("top", "bottom", "after:UID", "before:UID")
+     * into a DataHandler move destination integer.
+     *
+     * @return int|null Destination pid (positive=page, negative=after record), null if no move needed
+     */
+    protected function resolvePositionToDestination(string $table, int $uid, string $position): ?int
+    {
+        $record = BackendUtility::getRecord($table, $uid, 'pid');
+        if ($record === null) {
+            return null;
+        }
+        $pid = (int)$record['pid'];
+
+        if ($position === 'bottom') {
+            $sortingField = $this->tableAccessService->getSortingFieldName($table);
+            if ($sortingField === null) {
+                return null;
+            }
+            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable($table);
+            $qb->getRestrictions()->removeAll()
+                ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+                ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+
+            $lastRecord = $qb
+                ->select('uid')
+                ->from($table)
+                ->where(
+                    $qb->expr()->eq('pid', $qb->createNamedParameter($pid, ParameterType::INTEGER)),
+                    $qb->expr()->neq('uid', $qb->createNamedParameter($uid, ParameterType::INTEGER))
+                )
+                ->orderBy($sortingField, 'DESC')
+                ->addOrderBy('uid', 'DESC')
+                ->setMaxResults(1)
+                ->executeQuery()
+                ->fetchAssociative();
+
+            if ($lastRecord) {
+                return -(int)$lastRecord['uid'];
+            }
+            return null;
+        }
+
+        if ($position === 'top') {
+            return $pid;
+        }
+
+        if (strpos($position, 'after:') === 0) {
+            $referenceUid = (int)substr($position, strlen('after:'));
+            $wsUid = $this->resolveToWorkspaceUid($table, $referenceUid);
+            return -$wsUid;
+        }
+
+        if (strpos($position, 'before:') === 0) {
+            $referenceUid = (int)substr($position, strlen('before:'));
+            $sortingField = $this->tableAccessService->getSortingFieldName($table);
+            if ($sortingField === null) {
+                return $pid;
+            }
+
+            // Workspace-aware lookup: resolve to workspace version for correct pid/sorting
+            $refRecord = BackendUtility::getRecord($table, $referenceUid);
+            if ($refRecord) {
+                BackendUtility::workspaceOL($table, $refRecord);
+            }
+            if ($refRecord === null) {
+                return $pid;
+            }
+
+            $refPid = (int)$refRecord['pid'];
+            $refSorting = (int)$refRecord[$sortingField];
+            $refUid = (int)$refRecord['uid'];
+
+            // Find the predecessor: workspace-aware, with UID tiebreak for equal sorting
+            $qb = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable($table);
+            $qb->getRestrictions()->removeAll()
+                ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+                ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+
+            $predecessorRecord = $qb
+                ->select('uid')
+                ->from($table)
+                ->where(
+                    $qb->expr()->eq('pid', $qb->createNamedParameter($refPid, ParameterType::INTEGER)),
+                    $qb->expr()->or(
+                        $qb->expr()->lt($sortingField, $qb->createNamedParameter($refSorting, ParameterType::INTEGER)),
+                        $qb->expr()->and(
+                            $qb->expr()->eq($sortingField, $qb->createNamedParameter($refSorting, ParameterType::INTEGER)),
+                            $qb->expr()->lt('uid', $qb->createNamedParameter($refUid, ParameterType::INTEGER))
+                        )
+                    )
+                )
+                ->orderBy($sortingField, 'DESC')
+                ->addOrderBy('uid', 'DESC')
+                ->setMaxResults(1)
+                ->executeQuery()
+                ->fetchAssociative();
+
+            if ($predecessorRecord) {
+                return -(int)$predecessorRecord['uid'];
+            }
+
+            // No previous record — target is at the top of the page
+            return $refPid;
+        }
+
+        return null;
+    }
+
     /**
      * Translate a record to another language
      */

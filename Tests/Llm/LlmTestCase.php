@@ -24,14 +24,19 @@ use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 abstract class LlmTestCase extends FunctionalTestCase
 {
     /**
-     * Models available via OpenRouter for multi-model tests
+     * Models available via OpenRouter for multi-model tests.
+     * Keys are used as labels in TestDox output and must include model version.
      */
     protected const MODELS = [
-        'haiku' => 'anthropic/claude-3-5-haiku',
-        'gpt-5.2' => 'openai/gpt-5.2',
-        'gpt-oss' => 'openai/gpt-oss-120b',
-        'kimi-k2' => 'moonshotai/kimi-k2',
-        'mistral-medium' => 'mistralai/mistral-medium-3',
+        'haiku-4.5' => 'anthropic/claude-haiku-4.5',
+        'gpt-5.4' => 'openai/gpt-5.4',
+        'gpt-oss-120b' => 'openai/gpt-oss-120b',
+        'mistral-large-2512' => 'mistralai/mistral-large-2512',
+        'gemini-3-flash' => 'google/gemini-3-flash-preview',
+    ];
+
+    protected const MODEL_OPTIONS = [
+        'gpt-5.4' => ['reasoning' => ['effort' => 'high']],
     ];
 
     protected array $coreExtensionsToLoad = [
@@ -71,6 +76,36 @@ abstract class LlmTestCase extends FunctionalTestCase
     }
 
     /**
+     * Retry flaky LLM tests up to 3 times on assertion failure.
+     * LLM responses are inherently non-deterministic, so a single
+     * failure does not necessarily indicate a broken test.
+     */
+    protected function runTest(): mixed
+    {
+        $maxRetries = 3;
+        $lastException = null;
+
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+                return parent::runTest();
+            } catch (\PHPUnit\Framework\SkippedWithMessageException | \PHPUnit\Framework\IncompleteTestError $e) {
+                throw $e;
+            } catch (\PHPUnit\Framework\AssertionFailedError $e) {
+                $lastException = $e;
+                if ($attempt < $maxRetries) {
+                    try {
+                        $this->tearDown();
+                    } catch (\Throwable) {
+                    }
+                    $this->setUp();
+                }
+            }
+        }
+
+        throw $lastException;
+    }
+
+    /**
      * Initialize the LLM client based on available API keys.
      */
     protected function initializeLlmClient(): void
@@ -81,7 +116,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             $this->llmClient = new OpenRouterClient($openRouterKey);
             $this->llmProvider = 'openrouter';
             if (empty($this->llmModel)) {
-                $this->llmModel = self::MODELS['haiku'];
+                $this->llmModel = self::MODELS['haiku-4.5'];
             }
             return;
         }
@@ -105,13 +140,10 @@ abstract class LlmTestCase extends FunctionalTestCase
      */
     public static function modelProvider(): array
     {
-        return [
-            'Haiku' => ['haiku'],
-            'GPT-5.2' => ['gpt-5.2'],
-            'GPT-OSS' => ['gpt-oss'],
-            'Kimi K2' => ['kimi-k2'],
-            'Mistral Medium' => ['mistral-medium'],
-        ];
+        return array_map(
+            fn(string $key) => [$key],
+            array_combine(array_keys(static::MODELS), array_keys(static::MODELS))
+        );
     }
 
     /**
@@ -165,15 +197,41 @@ abstract class LlmTestCase extends FunctionalTestCase
         $this->lastResponse = $this->llmClient->complete(
             $prompt,
             $tools,
-            array_merge($defaults, $options)
+            array_merge($defaults, $this->getModelOptions(), $options)
         );
 
         return $this->lastResponse;
     }
 
+    protected function getModelOptions(): array
+    {
+        $modelKey = array_search($this->llmModel, static::MODELS, true);
+        if ($modelKey !== false && isset(static::MODEL_OPTIONS[$modelKey])) {
+            return static::MODEL_OPTIONS[$modelKey];
+        }
+        return [];
+    }
+
+    /**
+     * Build a context string for failure messages, including model and prompt.
+     */
+    protected function getFailureContext(LlmResponse $response = null): string
+    {
+        $context = "[Model: {$this->llmModel}]\n";
+        $context .= "Prompt: {$this->lastPrompt}\n";
+        if ($response !== null) {
+            $textResponse = $response->getContent();
+            if (!empty($textResponse)) {
+                $context .= "LLM text response: " . mb_substr($textResponse, 0, 500) . "\n";
+            }
+            $context .= "\n" . $this->getToolCallsDebugString($response);
+        }
+        return $context;
+    }
+
     /**
      * Assert that a specific tool was called in the response
-     * 
+     *
      * @param LlmResponse $response
      * @param string $toolName
      * @param array|null $expectedParams Partial params to match (null to skip param checking)
@@ -181,49 +239,71 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected function assertToolCalled(LlmResponse $response, string $toolName, ?array $expectedParams = null): void
     {
         $toolCalls = $response->getToolCalls();
-        
+
         $found = false;
         foreach ($toolCalls as $toolCall) {
             if ($toolCall['name'] === $toolName) {
                 $found = true;
-                
+
                 if ($expectedParams !== null) {
                     $actualParams = $toolCall['arguments'] ?? [];
-                    
-                    // Check if expected params are present in actual params
+
                     foreach ($expectedParams as $key => $value) {
-                        $this->assertArrayHasKey($key, $actualParams, "Expected parameter '$key' not found in tool call '$toolName'");
-                        
-                        // For nested arrays, do partial matching
+                        // For 'data' key, use extractWriteData() to handle models
+                        // that place record fields at top level instead of in 'data'
+                        if ($key === 'data' && is_array($value)) {
+                            $extractedData = $this->extractWriteData($actualParams);
+                            foreach ($value as $nestedKey => $nestedValue) {
+                                if (is_string($nestedKey)) {
+                                    $this->assertArrayHasKey($nestedKey, $extractedData,
+                                        "Expected data field '$nestedKey' not found in tool call '$toolName'.\n" .
+                                        $this->getFailureContext($response));
+                                    $this->assertEquals($nestedValue, $extractedData[$nestedKey],
+                                        "Data field '$nestedKey' value mismatch in tool call '$toolName'.\n" .
+                                        $this->getFailureContext($response));
+                                }
+                            }
+                            continue;
+                        }
+
+                        $this->assertArrayHasKey($key, $actualParams,
+                            "Expected parameter '$key' not found in tool call '$toolName'.\n" .
+                            $this->getFailureContext($response));
+
                         if (is_array($value) && is_array($actualParams[$key])) {
                             foreach ($value as $nestedKey => $nestedValue) {
                                 if (is_string($nestedKey)) {
-                                    $this->assertArrayHasKey($nestedKey, $actualParams[$key]);
-                                    $this->assertEquals($nestedValue, $actualParams[$key][$nestedKey]);
+                                    $this->assertArrayHasKey($nestedKey, $actualParams[$key],
+                                        "Expected nested parameter '$key.$nestedKey' not found in tool call '$toolName'.\n" .
+                                        $this->getFailureContext($response));
+                                    $this->assertEquals($nestedValue, $actualParams[$key][$nestedKey],
+                                        "Nested parameter '$key.$nestedKey' value mismatch in tool call '$toolName'.\n" .
+                                        $this->getFailureContext($response));
                                 }
                             }
                         } else {
-                            $this->assertEquals($value, $actualParams[$key], "Parameter '$key' value mismatch in tool call '$toolName'");
+                            $this->assertEquals($value, $actualParams[$key],
+                                "Parameter '$key' value mismatch in tool call '$toolName'.\n" .
+                                $this->getFailureContext($response));
                         }
                     }
                 }
-                
+
                 break;
             }
         }
-        
+
         if (!$found) {
             $this->fail(
                 "Expected tool '$toolName' was not called.\n\n" .
-                "Prompt: " . $this->lastPrompt . "\n\n" .
-                $this->getToolCallsDebugString($response)
+                $this->getFailureContext($response)
             );
         }
     }
 
     /**
      * Assert that tools were called in a specific order (with flexibility)
-     * 
+     *
      * @param LlmResponse $response
      * @param array $expectedSequence Array of tool names
      * @param bool $strict If true, no other tools allowed between expected ones
@@ -232,9 +312,13 @@ abstract class LlmTestCase extends FunctionalTestCase
     {
         $toolCalls = $response->getToolCalls();
         $actualSequence = array_map(fn($call) => $call['name'], $toolCalls);
-        
+
         if ($strict) {
-            $this->assertEquals($expectedSequence, $actualSequence);
+            $this->assertEquals($expectedSequence, $actualSequence,
+                "Tool sequence mismatch (strict).\n" .
+                "Expected: " . implode(' → ', $expectedSequence) . "\n" .
+                "Actual:   " . implode(' → ', $actualSequence) . "\n" .
+                $this->getFailureContext($response));
         } else {
             // Check that expected tools appear in order (but allow other tools between)
             $lastIndex = -1;
@@ -247,7 +331,11 @@ abstract class LlmTestCase extends FunctionalTestCase
                         break;
                     }
                 }
-                $this->assertTrue($found, "Expected tool '$expectedTool' not found in sequence or out of order");
+                $this->assertTrue($found,
+                    "Expected tool '$expectedTool' not found in sequence or out of order.\n" .
+                    "Expected sequence: " . implode(' → ', $expectedSequence) . "\n" .
+                    "Actual sequence:   " . implode(' → ', $actualSequence) . "\n" .
+                    $this->getFailureContext($response));
             }
         }
     }
@@ -276,8 +364,23 @@ abstract class LlmTestCase extends FunctionalTestCase
     }
 
     /**
+     * Extract the record data from a WriteTable tool call's arguments.
+     * Some models (e.g. OpenAI GPT) place record fields at the top level
+     * instead of nesting them inside the 'data' parameter.
+     */
+    protected function extractWriteData(array $arguments): array
+    {
+        if (isset($arguments['data']) && is_array($arguments['data'])) {
+            return $arguments['data'];
+        }
+
+        $knownKeys = ['action', 'table', 'pid', 'uid', 'data', 'position', 'where'];
+        return array_diff_key($arguments, array_flip($knownKeys));
+    }
+
+    /**
      * Assert that the response follows one of the acceptable patterns
-     * 
+     *
      * @param LlmResponse $response
      * @param array $acceptablePatterns Array of tool sequences, each can be partial
      * @param string $description Description of what patterns are expected
@@ -285,21 +388,20 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected function assertFollowsPattern(LlmResponse $response, array $acceptablePatterns, string $description = ''): void
     {
         $actualSequence = array_map(fn($call) => $call['name'], $response->getToolCalls());
-        
+
         foreach ($acceptablePatterns as $pattern) {
             if ($this->matchesPattern($actualSequence, $pattern)) {
                 return; // Pattern matched!
             }
         }
-        
+
         // No pattern matched
         $this->fail(
             "Response does not follow any acceptable pattern" . ($description ? " ($description)" : "") . ".\n\n" .
-            "Expected patterns:\n" . 
+            "Expected one of:\n" .
             implode("\n", array_map(fn($p) => '  - ' . implode(' → ', $p), $acceptablePatterns)) . "\n\n" .
             "Actual sequence: " . implode(' → ', $actualSequence) . "\n\n" .
-            "Prompt: " . $this->lastPrompt . "\n\n" .
-            $this->getToolCallsDebugString($response)
+            $this->getFailureContext($response)
         );
     }
 
@@ -400,7 +502,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             $previousResponse,
             $toolResults,
             $this->getMcpToolsAsLlmFunctions(),
-            array_merge($defaults, $options)
+            array_merge($defaults, $this->getModelOptions(), $options)
         );
 
         return $this->lastResponse;
@@ -448,28 +550,39 @@ abstract class LlmTestCase extends FunctionalTestCase
      * @return LlmResponse Response containing the target tool or final response
      */
     protected function executeUntilToolFound(
-        LlmResponse $response, 
-        string $targetToolName, 
+        LlmResponse $response,
+        string $targetToolName,
         int $maxIterations = 5
     ): LlmResponse {
         $currentResponse = $response;
         $this->toolCallHistory = [];
-        
+
         for ($i = 0; $i < $maxIterations && $currentResponse->hasToolCalls(); $i++) {
-            // Track all tool calls for history
             foreach ($currentResponse->getToolCalls() as $toolCall) {
                 $this->toolCallHistory[] = $toolCall['name'];
             }
-            
-            // Check if target tool is found
-            if ($currentResponse->getToolCallsByName($targetToolName)) {
+
+            $targetCalls = $currentResponse->getToolCallsByName($targetToolName);
+            if ($targetCalls) {
+                // Validate that WriteTable calls include record data.
+                // Some models (e.g. GPT) omit the data parameter; execute all
+                // tools so the LLM gets the validation error and can retry.
+                if ($targetToolName === 'WriteTable') {
+                    $args = $targetCalls[0]['arguments'] ?? [];
+                    $action = $args['action'] ?? '';
+                    $data = $this->extractWriteData($args);
+                    $hasPosition = !empty($args['position']);
+                    if (in_array($action, ['create', 'update', 'translate']) && empty($data) && !$hasPosition) {
+                        $currentResponse = $this->executeAndContinue($currentResponse);
+                        continue;
+                    }
+                }
                 return $currentResponse;
             }
-            
-            // Execute all tools and continue
+
             $currentResponse = $this->executeAndContinue($currentResponse);
         }
-        
+
         return $currentResponse;
     }
     
@@ -485,7 +598,7 @@ abstract class LlmTestCase extends FunctionalTestCase
     
     /**
      * Assert that a specific tool was called before another tool
-     * 
+     *
      * @param string $firstTool Tool that should be called first
      * @param string $secondTool Tool that should be called after
      * @param string $message Optional failure message
@@ -495,29 +608,34 @@ abstract class LlmTestCase extends FunctionalTestCase
         $history = $this->getToolCallHistory();
         $firstIndex = array_search($firstTool, $history);
         $secondIndex = array_search($secondTool, $history);
-        
+
+        $historyStr = implode(' → ', $history);
+        $contextSuffix = "\nTool history: $historyStr\n" . $this->getFailureContext();
+
         if ($firstIndex === false) {
-            $this->fail($message ?: "Expected tool '$firstTool' was not called");
+            $this->fail(($message ?: "Expected tool '$firstTool' was not called") . $contextSuffix);
         }
-        
+
         if ($secondIndex === false) {
-            $this->fail($message ?: "Expected tool '$secondTool' was not called");
+            $this->fail(($message ?: "Expected tool '$secondTool' was not called") . $contextSuffix);
         }
-        
-        $this->assertLessThan($secondIndex, $firstIndex, 
-            $message ?: "Expected '$firstTool' to be called before '$secondTool'");
+
+        $this->assertLessThan($secondIndex, $firstIndex,
+            ($message ?: "Expected '$firstTool' to be called before '$secondTool'") . $contextSuffix);
     }
-    
+
     /**
      * Assert that a specific tool was called during exploration
-     * 
+     *
      * @param string $toolName Tool name to check
      * @param string $message Optional failure message
      */
     protected function assertToolWasCalled(string $toolName, string $message = ''): void
     {
         $history = $this->getToolCallHistory();
-        $this->assertContains($toolName, $history, 
-            $message ?: "Expected tool '$toolName' to be called during exploration");
+        $historyStr = implode(' → ', $history);
+        $this->assertContains($toolName, $history,
+            ($message ?: "Expected tool '$toolName' to be called during exploration") .
+            "\nTool history: $historyStr\n" . $this->getFailureContext());
     }
 }

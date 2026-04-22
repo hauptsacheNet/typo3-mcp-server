@@ -1385,7 +1385,7 @@ class WriteTableToolTest extends AbstractFunctionalTest
         ]);
         
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Data is required', $result->content[0]->text);
+        $this->assertStringContainsString('data parameter must contain record fields for create actions', $result->content[0]->text);
     }
 
     /**
@@ -1910,6 +1910,111 @@ class WriteTableToolTest extends AbstractFunctionalTest
         // The replacement should have been applied; TYPO3's RTE may add whitespace between block elements
         $this->assertStringContainsString('<em>italic text</em>', $wsRecord['bodytext']);
         $this->assertStringNotContainsString('<strong>bold text</strong>', $wsRecord['bodytext']);
+    }
+
+    /**
+     * Test that update with position=bottom moves a record to the last position on its page.
+     */
+    public function testUpdatePositionBottomMovesRecordToEnd(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Create a fresh page and three content elements via WriteTableTool
+        $pageResult = $this->tool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => $this->getRootPageUid(),
+            'data' => ['title' => 'Position Bottom Test', 'slug' => '/pos-bottom', 'doktype' => 1],
+        ]);
+        $this->assertFalse($pageResult->isError, json_encode($pageResult->jsonSerialize()));
+        $pageUid = $this->extractJsonFromResult($pageResult)['uid'];
+
+        $uids = [];
+        foreach (['A', 'B', 'C'] as $header) {
+            $result = $this->tool->execute([
+                'action' => 'create',
+                'table' => 'tt_content',
+                'pid' => $pageUid,
+                'position' => 'bottom',
+                'data' => ['CType' => 'textmedia', 'header' => $header, 'colPos' => 0],
+            ]);
+            $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+            $uids[$header] = $this->extractJsonFromResult($result)['uid'];
+        }
+
+        // Move A to bottom — should end up after C
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $uids['A'],
+            'position' => 'bottom',
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Read back and verify order is now B, C, A
+        $readResult = $readTool->execute([
+            'table' => 'tt_content',
+            'pid' => $pageUid,
+        ]);
+        $this->assertFalse($readResult->isError, json_encode($readResult->jsonSerialize()));
+        $readData = $this->extractJsonFromResult($readResult);
+        $headers = array_map(fn(array $r) => $r['header'], $readData['records']);
+        $this->assertSame(['B', 'C', 'A'], $headers, 'position=bottom should move A after C');
+    }
+
+    /**
+     * Test that update without position parameter does not move the record.
+     */
+    public function testUpdateWithoutPositionDoesNotMove(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Create a fresh page and two content elements via WriteTableTool
+        $pageResult = $this->tool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => $this->getRootPageUid(),
+            'data' => ['title' => 'No Position Test', 'slug' => '/no-pos', 'doktype' => 1],
+        ]);
+        $this->assertFalse($pageResult->isError, json_encode($pageResult->jsonSerialize()));
+        $pageUid = $this->extractJsonFromResult($pageResult)['uid'];
+
+        $resultA = $this->tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => $pageUid,
+            'position' => 'bottom',
+            'data' => ['CType' => 'textmedia', 'header' => 'A', 'colPos' => 0],
+        ]);
+        $this->assertFalse($resultA->isError, json_encode($resultA->jsonSerialize()));
+        $uidA = $this->extractJsonFromResult($resultA)['uid'];
+
+        $resultB = $this->tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => $pageUid,
+            'position' => 'bottom',
+            'data' => ['CType' => 'textmedia', 'header' => 'B', 'colPos' => 0],
+        ]);
+        $this->assertFalse($resultB->isError, json_encode($resultB->jsonSerialize()));
+
+        // Update A's header without specifying position — order must stay A, B
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $uidA,
+            'data' => ['header' => 'A modified'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $readResult = $readTool->execute([
+            'table' => 'tt_content',
+            'pid' => $pageUid,
+        ]);
+        $this->assertFalse($readResult->isError, json_encode($readResult->jsonSerialize()));
+        $readData = $this->extractJsonFromResult($readResult);
+        $headers = array_map(fn(array $r) => $r['header'], $readData['records']);
+        $this->assertSame(['A modified', 'B'], $headers, 'Omitting position should not change order');
     }
 
     /**
