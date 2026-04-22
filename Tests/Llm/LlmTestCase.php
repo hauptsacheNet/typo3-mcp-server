@@ -29,14 +29,14 @@ abstract class LlmTestCase extends FunctionalTestCase
      */
     protected const MODELS = [
         'haiku-4.5' => 'anthropic/claude-haiku-4.5',
-        'gpt-5.4' => 'openai/gpt-5.4',
+        'gpt-5.4-mini' => 'openai/gpt-5.4-mini',
         'gpt-oss-120b' => 'openai/gpt-oss-120b',
         'mistral-large-2512' => 'mistralai/mistral-large-2512',
         'gemini-3-flash' => 'google/gemini-3-flash-preview',
     ];
 
     protected const MODEL_OPTIONS = [
-        'gpt-5.4' => ['reasoning' => ['effort' => 'high']],
+        'gpt-5.4-mini' => ['reasoning' => ['effort' => 'high']],
     ];
 
     protected array $coreExtensionsToLoad = [
