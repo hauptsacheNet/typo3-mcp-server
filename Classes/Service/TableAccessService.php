@@ -431,6 +431,7 @@ class TableAccessService implements SingletonInterface
             // Allow some safe root-level tables
             $allowedRootTables = [
                 'sys_file', // File records - read-only, needed for file reference resolution
+                'sys_file_metadata', // File metadata (alt, title, description) - workspace-capable, writable
                 'sys_file_storage', // File storage configuration
                 'sys_domain', // Domain configuration
                 'sys_category', // Category system - safe for read operations
@@ -489,10 +490,9 @@ class TableAccessService implements SingletonInterface
         
         // Specific read-only tables that can be read but shouldn't be modified via MCP
         $readOnlyTables = [
-            'sys_file', // Files are managed through file system, not direct DB edits
+            'sys_file', // Files are managed through file system, not direct DB edits (use UploadFile tool)
             'sys_file_processedfile', // Processed files are generated automatically
             'sys_file_storage', // Storage configuration - sensitive
-            'sys_file_metadata', // File metadata - usually auto-generated
         ];
         
         if (in_array($table, $readOnlyTables)) {
