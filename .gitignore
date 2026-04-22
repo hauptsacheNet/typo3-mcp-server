@@ -20,6 +20,10 @@
 /.build
 /.Build
 
+# TYPO3 temp and test artifacts
+/typo3temp
+/index.php
+
 # Node / Playwright
 /Build/node_modules
 /Build/playwright-report

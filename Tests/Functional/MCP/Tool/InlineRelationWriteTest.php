@@ -117,7 +117,49 @@ class InlineRelationWriteTest extends FunctionalTestCase
      */
     public function testWriteHiddenTableInlineRelation(): void
     {
-        $this->markTestSkipped('sys_file_reference is intentionally restricted due to workspace limitations');
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+
+        // Create a page
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => [
+                'title' => 'Test Page for File Refs',
+                'doktype' => 1,
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Create a content element with file references (sys_file_reference is a hidden table)
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'header' => 'Content with file reference',
+                'CType' => 'textmedia',
+                'assets' => [
+                    ['uid_local' => 1, 'title' => 'Test File Reference'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $contentUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Read back and verify
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $record = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayHasKey('assets', $record);
+        $this->assertCount(1, $record['assets']);
+        $this->assertEquals('Test File Reference', $record['assets'][0]['title']);
     }
 
     /**
