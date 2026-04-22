@@ -47,9 +47,6 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Install Composer dependencies
-        run: composer install --no-interaction --prefer-dist --no-dev
-
       - name: Install tailor
         run: composer global require typo3/tailor:^1 --prefer-dist --no-progress
 

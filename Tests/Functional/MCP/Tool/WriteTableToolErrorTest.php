@@ -118,7 +118,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             'uid' => 1
         ]);
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Data is required for update action', $result->content[0]->text);
+        $this->assertStringContainsString('data parameter must contain record fields for update actions', $result->content[0]->text);
     }
     
     /**

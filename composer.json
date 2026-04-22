@@ -55,7 +55,8 @@
             "paratest -c phpunit.xml.dist"
         ],
         "test:llm": [
-            "paratest -c Tests/Llm/phpunit-llm.xml"
+            "paratest -c Tests/Llm/phpunit-llm.xml --testdox --no-progress -p 5 --log-junit .Build/llm-results.xml || true",
+            "php Build/check-llm-results.php --min-pass=3"
         ],
         "build:ter": "bash Build/build-ter.sh"
     },
