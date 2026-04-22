@@ -63,6 +63,37 @@ class FileReferenceTest extends LlmTestCase
     }
 
     #[DataProvider('modelProvider')]
+    #[TestDox('[$modelKey] Prompt "What images are in the fileadmin?" → ReadTable(sys_file) bridging the fileadmin concept to the sys_file table')]
+    public function testLlmUnderstandsFileadminReference(string $modelKey): void
+    {
+        $this->setModel($modelKey);
+        $prompt = 'What images are in the fileadmin?';
+
+        $response = $this->executeUntilToolFound(
+            $this->callLlm($prompt),
+            'ReadTable',
+            5
+        );
+
+        $readCalls = $response->getToolCallsByName('ReadTable');
+        $queriedSysFile = false;
+        foreach ($readCalls as $call) {
+            if (($call['arguments']['table'] ?? '') === 'sys_file') {
+                $queriedSysFile = true;
+                $readResult = $this->executeToolCall($call);
+                $this->assertFalse($readResult['isError'] ?? false,
+                    'Reading sys_file failed: ' . $readResult['content']);
+                break;
+            }
+        }
+
+        $this->assertTrue($queriedSysFile,
+            'Expected LLM to map "fileadmin" to sys_file table. ' .
+            'History: ' . implode(' → ', $this->getToolCallHistory()) . "\n" .
+            $this->getFailureContext($response));
+    }
+
+    #[DataProvider('modelProvider')]
     #[TestDox('[$modelKey] Prompt "Add a textmedia with person.jpg to home" → discovers file by name, creates tt_content with embedded file reference to sys_file uid=3')]
     public function testLlmCreatesTextmediaWithNamedFile(string $modelKey): void
     {
