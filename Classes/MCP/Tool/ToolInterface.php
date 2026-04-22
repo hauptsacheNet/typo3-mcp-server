@@ -10,6 +10,7 @@ use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 /**
  * Interface for all MCP tools
  */
+#[AutoconfigureTag('mcp_server.tool')]
 #[AutoconfigureTag('mcp.tool')]
 interface ToolInterface
 {

@@ -18,7 +18,7 @@ class ToolRegistry
     protected array $tools = [];
 
     public function __construct(
-        #[AutowireIterator('mcp.tool')]
+        #[AutowireIterator('mcp_server.tool')]
         iterable $tools
     ) {
         foreach ($tools as $tool) {
