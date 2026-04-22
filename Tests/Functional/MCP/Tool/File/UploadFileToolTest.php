@@ -318,7 +318,7 @@ class UploadFileToolTest extends FunctionalTestCase
         $qb->getRestrictions()->removeAll();
         $row = $qb->select('*')
             ->from('sys_file_metadata')
-            ->where($qb->expr()->eq('file', $qb->createNamedParameter($fileUid, \PDO::PARAM_INT)))
+            ->where($qb->expr()->eq('file', $qb->createNamedParameter($fileUid, \Doctrine\DBAL\ParameterType::INTEGER)))
             ->setMaxResults(1)
             ->executeQuery()
             ->fetchAssociative();

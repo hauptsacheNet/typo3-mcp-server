@@ -270,12 +270,17 @@ class UploadFileTool extends AbstractRecordTool
             throw new ValidationException(['url must be a http(s) URL']);
         }
 
-        $response = $this->requestFactory->request($url, 'GET', [
-            'timeout' => self::FETCH_TIMEOUT_SECONDS,
-            'headers' => ['User-Agent' => 'TYPO3-MCP-Server'],
-            'sink' => $path,
-            'allow_redirects' => ['max' => 3],
-        ]);
+        try {
+            $response = $this->requestFactory->request($url, 'GET', [
+                'timeout' => self::FETCH_TIMEOUT_SECONDS,
+                'headers' => ['User-Agent' => 'TYPO3-MCP-Server'],
+                'sink' => $path,
+                'allow_redirects' => ['max' => 3],
+                'http_errors' => false,
+            ]);
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(sprintf('URL fetch failed: %s', $e->getMessage()), 0, $e);
+        }
 
         if ($response->getStatusCode() >= 400) {
             throw new \RuntimeException(sprintf('URL fetch failed: HTTP %d', $response->getStatusCode()));
@@ -335,9 +340,9 @@ class UploadFileTool extends AbstractRecordTool
             ->select('uid')
             ->from('sys_file_metadata')
             ->where(
-                $qb->expr()->eq('file', $qb->createNamedParameter($fileUid, \PDO::PARAM_INT)),
-                $qb->expr()->eq('sys_language_uid', $qb->createNamedParameter(0, \PDO::PARAM_INT)),
-                $qb->expr()->eq('t3ver_oid', $qb->createNamedParameter(0, \PDO::PARAM_INT))
+                $qb->expr()->eq('file', $qb->createNamedParameter($fileUid, \Doctrine\DBAL\ParameterType::INTEGER)),
+                $qb->expr()->eq('sys_language_uid', $qb->createNamedParameter(0, \Doctrine\DBAL\ParameterType::INTEGER)),
+                $qb->expr()->eq('t3ver_oid', $qb->createNamedParameter(0, \Doctrine\DBAL\ParameterType::INTEGER))
             )
             ->setMaxResults(1)
             ->executeQuery()
