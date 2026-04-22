@@ -11,6 +11,9 @@ use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
  * Interface for all MCP tools
  */
 #[AutoconfigureTag('mcp_server.tool')]
+// @deprecated since 0.3, use the "mcp_server.tool" tag instead. Kept so
+// external extensions that manually tagged their services under the old
+// name continue to be picked up by the ToolRegistry.
 #[AutoconfigureTag('mcp.tool')]
 interface ToolInterface
 {

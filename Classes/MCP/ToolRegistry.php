@@ -19,10 +19,19 @@ class ToolRegistry
 
     public function __construct(
         #[AutowireIterator('mcp_server.tool')]
-        iterable $tools
+        iterable $tools,
+        #[AutowireIterator('mcp.tool')]
+        iterable $legacyTools = [],
     ) {
         foreach ($tools as $tool) {
             $this->tools[$tool->getName()] = $tool;
+        }
+        // Deduplicated by name: interface implementers receive both tags via
+        // autoconfigure, so they are already in $tools. This loop only picks
+        // up services that external extensions tagged manually with the old
+        // "mcp.tool" name without implementing the interface's autoconfigure.
+        foreach ($legacyTools as $tool) {
+            $this->tools[$tool->getName()] ??= $tool;
         }
     }
 
