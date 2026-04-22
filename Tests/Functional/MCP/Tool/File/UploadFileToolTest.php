@@ -237,7 +237,7 @@ class UploadFileToolTest extends FunctionalTestCase
             'data' => [
                 'header' => 'Hero block with uploaded image',
                 'CType' => 'textmedia',
-                'image' => [
+                'assets' => [
                     ['uid_local' => $fileUid, 'alternative' => 'Hero reference alt'],
                 ],
             ],
@@ -254,11 +254,11 @@ class UploadFileToolTest extends FunctionalTestCase
         $this->assertFalse($readResult->isError, json_encode($readResult->jsonSerialize()));
         $record = json_decode($readResult->content[0]->text, true)['records'][0];
 
-        $this->assertArrayHasKey('image', $record);
-        $this->assertCount(1, $record['image']);
-        $this->assertSame($fileUid, (int) $record['image'][0]['uid_local']);
-        $this->assertSame('Hero reference alt', $record['image'][0]['alternative']);
-        $this->assertSame('hero.png', $record['image'][0]['file_name']);
+        $this->assertArrayHasKey('assets', $record);
+        $this->assertCount(1, $record['assets']);
+        $this->assertSame($fileUid, (int) $record['assets'][0]['uid_local']);
+        $this->assertSame('Hero reference alt', $record['assets'][0]['alternative']);
+        $this->assertSame('hero.png', $record['assets'][0]['file_name']);
     }
 
     public function testMetadataCanBeUpdatedViaWriteTable(): void
@@ -273,7 +273,10 @@ class UploadFileToolTest extends FunctionalTestCase
         $this->assertFalse($uploadResult->isError, json_encode($uploadResult->jsonSerialize()));
         $fileUid = json_decode($uploadResult->content[0]->text, true)['uid'];
 
-        $metaUid = (int) $this->fetchMetadataRow($fileUid)['uid'];
+        // WriteTable expects the live uid (t3ver_oid or uid for live records);
+        // DataHandler then finds-or-creates the workspace version.
+        $metaRow = $this->fetchMetadataRow($fileUid);
+        $metaUid = (int) ($metaRow['t3ver_oid'] ?: $metaRow['uid']);
 
         // Update via WriteTable on sys_file_metadata (proves the unlock)
         $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
@@ -285,14 +288,10 @@ class UploadFileToolTest extends FunctionalTestCase
         ]);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
 
-        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
-        $readResult = $readTool->execute([
-            'table' => 'sys_file_metadata',
-            'uid' => $metaUid,
-        ]);
-        $this->assertFalse($readResult->isError, json_encode($readResult->jsonSerialize()));
-        $record = json_decode($readResult->content[0]->text, true)['records'][0];
-        $this->assertSame('updated alt via WriteTable', $record['alternative']);
+        // Verify via direct DB query (workspace version takes precedence)
+        $row = $this->fetchMetadataRow($fileUid);
+        $this->assertNotNull($row);
+        $this->assertSame('updated alt via WriteTable', $row['alternative']);
     }
 
     private function assertSysFileRowExists(int $uid, string $expectedName): void
@@ -310,6 +309,11 @@ class UploadFileToolTest extends FunctionalTestCase
         $this->assertSame(1, (int) $row['storage']);
     }
 
+    /**
+     * Fetches the sys_file_metadata row with the effective values. Because our
+     * tool runs inside an MCP workspace, DataHandler creates a workspace version
+     * of the metadata row — so we prefer rows with a non-zero t3ver_wsid.
+     */
     private function fetchMetadataRow(int $fileUid): ?array
     {
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
@@ -319,6 +323,7 @@ class UploadFileToolTest extends FunctionalTestCase
         $row = $qb->select('*')
             ->from('sys_file_metadata')
             ->where($qb->expr()->eq('file', $qb->createNamedParameter($fileUid, \Doctrine\DBAL\ParameterType::INTEGER)))
+            ->orderBy('t3ver_wsid', 'DESC')
             ->setMaxResults(1)
             ->executeQuery()
             ->fetchAssociative();

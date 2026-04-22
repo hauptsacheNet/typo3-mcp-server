@@ -117,7 +117,13 @@ class UploadFileTool extends AbstractRecordTool
         $storage = $this->resolveStorage(isset($params['storage']) ? (int) $params['storage'] : null);
         $folder = $this->resolveFolder($storage, isset($params['folder']) ? (string) $params['folder'] : null);
 
-        $tempFile = GeneralUtility::tempnam('mcp_upload_');
+        // Temp file must live OUTSIDE any sys_file_storage basePath — otherwise
+        // $folder->addFile() rejects with "Cannot add a file that is already part
+        // of this storage". OS tempdir is always safe.
+        $tempFile = tempnam(sys_get_temp_dir(), 'mcp_upload_');
+        if ($tempFile === false) {
+            throw new \RuntimeException('Could not create temporary file for upload');
+        }
         try {
             if ($hasData) {
                 $this->writeBase64ToFile((string) $params['data'], $tempFile);
