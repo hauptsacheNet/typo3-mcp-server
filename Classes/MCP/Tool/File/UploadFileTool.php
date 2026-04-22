@@ -32,11 +32,14 @@ class UploadFileTool extends AbstractRecordTool
     private const MAX_SIZE_BYTES = 50 * 1024 * 1024;
     private const FETCH_TIMEOUT_SECONDS = 30;
 
-    public function __construct(
-        private readonly StorageRepository $storageRepository,
-        private readonly RequestFactory $requestFactory,
-    ) {
+    private StorageRepository $storageRepository;
+    private RequestFactory $requestFactory;
+
+    public function __construct()
+    {
         parent::__construct();
+        $this->storageRepository = GeneralUtility::makeInstance(StorageRepository::class);
+        $this->requestFactory = GeneralUtility::makeInstance(RequestFactory::class);
     }
 
     public function getSchema(): array
