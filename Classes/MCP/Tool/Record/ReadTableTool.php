@@ -273,6 +273,14 @@ class ReadTableTool extends AbstractRecordTool
             $queryBuilder->andWhere($condition);
         }
 
+        // Apply file-mount restriction for non-admin users when reading sys_file
+        if ($table === 'sys_file') {
+            $mountRestriction = $this->tableAccessService->buildFileMountRestriction($queryBuilder);
+            if ($mountRestriction !== null) {
+                $queryBuilder->andWhere($mountRestriction);
+            }
+        }
+
         // Apply default sorting from TCA
         $this->applyDefaultSorting($queryBuilder, $table);
 
@@ -335,6 +343,14 @@ class ReadTableTool extends AbstractRecordTool
 
         if (!empty($condition)) {
             $countQueryBuilder->andWhere($condition);
+        }
+
+        // Apply file-mount restriction for non-admin users when counting sys_file
+        if ($table === 'sys_file') {
+            $countMountRestriction = $this->tableAccessService->buildFileMountRestriction($countQueryBuilder);
+            if ($countMountRestriction !== null) {
+                $countQueryBuilder->andWhere($countMountRestriction);
+            }
         }
 
         try {

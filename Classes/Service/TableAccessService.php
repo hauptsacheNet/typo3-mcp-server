@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Service;
 
+use Doctrine\DBAL\ArrayParameterType;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
+use TYPO3\CMS\Core\Database\Query\Expression\CompositeExpression;
+use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -414,6 +417,133 @@ class TableAccessService implements SingletonInterface
     }
     
     
+    /**
+     * Get the file mount paths accessible to the current user.
+     * Each entry is ['storage' => int, 'path' => string] where path is the folder prefix
+     * (e.g. "/user_upload/") relative to the storage root.
+     *
+     * Returns an empty array for admin users (no filtering applied).
+     * Returns [] (empty but not admin) if user has no mounts - meaning NO files are accessible.
+     *
+     * @param bool &$isAdmin Out param: true when current user is admin (no restriction).
+     */
+    public function getAccessibleFileMounts(bool &$isAdmin = false): array
+    {
+        $user = $this->getBackendUser();
+        $isAdmin = $user->isAdmin();
+        if ($isAdmin) {
+            return [];
+        }
+
+        $mounts = [];
+        // getFileMountRecords() returns mount records; identifier is "<storageUid>:/path/"
+        foreach ($user->getFileMountRecords() as $row) {
+            $identifier = (string)($row['identifier'] ?? '');
+            if (!str_contains($identifier, ':')) {
+                continue;
+            }
+            [$storage, $path] = GeneralUtility::trimExplode(':', $identifier, true);
+            $storageUid = (int)$storage;
+            if ($storageUid <= 0) {
+                continue;
+            }
+            $mounts[] = ['storage' => $storageUid, 'path' => $path];
+        }
+        return $mounts;
+    }
+
+    /**
+     * Build a WHERE expression to restrict a sys_file query to files within the current user's
+     * accessible file mounts. Returns null when no restriction applies (admin user).
+     * Returns an always-false expression when user has no mounts at all.
+     */
+    public function buildFileMountRestriction(QueryBuilder $queryBuilder): ?CompositeExpression
+    {
+        $isAdmin = false;
+        $mounts = $this->getAccessibleFileMounts($isAdmin);
+        if ($isAdmin) {
+            return null;
+        }
+        if (empty($mounts)) {
+            // No mounts → user cannot see any files
+            return $queryBuilder->expr()->and('1 = 0');
+        }
+
+        // Group mount paths by storage for a cleaner query structure
+        $perStorage = [];
+        foreach ($mounts as $mount) {
+            $perStorage[$mount['storage']][] = $mount['path'];
+        }
+
+        $storageExpressions = [];
+        foreach ($perStorage as $storageUid => $paths) {
+            $pathExpressions = [];
+            foreach ($paths as $path) {
+                $normalized = rtrim($path, '/') . '/';
+                // Match files whose identifier begins with this mount path (including subfolders)
+                $pathExpressions[] = $queryBuilder->expr()->like(
+                    'identifier',
+                    $queryBuilder->createNamedParameter(
+                        $queryBuilder->escapeLikeWildcards($normalized) . '%'
+                    )
+                );
+            }
+
+            $storageExpressions[] = $queryBuilder->expr()->and(
+                $queryBuilder->expr()->eq(
+                    'storage',
+                    $queryBuilder->createNamedParameter($storageUid, \Doctrine\DBAL\ParameterType::INTEGER)
+                ),
+                $queryBuilder->expr()->or(...$pathExpressions)
+            );
+        }
+
+        return $queryBuilder->expr()->or(...$storageExpressions);
+    }
+
+    /**
+     * Check if the current user can access a given sys_file UID via their file mounts.
+     */
+    public function canAccessFileUid(int $fileUid): bool
+    {
+        if ($fileUid <= 0) {
+            return false;
+        }
+        $user = $this->getBackendUser();
+        if ($user->isAdmin()) {
+            return true;
+        }
+
+        $isAdmin = false;
+        $mounts = $this->getAccessibleFileMounts($isAdmin);
+        if (empty($mounts)) {
+            return false;
+        }
+
+        $connection = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class)
+            ->getConnectionForTable('sys_file');
+        $row = $connection->select(
+            ['storage', 'identifier'],
+            'sys_file',
+            ['uid' => $fileUid]
+        )->fetchAssociative();
+
+        if (!$row) {
+            return false;
+        }
+
+        foreach ($mounts as $mount) {
+            if ((int)$row['storage'] !== (int)$mount['storage']) {
+                continue;
+            }
+            $mountPath = rtrim($mount['path'], '/') . '/';
+            if (str_starts_with((string)$row['identifier'], $mountPath)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Check if a table is truly restricted and should not be accessible via MCP
      */
