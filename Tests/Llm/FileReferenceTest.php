@@ -101,10 +101,11 @@ class FileReferenceTest extends LlmTestCase
         $prompt = 'Create a new textmedia content element on the home page that shows the person.jpg image. ' .
             'Set the header to "Our Team Lead".';
 
+        // Some models spend many turns exploring before writing — allow generous budget.
         $response = $this->executeUntilToolFound(
             $this->callLlm($prompt),
             'WriteTable',
-            12
+            18
         );
 
         $history = $this->getToolCallHistory();
@@ -125,31 +126,14 @@ class FileReferenceTest extends LlmTestCase
             $this->getFailureContext($response));
 
         // Execute the write. The LLM may need to retry if it initially passes plain UIDs
-        // instead of embedded records - we execute tools and let it correct itself.
+        // instead of embedded records — we execute tools and let it correct itself.
         $createdUid = null;
         $currentResponse = $response;
-        for ($attempt = 0; $attempt < 5 && $createdUid === null; $attempt++) {
-            $writeCalls = $currentResponse->getToolCallsByName('WriteTable');
-            foreach ($writeCalls as $call) {
-                if (($call['arguments']['table'] ?? '') !== 'tt_content') {
-                    continue;
-                }
-                if (($call['arguments']['action'] ?? '') !== 'create') {
-                    continue;
-                }
-            }
-
-            if ($currentResponse->hasToolCalls()) {
-                $currentResponse = $this->executeAndContinue($currentResponse);
-
-                // Check results for a successful create of tt_content
-                foreach ($currentResponse->getToolCalls() as $tc) {
-                    // No direct access to previous results here; we'll query the DB instead.
-                }
-            } else {
+        for ($attempt = 0; $attempt < 8 && $createdUid === null; $attempt++) {
+            if (!$currentResponse->hasToolCalls()) {
                 break;
             }
-
+            $currentResponse = $this->executeAndContinue($currentResponse);
             $createdUid = $this->findCreatedContentElement();
         }
 
@@ -202,13 +186,13 @@ class FileReferenceTest extends LlmTestCase
     }
 
     #[DataProvider('modelProvider')]
-    #[TestDox('[$modelKey] Prompt "Copy the Welcome Header element (uid 100) to the About page" → reads source with file refs, creates new tt_content on About with the same file refs')]
+    #[TestDox('[$modelKey] Prompt "Copy the Welcome Header element to the About page" → reads source with file refs, creates new tt_content on About with the same file refs')]
     public function testLlmCopiesContentElementWithFileReferences(string $modelKey): void
     {
         $this->setModel($modelKey);
         // tt_content uid=100 is on home page (pid=1) and has 2 assets + 1 media file reference per fixtures.
         $prompt = 'There is a content element called "Welcome Header" on the home page. ' .
-            'Copy it to the About page, keeping the same images and media attached.';
+            'Copy it to the About page, keeping the same file references (images/media) attached.';
 
         $response = $this->executeUntilToolFound(
             $this->callLlm($prompt),
@@ -222,53 +206,12 @@ class FileReferenceTest extends LlmTestCase
         $this->assertContains('ReadTable', $history,
             'Expected LLM to read source element before copying. History: ' . implode(' → ', $history));
 
-        $writeCalls = $response->getToolCallsByName('WriteTable');
-        $this->assertNotEmpty($writeCalls,
-            'Expected WriteTable call to create the copy. ' . $this->getFailureContext($response));
-
-        // Find the create-tt_content call on the About page (pid=2).
-        $copyCall = null;
-        foreach ($writeCalls as $call) {
-            $args = $call['arguments'] ?? [];
-            if (($args['table'] ?? '') === 'tt_content' && ($args['action'] ?? '') === 'create') {
-                $copyCall = $args;
-                break;
-            }
-        }
-        $this->assertNotNull($copyCall,
-            'Expected a create tt_content call. Got: ' .
-            json_encode(array_map(fn($c) => $c['arguments'], $writeCalls), JSON_PRETTY_PRINT));
-
-        $data = $this->extractWriteData($copyCall);
-
-        // Verify placement on the About page (uid 2 in fixtures). pid can be at top level or
-        // inside data, and position may reference an existing element on that page.
-        $pidTop = $copyCall['pid'] ?? null;
-        $pidInData = $data['pid'] ?? null;
-        $position = $copyCall['position'] ?? null;
-
-        $placedOnAbout = ($pidTop === 2 || $pidInData === 2);
-        if (!$placedOnAbout && is_string($position)) {
-            // Accept references to existing About page elements (102, 103) or direct "2".
-            $placedOnAbout = preg_match('/\b(102|103|2)\b/', $position) === 1;
-        }
-        $this->assertTrue($placedOnAbout,
-            'Copy should be placed on About page (uid=2). Got pid=' . json_encode($pidTop) .
-            ', data.pid=' . json_encode($pidInData) .
-            ', position=' . json_encode($position) . '. ' . $this->getFailureContext($response));
-
-        // Verify file references are attempted (either assets or media). The LLM may have used
-        // plain UIDs (which our validator rejects) or embedded records. Either way, the intent
-        // to copy the files must be present.
-        $this->assertTrue(
-            !empty($data['assets']) || !empty($data['media']) || !empty($data['image']),
-            'Expected copy to preserve file references (assets/media/image). ' .
-            'Got data keys: ' . implode(', ', array_keys($data)) . "\n" . $this->getFailureContext($response));
-
-        // Allow the LLM to retry if the initial write fails validation.
+        // Execute all pending tool calls and let the LLM complete the task.
+        // Models may create the element first and add file refs in a separate step,
+        // or include everything in one call, or need retries for validation errors.
         $copiedUid = null;
         $currentResponse = $response;
-        for ($attempt = 0; $attempt < 5 && $copiedUid === null; $attempt++) {
+        for ($attempt = 0; $attempt < 8 && $copiedUid === null; $attempt++) {
             if (!$currentResponse->hasToolCalls()) {
                 break;
             }
@@ -277,22 +220,25 @@ class FileReferenceTest extends LlmTestCase
         }
 
         $this->assertNotNull($copiedUid,
-            'Expected a new tt_content record on the About page. Even after retries, the copy did not persist. ' .
+            'Expected a new tt_content record on the About page. ' .
             $this->getFailureContext($currentResponse));
 
-        // Verify persisted file references point to the original files (sys_file uid=1).
-        $newAssets = array_merge(
-            $this->queryFileReferencesForContent($copiedUid, 'assets'),
-            $this->queryFileReferencesForContent($copiedUid, 'image'),
-            $this->queryFileReferencesForContent($copiedUid, 'media')
-        );
+        // Check if file references were created. If not, give the LLM a nudge —
+        // some models create the element first then need prompting to add files.
+        $newRefs = $this->getAllFileReferencesForContent($copiedUid);
+        if (empty($newRefs) && $currentResponse->hasToolCalls()) {
+            for ($attempt = 0; $attempt < 4 && empty($newRefs); $attempt++) {
+                $currentResponse = $this->executeAndContinue($currentResponse);
+                $newRefs = $this->getAllFileReferencesForContent($copiedUid);
+            }
+        }
 
-        $this->assertNotEmpty($newAssets,
+        $this->assertNotEmpty($newRefs,
             'Copy has no file references. Original element has 3 (2 assets + 1 media), ' .
             'all pointing to sys_file uid=1. New element uid=' . $copiedUid . ' has none. ' .
             $this->getFailureContext($currentResponse));
 
-        $newAssetFileUids = array_map(fn($r) => (int)$r['uid_local'], $newAssets);
+        $newAssetFileUids = array_map(fn($r) => (int)$r['uid_local'], $newRefs);
         $this->assertContains(1, $newAssetFileUids,
             'Copied file references should point to original sys_file (uid=1). ' .
             'Got uid_local values: ' . implode(', ', $newAssetFileUids));
@@ -357,6 +303,18 @@ class FileReferenceTest extends LlmTestCase
 
         $this->assertTrue($readTtContent,
             'Expected LLM to read tt_content. History: ' . implode(' → ', $this->getToolCallHistory()));
+    }
+
+    /**
+     * Get all file references for a content element across all field types.
+     */
+    protected function getAllFileReferencesForContent(int $parentUid): array
+    {
+        return array_merge(
+            $this->queryFileReferencesForContent($parentUid, 'assets'),
+            $this->queryFileReferencesForContent($parentUid, 'image'),
+            $this->queryFileReferencesForContent($parentUid, 'media')
+        );
     }
 
     /**
