@@ -1,0 +1,2 @@
+# cat=mcp/tables; type=string; label=Additional read-only tables: Comma-separated list of non-workspace-capable tables to expose as read-only via MCP tools. These tables become available in ReadTable but cannot be written. Example: tx_blog_domain_model_author,tx_myext_domain_model_setting
+additionalReadOnlyTables = sys_file

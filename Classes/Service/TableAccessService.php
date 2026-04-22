@@ -7,6 +7,7 @@ namespace Hn\McpServer\Service;
 use Doctrine\DBAL\ArrayParameterType;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
+use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\Query\Expression\CompositeExpression;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
@@ -23,11 +24,30 @@ class TableAccessService implements SingletonInterface
     protected ?BackendUserAuthentication $backendUser = null;
     protected WorkspaceContextService $workspaceContextService;
     protected TcaSchemaFactory $tcaSchemaFactory;
-    
+    protected ?array $additionalReadOnlyTables = null;
+
     public function __construct()
     {
         $this->workspaceContextService = GeneralUtility::makeInstance(WorkspaceContextService::class);
         $this->tcaSchemaFactory = GeneralUtility::makeInstance(TcaSchemaFactory::class);
+    }
+
+    /**
+     * Get the list of additional non-workspace tables exposed as read-only.
+     * Configured via extension settings (additionalReadOnlyTables).
+     */
+    public function getAdditionalReadOnlyTables(): array
+    {
+        if ($this->additionalReadOnlyTables === null) {
+            try {
+                $config = GeneralUtility::makeInstance(ExtensionConfiguration::class)
+                    ->get('mcp_server', 'additionalReadOnlyTables');
+            } catch (\Exception) {
+                $config = 'sys_file';
+            }
+            $this->additionalReadOnlyTables = GeneralUtility::trimExplode(',', (string)$config, true);
+        }
+        return $this->additionalReadOnlyTables;
     }
     
     /**
@@ -46,9 +66,9 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Get all tables that are accessible to the current user
-     * 
-     * @param bool $includeReadOnly Include read-only tables
+     * Get all tables that are accessible to the current user.
+     *
+     * @param bool $includeReadOnly Include read-only tables (e.g. additional non-workspace tables like sys_file)
      * @return array Array of table names with access information
      */
     public function getAccessibleTables(bool $includeReadOnly = false): array
@@ -56,17 +76,12 @@ class TableAccessService implements SingletonInterface
         $accessibleTables = [];
 
         foreach (array_keys($GLOBALS['TCA']) as $table) {
-            // When including read-only tables, don't require workspace capability
-            // This allows listing read-only tables like sys_file
-            $requireWorkspaceCapability = !$includeReadOnly;
-            $accessInfo = $this->getTableAccessInfo($table, $requireWorkspaceCapability);
+            $accessInfo = $this->getTableAccessInfo($table);
 
             if ($accessInfo['accessible']) {
-                // Skip read-only tables if not requested
                 if (!$includeReadOnly && $accessInfo['read_only']) {
                     continue;
                 }
-
                 $accessibleTables[$table] = $accessInfo;
             }
         }
@@ -120,12 +135,16 @@ class TableAccessService implements SingletonInterface
             return $info;
         }
         
-        // Check workspace capability. All MCP tools operate through workspaces,
-        // so a non-workspace-capable table cannot be exposed - not even for read.
+        // Check workspace capability. Workspace-capable tables are the default set.
+        // Non-workspace tables are only accessible if explicitly configured as additional read-only tables.
         $info['workspace_capable'] = BackendUtility::isTableWorkspaceEnabled($table);
-        if (!$info['workspace_capable']) {
+        $isAdditionalReadOnly = in_array($table, $this->getAdditionalReadOnlyTables(), true);
+        if (!$info['workspace_capable'] && !$isAdditionalReadOnly) {
             $info['reasons'][] = 'Table is not workspace-capable';
             return $info;
+        }
+        if ($isAdditionalReadOnly) {
+            $info['read_only'] = true;
         }
         
         // Check user permissions
@@ -166,10 +185,7 @@ class TableAccessService implements SingletonInterface
      */
     public function validateTableAccess(string $table, string $operation = 'read'): void
     {
-        // For read operations, don't require workspace capability
-        // This allows reading read-only tables like sys_file that aren't workspace-capable
-        $requireWorkspaceCapability = ($operation !== 'read');
-        $accessInfo = $this->getTableAccessInfo($table, $requireWorkspaceCapability);
+        $accessInfo = $this->getTableAccessInfo($table);
 
         if (!$accessInfo['accessible']) {
             $reasons = implode(', ', $accessInfo['reasons']);
@@ -178,7 +194,6 @@ class TableAccessService implements SingletonInterface
             );
         }
 
-        // Check specific operation permission
         if ($operation !== 'read' && !$accessInfo['permissions'][$operation]) {
             throw new \InvalidArgumentException(
                 "Operation '{$operation}' not permitted on table '{$table}'"
@@ -522,19 +537,13 @@ class TableAccessService implements SingletonInterface
             return true;
         }
         
-        // Root-level-only tables (rootLevel=1) are dangerous to modify
-        // rootLevel=-1 means "can exist on any page including root" and is fine
+        // Root-level-only tables (rootLevel=1) are restricted unless they're
+        // workspace-capable or explicitly configured as additional read-only tables.
         $rootLevel = $GLOBALS['TCA'][$table]['ctrl']['rootLevel'] ?? 0;
         if ($rootLevel === 1 || $rootLevel === true) {
-            // Allow some safe root-level tables
-            $allowedRootTables = [
-                'sys_file', // File records - read-only, needed for file reference resolution
-                'sys_file_storage', // File storage configuration
-                'sys_domain', // Domain configuration
-                'sys_category', // Category system - safe for read operations
-            ];
-
-            if (!in_array($table, $allowedRootTables)) {
+            $isWorkspaceCapable = !empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS']);
+            $isAdditionalReadOnly = in_array($table, $this->getAdditionalReadOnlyTables(), true);
+            if (!$isWorkspaceCapable && !$isAdditionalReadOnly) {
                 return true;
             }
         }
@@ -584,16 +593,9 @@ class TableAccessService implements SingletonInterface
         if (!empty($GLOBALS['TCA'][$table]['ctrl']['readOnly'])) {
             return true;
         }
-        
-        // Specific read-only tables that can be read but shouldn't be modified via MCP
-        $readOnlyTables = [
-            'sys_file', // Files are managed through file system, not direct DB edits
-            'sys_file_processedfile', // Processed files are generated automatically
-            'sys_file_storage', // Storage configuration - sensitive
-            'sys_file_metadata', // File metadata - usually auto-generated
-        ];
-        
-        if (in_array($table, $readOnlyTables)) {
+
+        // Tables configured as additional read-only are always read-only
+        if (in_array($table, $this->getAdditionalReadOnlyTables(), true)) {
             return true;
         }
         

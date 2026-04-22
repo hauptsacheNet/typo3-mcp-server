@@ -157,16 +157,47 @@ class TableAccessServiceFieldAccessTest extends FunctionalTestCase
     }
 
     /**
-     * Test that sys_file is read-only accessible (not writable)
+     * Test that sys_file is accessible but read-only (configured via additionalReadOnlyTables)
      */
     public function testSysFileIsReadOnly(): void
     {
-        // sys_file should be accessible for reading
-        $canRead = $this->service->canReadTable('sys_file');
-        $this->assertTrue($canRead, 'sys_file should be readable');
+        $accessInfo = $this->service->getTableAccessInfo('sys_file');
+        $this->assertTrue($accessInfo['accessible'], 'sys_file should be accessible (configured as additional read-only table)');
+        $this->assertTrue($accessInfo['read_only'], 'sys_file should be read-only');
+        $this->assertFalse($accessInfo['permissions']['write'], 'sys_file should not be writable');
+    }
 
-        // sys_file should NOT be writable (it has no workspace support)
-        $canWrite = $this->service->canAccessTable('sys_file');
-        $this->assertFalse($canWrite, 'sys_file should not be writable (no workspace support)');
+    /**
+     * Non-workspace tables NOT in additionalReadOnlyTables must be blocked.
+     */
+    public function testNonWorkspaceTablesNotInConfigAreBlocked(): void
+    {
+        $blockedTables = ['fe_users', 'fe_groups', 'sys_note', 'sys_redirect'];
+        foreach ($blockedTables as $table) {
+            if (!isset($GLOBALS['TCA'][$table])) {
+                continue;
+            }
+            $accessInfo = $this->service->getTableAccessInfo($table);
+            $this->assertFalse(
+                $accessInfo['accessible'],
+                "Table '$table' should NOT be accessible (not workspace-capable, not in additionalReadOnlyTables)"
+            );
+        }
+    }
+
+    /**
+     * ReadTable enum includes sys_file, WriteTable enum excludes it.
+     */
+    public function testAccessibleTablesIncludeReadOnly(): void
+    {
+        $withReadOnly = $this->service->getAccessibleTables(true);
+        $withoutReadOnly = $this->service->getAccessibleTables(false);
+
+        $this->assertArrayHasKey('sys_file', $withReadOnly, 'ReadTable should include sys_file');
+        $this->assertArrayNotHasKey('sys_file', $withoutReadOnly, 'WriteTable should exclude sys_file');
+
+        // Verify no unwanted tables leaked in
+        $this->assertArrayNotHasKey('fe_users', $withReadOnly, 'fe_users should not appear');
+        $this->assertArrayNotHasKey('fe_groups', $withReadOnly, 'fe_groups should not appear');
     }
 }
