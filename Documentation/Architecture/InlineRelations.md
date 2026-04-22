@@ -107,10 +107,14 @@ $writeTool->execute([
 - **Solution**: After DataHandler creates child records, we directly update the foreign field in the database
 - **Working Example**: Creating news with embedded links now works correctly
 
-### 2. Restricted Tables
-- `sys_file_reference` is intentionally restricted in MCP tools because file references don't properly support workspaces
-- This is a deliberate limitation for now to ensure data integrity in workspace contexts
-- File uploads and media management require special handling outside of MCP tools
+### 2. File References (sys_file_reference)
+- `sys_file_reference` is fully supported as an embedded inline relation (`hideTable=true`)
+- It supports workspaces natively (`versioningWS=true` in TCA)
+- TCA `type=file` fields are expanded by `TcaPreparation` into inline relations with `foreign_table=sys_file_reference`
+- `foreign_match_fields` (`tablenames`, `fieldname`) ensure references are scoped to the correct parent field
+- File references are enriched with metadata from `sys_file` (filename, identifier, mime type, public URL)
+- `sys_file` itself is read-only - files are managed through the filesystem, not direct DB edits
+- File uploads are NOT supported - only referencing existing files via `uid_local`
 
 ### 3. Automatic Workspace Handling
 - Both ReadTableTool and WriteTableTool automatically initialize workspace context via `WorkspaceContextService`
@@ -165,7 +169,7 @@ $connection->update('child_table', ['parent_field' => $parentUid], ['uid' => $ch
 
 ## Future Improvements
 
-1. **File Reference Support**: Add special handling for sys_file_reference when workspace support improves
+1. **File Uploads**: Allow uploading new files and creating sys_file records (currently only existing files can be referenced)
 2. **Batch Operations**: Support for bulk inline relation updates
 3. **Position Management**: Full support for positioning inline records (before/after specific records)
 4. **Validation Enhancement**: More comprehensive validation for embedded record data

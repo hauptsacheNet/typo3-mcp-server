@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Service;
 
+use Doctrine\DBAL\ArrayParameterType;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
+use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
+use TYPO3\CMS\Core\Database\Query\Expression\CompositeExpression;
+use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -20,11 +24,30 @@ class TableAccessService implements SingletonInterface
     protected ?BackendUserAuthentication $backendUser = null;
     protected WorkspaceContextService $workspaceContextService;
     protected TcaSchemaFactory $tcaSchemaFactory;
-    
+    protected ?array $additionalReadOnlyTables = null;
+
     public function __construct()
     {
         $this->workspaceContextService = GeneralUtility::makeInstance(WorkspaceContextService::class);
         $this->tcaSchemaFactory = GeneralUtility::makeInstance(TcaSchemaFactory::class);
+    }
+
+    /**
+     * Get the list of additional non-workspace tables exposed as read-only.
+     * Configured via extension settings (additionalReadOnlyTables).
+     */
+    public function getAdditionalReadOnlyTables(): array
+    {
+        if ($this->additionalReadOnlyTables === null) {
+            try {
+                $config = GeneralUtility::makeInstance(ExtensionConfiguration::class)
+                    ->get('mcp_server', 'additionalReadOnlyTables');
+            } catch (\Exception) {
+                $config = 'sys_file';
+            }
+            $this->additionalReadOnlyTables = GeneralUtility::trimExplode(',', (string)$config, true);
+        }
+        return $this->additionalReadOnlyTables;
     }
     
     /**
@@ -43,54 +66,32 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Get all tables that are accessible to the current user
-     * 
-     * @param bool $includeReadOnly Include read-only tables
+     * Get all tables that are accessible to the current user.
+     *
+     * @param bool $includeReadOnly Include read-only tables (e.g. additional non-workspace tables like sys_file)
      * @return array Array of table names with access information
      */
     public function getAccessibleTables(bool $includeReadOnly = false): array
     {
         $accessibleTables = [];
-        
+
         foreach (array_keys($GLOBALS['TCA']) as $table) {
             $accessInfo = $this->getTableAccessInfo($table);
-            
+
             if ($accessInfo['accessible']) {
-                // Skip read-only tables if not requested
                 if (!$includeReadOnly && $accessInfo['read_only']) {
                     continue;
                 }
-                
                 $accessibleTables[$table] = $accessInfo;
             }
         }
-        
+
         return $accessibleTables;
     }
     
     /**
-     * Get all tables that are readable (less restrictive - no workspace capability required)
-     * 
-     * @return array Array of table names with access information
-     */
-    public function getReadableTables(): array
-    {
-        $readableTables = [];
-        
-        foreach (array_keys($GLOBALS['TCA']) as $table) {
-            $accessInfo = $this->getTableAccessInfo($table, false); // Don't require workspace capability
-            
-            if ($accessInfo['accessible']) {
-                $readableTables[$table] = $accessInfo;
-            }
-        }
-        
-        return $readableTables;
-    }
-    
-    /**
      * Check if a table can be accessed by the current user
-     * 
+     *
      * @param string $table Table name
      * @return bool
      */
@@ -99,27 +100,14 @@ class TableAccessService implements SingletonInterface
         $accessInfo = $this->getTableAccessInfo($table);
         return $accessInfo['accessible'];
     }
-    
-    /**
-     * Check if a table can be accessed for read operations (less restrictive)
-     * 
-     * @param string $table Table name
-     * @return bool
-     */
-    public function canReadTable(string $table): bool
-    {
-        $accessInfo = $this->getTableAccessInfo($table, false); // Don't require workspace capability
-        return $accessInfo['accessible'];
-    }
-    
+
     /**
      * Get detailed access information for a table
-     * 
+     *
      * @param string $table Table name
-     * @param bool $requireWorkspaceCapability Whether workspace capability is required (default: true)
      * @return array Detailed access information
      */
-    public function getTableAccessInfo(string $table, bool $requireWorkspaceCapability = true): array
+    public function getTableAccessInfo(string $table): array
     {
         // Start with default values
         $info = [
@@ -147,11 +135,16 @@ class TableAccessService implements SingletonInterface
             return $info;
         }
         
-        // Check workspace capability (required for write operations)
+        // Check workspace capability. Workspace-capable tables are the default set.
+        // Non-workspace tables are only accessible if explicitly configured as additional read-only tables.
         $info['workspace_capable'] = BackendUtility::isTableWorkspaceEnabled($table);
-        if ($requireWorkspaceCapability && !$info['workspace_capable']) {
-            $info['reasons'][] = 'Table is not workspace-capable (required for write operations)';
+        $isAdditionalReadOnly = in_array($table, $this->getAdditionalReadOnlyTables(), true);
+        if (!$info['workspace_capable'] && !$isAdditionalReadOnly) {
+            $info['reasons'][] = 'Table is not workspace-capable';
             return $info;
+        }
+        if ($isAdditionalReadOnly) {
+            $info['read_only'] = true;
         }
         
         // Check user permissions
@@ -193,15 +186,14 @@ class TableAccessService implements SingletonInterface
     public function validateTableAccess(string $table, string $operation = 'read'): void
     {
         $accessInfo = $this->getTableAccessInfo($table);
-        
+
         if (!$accessInfo['accessible']) {
             $reasons = implode(', ', $accessInfo['reasons']);
             throw new \InvalidArgumentException(
                 "Cannot access table '{$table}': {$reasons}"
             );
         }
-        
-        // Check specific operation permission
+
         if ($operation !== 'read' && !$accessInfo['permissions'][$operation]) {
             throw new \InvalidArgumentException(
                 "Operation '{$operation}' not permitted on table '{$table}'"
@@ -409,6 +401,133 @@ class TableAccessService implements SingletonInterface
     
     
     /**
+     * Get the file mount paths accessible to the current user.
+     * Each entry is ['storage' => int, 'path' => string] where path is the folder prefix
+     * (e.g. "/user_upload/") relative to the storage root.
+     *
+     * Returns an empty array for admin users (no filtering applied).
+     * Returns [] (empty but not admin) if user has no mounts - meaning NO files are accessible.
+     *
+     * @param bool &$isAdmin Out param: true when current user is admin (no restriction).
+     */
+    public function getAccessibleFileMounts(bool &$isAdmin = false): array
+    {
+        $user = $this->getBackendUser();
+        $isAdmin = $user->isAdmin();
+        if ($isAdmin) {
+            return [];
+        }
+
+        $mounts = [];
+        // getFileMountRecords() returns mount records; identifier is "<storageUid>:/path/"
+        foreach ($user->getFileMountRecords() as $row) {
+            $identifier = (string)($row['identifier'] ?? '');
+            if (!str_contains($identifier, ':')) {
+                continue;
+            }
+            [$storage, $path] = GeneralUtility::trimExplode(':', $identifier, true);
+            $storageUid = (int)$storage;
+            if ($storageUid <= 0) {
+                continue;
+            }
+            $mounts[] = ['storage' => $storageUid, 'path' => $path];
+        }
+        return $mounts;
+    }
+
+    /**
+     * Build a WHERE expression to restrict a sys_file query to files within the current user's
+     * accessible file mounts. Returns null when no restriction applies (admin user).
+     * Returns an always-false expression when user has no mounts at all.
+     */
+    public function buildFileMountRestriction(QueryBuilder $queryBuilder): ?CompositeExpression
+    {
+        $isAdmin = false;
+        $mounts = $this->getAccessibleFileMounts($isAdmin);
+        if ($isAdmin) {
+            return null;
+        }
+        if (empty($mounts)) {
+            // No mounts → user cannot see any files
+            return $queryBuilder->expr()->and('1 = 0');
+        }
+
+        // Group mount paths by storage for a cleaner query structure
+        $perStorage = [];
+        foreach ($mounts as $mount) {
+            $perStorage[$mount['storage']][] = $mount['path'];
+        }
+
+        $storageExpressions = [];
+        foreach ($perStorage as $storageUid => $paths) {
+            $pathExpressions = [];
+            foreach ($paths as $path) {
+                $normalized = rtrim($path, '/') . '/';
+                // Match files whose identifier begins with this mount path (including subfolders)
+                $pathExpressions[] = $queryBuilder->expr()->like(
+                    'identifier',
+                    $queryBuilder->createNamedParameter(
+                        $queryBuilder->escapeLikeWildcards($normalized) . '%'
+                    )
+                );
+            }
+
+            $storageExpressions[] = $queryBuilder->expr()->and(
+                $queryBuilder->expr()->eq(
+                    'storage',
+                    $queryBuilder->createNamedParameter($storageUid, \Doctrine\DBAL\ParameterType::INTEGER)
+                ),
+                $queryBuilder->expr()->or(...$pathExpressions)
+            );
+        }
+
+        return $queryBuilder->expr()->or(...$storageExpressions);
+    }
+
+    /**
+     * Check if the current user can access a given sys_file UID via their file mounts.
+     */
+    public function canAccessFileUid(int $fileUid): bool
+    {
+        if ($fileUid <= 0) {
+            return false;
+        }
+        $user = $this->getBackendUser();
+        if ($user->isAdmin()) {
+            return true;
+        }
+
+        $isAdmin = false;
+        $mounts = $this->getAccessibleFileMounts($isAdmin);
+        if (empty($mounts)) {
+            return false;
+        }
+
+        $connection = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class)
+            ->getConnectionForTable('sys_file');
+        $row = $connection->select(
+            ['storage', 'identifier'],
+            'sys_file',
+            ['uid' => $fileUid]
+        )->fetchAssociative();
+
+        if (!$row) {
+            return false;
+        }
+
+        foreach ($mounts as $mount) {
+            if ((int)$row['storage'] !== (int)$mount['storage']) {
+                continue;
+            }
+            $mountPath = rtrim($mount['path'], '/') . '/';
+            if (str_starts_with((string)$row['identifier'], $mountPath)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Check if a table is truly restricted and should not be accessible via MCP
      */
     protected function isRestrictedSystemTable(string $table): bool
@@ -418,16 +537,13 @@ class TableAccessService implements SingletonInterface
             return true;
         }
         
-        // Root-level tables that are dangerous to modify
-        if (!empty($GLOBALS['TCA'][$table]['ctrl']['rootLevel'])) {
-            // Allow some safe root-level tables
-            $allowedRootTables = [
-                'sys_file_storage', // File storage configuration
-                'sys_domain', // Domain configuration
-                'sys_category', // Category system - safe for read operations
-            ];
-            
-            if (!in_array($table, $allowedRootTables)) {
+        // Root-level-only tables (rootLevel=1) are restricted unless they're
+        // workspace-capable or explicitly configured as additional read-only tables.
+        $rootLevel = $GLOBALS['TCA'][$table]['ctrl']['rootLevel'] ?? 0;
+        if ($rootLevel === 1 || $rootLevel === true) {
+            $isWorkspaceCapable = !empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS']);
+            $isAdditionalReadOnly = in_array($table, $this->getAdditionalReadOnlyTables(), true);
+            if (!$isWorkspaceCapable && !$isAdditionalReadOnly) {
                 return true;
             }
         }
@@ -447,7 +563,6 @@ class TableAccessService implements SingletonInterface
             'cache_hash', // Cache tables - managed by system
             'sys_be_shortcuts', // User shortcuts - user-specific
             'sys_news', // System news - admin-only
-            'sys_file_reference', // FAL reference table - file handling not supported yet
         ];
         
         if (in_array($table, $restrictedTables)) {
@@ -478,16 +593,9 @@ class TableAccessService implements SingletonInterface
         if (!empty($GLOBALS['TCA'][$table]['ctrl']['readOnly'])) {
             return true;
         }
-        
-        // Specific read-only tables that can be read but shouldn't be modified via MCP
-        $readOnlyTables = [
-            'sys_file', // Files are managed through file system, not direct DB edits
-            'sys_file_processedfile', // Processed files are generated automatically
-            'sys_file_storage', // Storage configuration - sensitive
-            'sys_file_metadata', // File metadata - usually auto-generated
-        ];
-        
-        if (in_array($table, $readOnlyTables)) {
+
+        // Tables configured as additional read-only are always read-only
+        if (in_array($table, $this->getAdditionalReadOnlyTables(), true)) {
             return true;
         }
         
@@ -599,18 +707,11 @@ class TableAccessService implements SingletonInterface
     {
         $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
 
-        // Block file fields - file handling not supported yet
         $fieldType = $fieldConfig['config']['type'] ?? '';
-        if ($fieldType === 'file') {
-            return false;
-        }
 
-        // Block inline relations where foreign table isn't writable
-        // This automatically filters out relations to:
-        // - Tables without workspace support
-        // - Read-only tables (sys_file, sys_file_metadata, etc.)
-        // - Tables with no user access
-        if ($fieldType === 'inline') {
+        // Block inline/file relations where foreign table isn't writable
+        // type=file is functionally an inline relation to sys_file_reference (expanded by TcaPreparation)
+        if ($fieldType === 'inline' || $fieldType === 'file') {
             $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
             if ($foreignTable && !$this->canAccessTable($foreignTable)) {
                 return false;

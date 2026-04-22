@@ -118,7 +118,7 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             'uid' => 1
         ]);
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('Data is required for update action', $result->content[0]->text);
+        $this->assertStringContainsString('data parameter must contain record fields for update actions', $result->content[0]->text);
     }
     
     /**
@@ -274,22 +274,20 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     /**
      * Test that file fields are not supported
      */
-    public function testFileFieldsNotSupported(): void
+    public function testFileFieldsRequireArrayData(): void
     {
-        // The 'media' field on pages table is type='file', which is not supported
+        // The 'media' field on pages table is type='file' - it requires array data (embedded records)
         $result = $this->tool->execute([
             'action' => 'create',
             'table' => 'pages',
             'pid' => 0,
             'data' => [
                 'title' => 'Test Page',
-                'media' => 'some_value' // File fields should be rejected regardless of value
+                'media' => 'some_value' // File fields require array data, not scalar values
             ]
         ]);
 
-        $this->assertTrue($result->isError, 'File fields should be rejected');
-        $this->assertStringContainsString('File fields are not supported', $result->content[0]->text);
-        $this->assertStringContainsString('media', $result->content[0]->text);
+        $this->assertTrue($result->isError, 'File fields with non-array data should be rejected');
     }
     
     /**
