@@ -122,6 +122,9 @@ The MCP Server provides these tools for interacting with TYPO3:
 ### Content Modification
 - **WriteTable** - Create, update, or delete records (safely in workspace)
 
+### System Introspection
+- **GetSystemStatus** *(optional)* - Surfaces PHP/TYPO3 versions, database schema state, security checks and any other status contributed via the Reports API. Admin-only. Only available when the `reports` system extension is installed; otherwise the tool is not exposed.
+
 > Each tool provides detailed schema information when called. See the Real-World Scenarios below for practical examples.
 
 ## Real-World Scenarios

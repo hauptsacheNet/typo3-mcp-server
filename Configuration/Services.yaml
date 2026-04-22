@@ -6,7 +6,9 @@ services:
 
   Hn\McpServer\:
     resource: '../Classes/*'
-    exclude: '../Classes/Domain/Model/*'
+    exclude:
+      - '../Classes/Domain/Model/*'
+      - '../Classes/MCP/Tool/GetSystemStatusTool.php'
 
   # Explicitly register command controllers
   Hn\McpServer\Command\McpServerCommand:

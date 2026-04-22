@@ -20,8 +20,12 @@
     "require-dev": {
         "typo3/testing-framework": "^8.2 || ^9.2",
         "typo3/cms-install": "^13.4",
+        "typo3/cms-reports": "^13.4",
         "georgringer/news": "^14.0",
         "brianium/paratest": "^7.4"
+    },
+    "suggest": {
+        "typo3/cms-reports": "Enables the GetSystemStatus MCP tool, which surfaces PHP/TYPO3 versions, schema state, security checks and any other status contributed via the Reports API."
     },
     "autoload": {
         "psr-4": {
