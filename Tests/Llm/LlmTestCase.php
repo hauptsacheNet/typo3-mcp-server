@@ -571,8 +571,7 @@ abstract class LlmTestCase extends FunctionalTestCase
                     $args = $targetCalls[0]['arguments'] ?? [];
                     $action = $args['action'] ?? '';
                     $data = $this->extractWriteData($args);
-                    $hasPosition = !empty($args['position']);
-                    if (in_array($action, ['create', 'update', 'translate']) && empty($data) && !$hasPosition) {
+                    if (in_array($action, ['create', 'update', 'translate']) && empty($data)) {
                         $currentResponse = $this->executeAndContinue($currentResponse);
                         continue;
                     }
