@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use Doctrine\DBAL\ArrayParameterType;
+use Hn\McpServer\Event\ModifyAvailableFieldsEvent;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
-use TYPO3\CMS\Core\Database\Query\Expression\CompositeExpression;
-use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -298,8 +298,11 @@ class TableAccessService implements SingletonInterface
                 unset($fields[$fieldName]);
             }
         }
-        
-        return $fields;
+
+        // Allow extensions to add, remove, or reconfigure fields
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $event = $eventDispatcher->dispatch(new ModifyAvailableFieldsEvent($table, $type, $fields));
+        return $event->getFields();
     }
     
     /**
@@ -433,55 +436,6 @@ class TableAccessService implements SingletonInterface
             $mounts[] = ['storage' => $storageUid, 'path' => $path];
         }
         return $mounts;
-    }
-
-    /**
-     * Build a WHERE expression to restrict a sys_file query to files within the current user's
-     * accessible file mounts. Returns null when no restriction applies (admin user).
-     * Returns an always-false expression when user has no mounts at all.
-     */
-    public function buildFileMountRestriction(QueryBuilder $queryBuilder): ?CompositeExpression
-    {
-        $isAdmin = false;
-        $mounts = $this->getAccessibleFileMounts($isAdmin);
-        if ($isAdmin) {
-            return null;
-        }
-        if (empty($mounts)) {
-            // No mounts → user cannot see any files
-            return $queryBuilder->expr()->and('1 = 0');
-        }
-
-        // Group mount paths by storage for a cleaner query structure
-        $perStorage = [];
-        foreach ($mounts as $mount) {
-            $perStorage[$mount['storage']][] = $mount['path'];
-        }
-
-        $storageExpressions = [];
-        foreach ($perStorage as $storageUid => $paths) {
-            $pathExpressions = [];
-            foreach ($paths as $path) {
-                $normalized = rtrim($path, '/') . '/';
-                // Match files whose identifier begins with this mount path (including subfolders)
-                $pathExpressions[] = $queryBuilder->expr()->like(
-                    'identifier',
-                    $queryBuilder->createNamedParameter(
-                        $queryBuilder->escapeLikeWildcards($normalized) . '%'
-                    )
-                );
-            }
-
-            $storageExpressions[] = $queryBuilder->expr()->and(
-                $queryBuilder->expr()->eq(
-                    'storage',
-                    $queryBuilder->createNamedParameter($storageUid, \Doctrine\DBAL\ParameterType::INTEGER)
-                ),
-                $queryBuilder->expr()->or(...$pathExpressions)
-            );
-        }
-
-        return $queryBuilder->expr()->or(...$storageExpressions);
     }
 
     /**

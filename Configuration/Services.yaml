@@ -51,6 +51,19 @@ services:
   Hn\McpServer\Server\SiteInstructionsService:
     public: true
     
+  # Event listeners
+  Hn\McpServer\EventListener\SysFileReferenceEnrichmentListener:
+    tags:
+      - name: event.listener
+        event: Hn\McpServer\Event\AfterRecordReadEvent
+        identifier: 'mcp-server/sys-file-reference-enrichment'
+
+  Hn\McpServer\EventListener\SysFileMountRestrictionListener:
+    tags:
+      - name: event.listener
+        event: Hn\McpServer\Event\BeforeRecordReadEvent
+        identifier: 'mcp-server/sys-file-mount-restriction'
+
   # Explicitly configure the module controller
   Hn\McpServer\Controller\McpServerModuleController:
     public: true

@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Event\AfterRecordWriteEvent;
+use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\CallToolResult;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -229,7 +232,16 @@ class WriteTableTool extends AbstractRecordTool
             default:
                 throw new ValidationException(['Invalid action: ' . $action . '. Valid actions are: create, update, translate, delete']);
         }
-        
+
+        // Allow listeners to modify data or veto the operation
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $beforeEvent = new BeforeRecordWriteEvent($table, $action, $data, $uid, $pid);
+        $eventDispatcher->dispatch($beforeEvent);
+        if ($beforeEvent->isVetoed()) {
+            return $this->createErrorResult('Operation vetoed: ' . ($beforeEvent->getVetoReason() ?? 'No reason given'));
+        }
+        $data = $beforeEvent->getData();
+
         // Execute the action
         switch ($action) {
             case 'create':
@@ -491,7 +503,10 @@ class WriteTableTool extends AbstractRecordTool
 
         // Get the live UID for workspace transparency
         $liveUid = $this->getLiveUid($table, $parentUid);
-        
+
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'create', $liveUid, $data, $pid));
+
         // Return the result with live UID
         return $this->createJsonResult([
             'action' => 'create',
@@ -610,6 +625,9 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'update', $uid, $data, null));
+
         // Return the result with the original live UID
         return $this->createJsonResult([
             'action' => 'update',
@@ -637,6 +655,9 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Error deleting record: ' . implode(', ', $dataHandler->errorLog));
         }
         
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'delete', $uid, [], null));
+
         return $this->createJsonResult([
             'action' => 'delete',
             'table' => $table,
@@ -874,6 +895,11 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         $targetIsoCode = $this->languageService->getIsoCodeFromUid($targetLanguageUid) ?? $targetLanguageUid;
+
+        if ($newTranslationUid) {
+            $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+            $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'translate', (int)$newTranslationUid, [], null));
+        }
 
         return $this->createJsonResult([
             'action' => 'translate',
