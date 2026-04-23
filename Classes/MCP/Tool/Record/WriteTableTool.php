@@ -526,16 +526,54 @@ class WriteTableTool extends AbstractRecordTool
 
         // First, update the parent record without inline relations
         $dataMap = [$table => [$workspaceUid => $data]];
-        
+
+        // Track whether a workspace draft must be created (live UID + workspace user + capable table).
+        // DataHandler can refuse versioning silently in some edge cases (e.g. updating a child like
+        // sys_file_reference whose parent has no workspace version yet). Without this guard the MCP
+        // would report "success" even though nothing was staged.
+        $beWorkspace = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        $expectsNewWorkspaceVersion = !empty($data)
+            && $workspaceUid === $uid
+            && $beWorkspace > 0
+            && $this->isTableWorkspaceCapable($table);
+
         // Update the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $dataHandler->BE_USER = $GLOBALS['BE_USER'];
         $dataHandler->start($dataMap, []);
         $dataHandler->process_datamap();
-        
+
         // Check for errors in parent update
         if (!empty($dataHandler->errorLog)) {
             return $this->createErrorResult('Error updating record: ' . implode(', ', $dataHandler->errorLog));
+        }
+
+        // Detect silent skip: query sys table directly for any row in this workspace pointing at
+        // the live UID. autoVersionIdMap is unreliable because DataHandler populates it only on
+        // some code paths; the database row is the single source of truth. If we expected a draft
+        // and none exists, DataHandler quietly refused (e.g. orphan child whose parent has no
+        // workspace version) — surface as a real error instead of a misleading success.
+        if ($expectsNewWorkspaceVersion) {
+            $draftQb = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
+            $draftQb->getRestrictions()->removeAll();
+            $draftCount = (int)$draftQb->count('uid')
+                ->from($table)
+                ->where(
+                    $draftQb->expr()->eq('t3ver_oid', $draftQb->createNamedParameter($uid, ParameterType::INTEGER)),
+                    $draftQb->expr()->eq('t3ver_wsid', $draftQb->createNamedParameter($beWorkspace, ParameterType::INTEGER))
+                )
+                ->executeQuery()
+                ->fetchOne();
+
+            if ($draftCount === 0) {
+                return $this->createErrorResult(sprintf(
+                    'Update on %s:%d reported no error but DataHandler created no workspace draft. ' .
+                    'This typically means the record cannot be versioned standalone (e.g. a child reference whose parent has no workspace version yet). ' .
+                    'Update the parent record with this child in its inline relation field instead.',
+                    $table,
+                    $uid
+                ));
+            }
         }
         
         // Now process inline relations with the resolved parent UID
