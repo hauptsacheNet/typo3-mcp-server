@@ -162,12 +162,10 @@ class TcaFormattingUtility
                 break;
                 
             case 'flex':
-                // Only applicable for TCA
-                if (isset($config['ds_pointerField'])) {
-                    $result .= " [ds_pointerField: " . $config['ds_pointerField'] . "]";
-                }
+                // FlexForm fields are detailed via GetFlexFormSchema tool.
                 break;
-                
+
+
             case 'language':
                 // Special handling for language type fields (TYPO3 11.2+)
                 // Add note about ISO code support

@@ -13,13 +13,13 @@
     "require": {
         "php": ">=8.2",
         "logiscape/mcp-sdk-php": "^1.2",
-        "typo3/cms-backend": "^13.4",
-        "typo3/cms-core": "^13.4",
-        "typo3/cms-workspaces": "^13.4"
+        "typo3/cms-backend": "^14.0",
+        "typo3/cms-core": "^14.0",
+        "typo3/cms-workspaces": "^14.0"
     },
     "require-dev": {
-        "typo3/testing-framework": "^8.2 || ^9.2",
-        "typo3/cms-install": "^13.4",
+        "typo3/testing-framework": "^9.2",
+        "typo3/cms-install": "^14.0",
         "georgringer/news": "^14.0",
         "brianium/paratest": "^7.4"
     },

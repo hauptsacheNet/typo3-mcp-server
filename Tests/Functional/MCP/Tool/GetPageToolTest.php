@@ -417,9 +417,10 @@ class GetPageToolTest extends FunctionalTestCase
         // Verify page information
         $this->assertStringContainsString('Title: Contact', $content);
         
-        // Verify list content element (old plugin system)
+        // Verify plugin content element (TYPO3 14 registers plugins with
+        // their own CType directly)
         $this->assertStringContainsString('[105] Contact Form', $content);
-        $this->assertStringContainsString('list', $content);
+        $this->assertStringContainsString('news_pi1', $content);
     }
 
     /**

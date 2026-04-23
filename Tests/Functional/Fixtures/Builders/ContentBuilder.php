@@ -102,13 +102,15 @@ class ContentBuilder
     }
     
     /**
-     * Set as list/plugin type
+     * Set as plugin content element. TYPO3 14 dropped the dedicated "list"
+     * CType with its `list_type` discriminator; plugins are now registered
+     * with their own CType directly.
      */
-    public function asPlugin(string $listType, string $header = ''): self
+    public function asPlugin(string $cType, string $header = ''): self
     {
-        $this->data['CType'] = 'list';
-        $this->data['header'] = $header ?: $listType;
-        return $this->with('list_type', $listType);
+        $this->data['CType'] = $cType;
+        $this->data['header'] = $header ?: $cType;
+        return $this;
     }
     
     /**

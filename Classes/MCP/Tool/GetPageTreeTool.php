@@ -371,19 +371,18 @@ class GetPageTreeTool extends AbstractRecordTool
             ->from('tt_content')
             ->where(
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
-                $queryBuilder->expr()->eq('CType', $queryBuilder->createNamedParameter('list'))
+                $queryBuilder->expr()->eq('CType', $queryBuilder->createNamedParameter('news_pi1'))
             )
             ->executeQuery()
             ->fetchAllAssociative();
-        
+
         foreach ($plugins as $plugin) {
             // Check for news plugin with startingpoint configuration
-            if (isset($plugin['list_type']) && $plugin['list_type'] === 'news_pi1' && !empty($plugin['pi_flexform'])) {
-                // Simple regex to extract startingpoint value
-                if (preg_match('/<field index="settings\.startingpoint">.*?<value[^>]*>(\d+)<\/value>/s', $plugin['pi_flexform'], $matches)) {
-                    $storagePid = (int)$matches[1];
-                    $hints .= ' [news plugin → pid:' . $storagePid . ']';
-                }
+            if (!empty($plugin['pi_flexform'])
+                && preg_match('/<field index="settings\.startingpoint">.*?<value[^>]*>(\d+)<\/value>/s', $plugin['pi_flexform'], $matches)
+            ) {
+                $storagePid = (int)$matches[1];
+                $hints .= ' [news plugin → pid:' . $storagePid . ']';
             }
         }
         

@@ -47,8 +47,7 @@ class NewsFlexFormTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'CType' => 'list',
-                'list_type' => 'news_pi1',
+                'CType' => 'news_pi1',
                 'header' => 'Latest News',
                 'pi_flexform' => [
                     'settings' => [
@@ -103,10 +102,7 @@ class NewsFlexFormTest extends FunctionalTestCase
         $plugin = json_decode($result->content[0]->text, true)['records'][0];
         
         // Verify basic fields
-        $this->assertEquals('list', $plugin['CType']);
-        if (isset($plugin['list_type'])) {
-            $this->assertEquals('news_pi1', $plugin['list_type']);
-        }
+        $this->assertEquals('news_pi1', $plugin['CType']);
         $this->assertEquals('Latest News', $plugin['header']);
         
         // Verify FlexForm was converted from array and stored
@@ -151,8 +147,7 @@ class NewsFlexFormTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'CType' => 'list',
-                'list_type' => 'news_pi1',
+                'CType' => 'news_pi1',
                 'header' => 'News to Update',
                 'pi_flexform' => [
                     'settings' => [
@@ -244,8 +239,7 @@ class NewsFlexFormTest extends FunctionalTestCase
                 'action' => 'create',
                 'pid' => 1,
                 'data' => [
-                    'CType' => 'list',
-                    'list_type' => 'news_pi1',
+                    'CType' => 'news_pi1',
                     'header' => "News Plugin - $modeName Mode",
                     'pi_flexform' => [
                         'settings' => $modeSettings
@@ -288,8 +282,7 @@ class NewsFlexFormTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'CType' => 'list',
-                'list_type' => 'news_pi1',
+                'CType' => 'news_pi1',
                 'header' => 'News Plugin with Empty FlexForm',
                 'pi_flexform' => []
             ],
@@ -325,8 +318,7 @@ class NewsFlexFormTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'CType' => 'list',
-                'list_type' => 'news_pi1',
+                'CType' => 'news_pi1',
                 'header' => 'News Plugin for Schema Test'
             ],
         ]);
@@ -340,7 +332,7 @@ class NewsFlexFormTest extends FunctionalTestCase
             'table' => 'tt_content',
             'field' => 'pi_flexform',
             'recordUid' => $pluginUid,
-            'identifier' => '*,news_pi1'  // News uses this pattern
+            'identifier' => 'news_pi1'  // TYPO3 14: DS is keyed by the plugin CType
         ]);
         
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
@@ -370,8 +362,7 @@ class NewsFlexFormTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'CType' => 'list',
-                'list_type' => 'news_pi1',
+                'CType' => 'news_pi1',
                 'header' => 'Workspace FlexForm Test',
                 'pi_flexform' => [
                     'settings' => [
@@ -431,8 +422,7 @@ class NewsFlexFormTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'CType' => 'list',
-                'list_type' => 'news_pi1',
+                'CType' => 'news_pi1',
                 'header' => 'Complex FlexForm Test',
                 'pi_flexform' => [
                     'settings' => [

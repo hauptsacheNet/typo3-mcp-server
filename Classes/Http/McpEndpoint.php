@@ -196,7 +196,7 @@ class McpEndpoint
     /**
      * Create unauthorized response
      */
-    private function createUnauthorizedResponse(string $message, ServerRequestInterface $request = null): ResponseInterface
+    private function createUnauthorizedResponse(string $message, ?ServerRequestInterface $request = null): ResponseInterface
     {
         $stream = new Stream('php://temp', 'rw');
         $stream->write(json_encode([

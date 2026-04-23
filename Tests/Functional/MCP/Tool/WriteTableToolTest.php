@@ -1199,13 +1199,13 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $tool = new WriteTableTool();
         
         // Test creating content with FlexForm data
-        // Use list content element which has a pi_flexform field
+        // Use a plugin CType (news_pi1) which has a pi_flexform field
         $result = $tool->execute([
             'action' => 'create',
             'table' => 'tt_content',
             'pid' => 1,
             'data' => [
-                'CType' => 'list',
+                'CType' => 'news_pi1',
                 'header' => 'Plugin with FlexForm',
                 'pi_flexform' => [
                     'settings' => [

@@ -342,60 +342,32 @@ class ReadTableToolTest extends AbstractFunctionalTest
         // For textmedia, bodytext should be present if it's in the showitem
         $this->assertArrayHasKey('bodytext', $textmediaRecord);
         
-        // Test form_formframework record (UID 105)
+        // Test news plugin record (UID 105). TYPO3 14 registers plugins with
+        // their own CType, replacing the former list/list_type pairing.
         $result = $tool->execute([
             'table' => 'tt_content',
             'uid' => 105,
             'includeRelations' => false
         ]);
-        
+
         $this->assertFalse($result->isError);
         $data = json_decode($result->content[0]->text, true);
-        $listRecord = $data['records'][0];
-        
-        // Verify this is a list record (old plugin system)
-        $this->assertEquals('list', $listRecord['CType']);
-        
-        // Essential fields should always be present
-        $this->assertArrayHasKey('uid', $listRecord);
-        $this->assertArrayHasKey('pid', $listRecord);
-        $this->assertArrayHasKey('CType', $listRecord);
-        $this->assertArrayHasKey('header', $listRecord);
-        $this->assertArrayHasKey('sorting', $listRecord);
-        $this->assertArrayHasKey('tstamp', $listRecord);
-        $this->assertArrayHasKey('crdate', $listRecord);
-        
-        // For list CType, we need to check how the old plugin system works
-        // The list CType uses subtype_value_field which should include pi_flexform when needed
-        // Note: This test may need adjustment based on actual TCA configuration
-        // The exact fields depend on how TYPO3 is configured and what TCA types are defined
-        
-        // Field filtering analysis:
-        // Both records should return type-specific fields based on TCA configuration
-        // This tests the new TcaSchemaFactory-based implementation
-        
-        $textmediaFields = array_keys($textmediaRecord);
-        $listFields = array_keys($listRecord);
-        
-        // Both should have common essential fields
+        $pluginRecord = $data['records'][0];
+
+        $this->assertEquals('news_pi1', $pluginRecord['CType']);
+
         $commonFields = ['uid', 'pid', 'CType', 'header', 'sorting', 'tstamp', 'crdate'];
         foreach ($commonFields as $field) {
-            $this->assertContains($field, $textmediaFields, "Textmedia record missing essential field: $field");
-            $this->assertContains($field, $listFields, "List record missing essential field: $field");
+            $this->assertArrayHasKey($field, $pluginRecord, "Plugin record missing essential field: $field");
         }
-        
-        // Both records should return type-specific fields based on TCA configuration
-        // In a proper type-based filtering system:
-        // - textmedia should have: bodytext, assets, but not pi_flexform
-        // - list should have: list_type, pages, recursive, and potentially pi_flexform for plugins
-        
-        // Verify that type-specific fields are present
+
+        $textmediaFields = array_keys($textmediaRecord);
+        $pluginFields = array_keys($pluginRecord);
+
         $this->assertContains('bodytext', $textmediaFields, "Textmedia should have bodytext");
-        $this->assertContains('list_type', $listFields, "List should have list_type field");
-        
-        // Count fields to ensure we're not getting too many unnecessary fields
+
         $this->assertLessThan(100, count($textmediaFields), "Too many fields returned for textmedia");
-        $this->assertLessThan(100, count($listFields), "Too many fields returned for list");
+        $this->assertLessThan(100, count($pluginFields), "Too many fields returned for news_pi1 plugin");
     }
 
     /**

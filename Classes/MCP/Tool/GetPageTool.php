@@ -640,15 +640,18 @@ class GetPageTool extends AbstractRecordTool
                             $result .= "  Contains HTML code\n";
                         }
                         break;
-                        
-                    case 'list':
-                        // Show plugin information
-                        if (!empty($element['list_type'])) {
-                            $pluginName = $this->getPluginLabel($element['list_type']);
-                            $result .= "  Plugin: " . $pluginName . " [" . $element['list_type'] . "]\n";
-                            
-                            // Check if the plugin's table is workspace capable
-                            $pluginTable = $this->getPluginDataTable($element['list_type']);
+
+                    default:
+                        // TYPO3 14 removed the dedicated "list" CType: plugins are
+                        // now registered with their own CType directly. Surface
+                        // plugin information whenever the element looks like a
+                        // plugin (i.e. carries a FlexForm payload or an unknown
+                        // CType outside the core content element set).
+                        if (!empty($element['pi_flexform']) || $this->isPluginCType($cType)) {
+                            $pluginName = $this->getPluginLabel($cType);
+                            $result .= "  Plugin: " . $pluginName . " [" . $cType . "]\n";
+
+                            $pluginTable = $this->getPluginDataTable($cType);
                             if ($pluginTable) {
                                 $isWorkspaceCapable = $this->isTableWorkspaceCapable($pluginTable);
                                 if (!$isWorkspaceCapable) {
@@ -656,8 +659,7 @@ class GetPageTool extends AbstractRecordTool
                                     $result .= "  💡 Tip: Look for record storage folders (doktype=254) to find and edit the actual records\n";
                                 }
                             }
-                            
-                            // Show flexform config if available
+
                             if (!empty($element['pi_flexform'])) {
                                 $result .= "  Has configuration (FlexForm)\n";
                             }
@@ -828,19 +830,14 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
-     * Get a human-readable label for a plugin list_type
-     * 
-     * @param string $listType
-     * @return string
+     * Get a human-readable label for a plugin CType
      */
-    protected function getPluginLabel(string $listType): string
+    protected function getPluginLabel(string $cType): string
     {
-        // Check TCA for plugin label
-        if (isset($GLOBALS['TCA']['tt_content']['columns']['list_type']['config']['items'])) {
-            foreach ($GLOBALS['TCA']['tt_content']['columns']['list_type']['config']['items'] as $item) {
-                // Handle both old and new TCA formats
-                if ((isset($item['value']) && $item['value'] === $listType) ||
-                    (isset($item[1]) && $item[1] === $listType)) {
+        if (isset($GLOBALS['TCA']['tt_content']['columns']['CType']['config']['items'])) {
+            foreach ($GLOBALS['TCA']['tt_content']['columns']['CType']['config']['items'] as $item) {
+                if ((isset($item['value']) && $item['value'] === $cType) ||
+                    (isset($item[1]) && $item[1] === $cType)) {
                     $label = $item['label'] ?? $item[0] ?? '';
                     if ($label) {
                         return TableAccessService::translateLabel($label);
@@ -848,18 +845,39 @@ class GetPageTool extends AbstractRecordTool
                 }
             }
         }
-        
-        // Fallback: humanize the list_type
-        $parts = explode('_', $listType);
+
+        $parts = explode('_', $cType);
         if (count($parts) > 1) {
-            // Remove common prefixes like 'tx_'
             if ($parts[0] === 'tx') {
                 array_shift($parts);
             }
             return ucfirst(implode(' ', $parts));
         }
-        
-        return $listType;
+
+        return $cType;
+    }
+
+    /**
+     * Detect whether a CType refers to a plugin (i.e. not one of the
+     * built-in core content element types).
+     */
+    protected function isPluginCType(string $cType): bool
+    {
+        static $coreTypes = [
+            'header', 'text', 'textpic', 'textmedia', 'image', 'bullets',
+            'table', 'uploads', 'menu_abstract', 'menu_categorized_content',
+            'menu_categorized_pages', 'menu_pages', 'menu_recently_updated',
+            'menu_related_pages', 'menu_section', 'menu_section_pages',
+            'menu_sitemap', 'menu_sitemap_pages', 'menu_subpages',
+            'shortcut', 'div', 'html', 'search', 'login',
+        ];
+
+        if (in_array($cType, $coreTypes, true)) {
+            return false;
+        }
+
+        // Plugins typically follow the "<ext>_<plugin>" naming pattern.
+        return str_contains($cType, '_');
     }
     
     /**

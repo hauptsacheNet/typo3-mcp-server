@@ -10,6 +10,7 @@ use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\Query\Expression\CompositeExpression;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
+use TYPO3\CMS\Core\Schema\Capability\TcaSchemaCapability;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -137,7 +138,8 @@ class TableAccessService implements SingletonInterface
         
         // Check workspace capability. Workspace-capable tables are the default set.
         // Non-workspace tables are only accessible if explicitly configured as additional read-only tables.
-        $info['workspace_capable'] = BackendUtility::isTableWorkspaceEnabled($table);
+        $info['workspace_capable'] = $this->tcaSchemaFactory->has($table)
+            && $this->tcaSchemaFactory->get($table)->hasCapability(TcaSchemaCapability::Workspace);
         $isAdditionalReadOnly = in_array($table, $this->getAdditionalReadOnlyTables(), true);
         if (!$info['workspace_capable'] && !$isAdditionalReadOnly) {
             $info['reasons'][] = 'Table is not workspace-capable';
@@ -241,15 +243,11 @@ class TableAccessService implements SingletonInterface
         
         $schema = $this->tcaSchemaFactory->get($table);
         $fields = [];
-        $subtypeField = null;
-        
+
         // If a specific type is provided and the schema supports sub-schemas
         if (!empty($type) && $schema->hasSubSchema($type)) {
             $subSchema = $schema->getSubSchema($type);
-            
-            // Check if this type uses subtypes (e.g., plugins using list_type)
-            $subtypeField = $subSchema->getSubTypeDivisorField();
-            
+
             // Get fields from the sub-schema
             foreach ($subSchema->getFields() as $field) {
                 $fieldName = $field->getName();
@@ -285,13 +283,12 @@ class TableAccessService implements SingletonInterface
             }
         }
         
-        // Handle subtypes pattern: If a type uses subtypes and has FlexForm configurations,
-        // ensure FlexForm fields are included even if not explicitly in showitem
-        if ($subtypeField !== null) {
-            $subtypeFieldName = $subtypeField->getName();
-            $this->addSubtypeFields($table, $type, $subtypeFieldName, $fields);
-        }
-        
+        // Plugins in TYPO3 14 use CType directly and may have FlexForm data
+        // structures keyed by their CType. Ensure the FlexForm field is
+        // exposed even if it is not listed explicitly in the sub-schema's
+        // showitem definition.
+        $this->addFlexFormFieldsForType($table, $type, $fields);
+
         // Apply field-level access restrictions
         foreach ($fields as $fieldName => $fieldConfig) {
             if (!$this->canAccessField($table, $fieldName, $type)) {
@@ -303,63 +300,50 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Add fields that should be available based on subtype configuration
-     * This handles the deprecated subtypes system and FlexForm fields
-     * 
-     * @param string $table Table name
-     * @param string $type Record type
-     * @param string $subtypeField The subtype field name (e.g., 'list_type')
-     * @param array &$fields Reference to fields array to modify
+     * Include FlexForm fields that have a DataStructure configured for the given
+     * record type, even when they are not explicitly listed in the type's
+     * showitem definition.
      */
-    protected function addSubtypeFields(string $table, string $type, string $subtypeField, array &$fields): void
+    protected function addFlexFormFieldsForType(string $table, string $type, array &$fields): void
     {
         $tca = $GLOBALS['TCA'][$table] ?? [];
-        
-        // Check if there are FlexForm fields configured
-        $flexFormFields = [];
+
         foreach ($tca['columns'] ?? [] as $fieldName => $fieldConfig) {
-            if (($fieldConfig['config']['type'] ?? '') === 'flex') {
-                $flexFormFields[] = $fieldName;
+            if (($fieldConfig['config']['type'] ?? '') !== 'flex') {
+                continue;
             }
-        }
-        
-        // For each FlexForm field, check if there are DataStructures configured that use the subtype pattern
-        foreach ($flexFormFields as $flexFormField) {
-            $dsConfig = $tca['columns'][$flexFormField]['config']['ds'] ?? [];
-            
-            if (!empty($dsConfig)) {
-                // Check if any DS key uses the subtype pattern (e.g., "*,list_type_value")
-                $hasSubtypeDS = false;
-                foreach (array_keys($dsConfig) as $dsKey) {
-                    // Common patterns: "*,plugin_key" or "type,plugin_key" or just "plugin_key"
-                    if (strpos($dsKey, ',') !== false || isset($tca['columns'][$subtypeField]['config']['items'])) {
-                        $hasSubtypeDS = true;
-                        break;
-                    }
-                }
-                
-                // If there are subtype-based DataStructures, include the FlexForm field
-                if ($hasSubtypeDS && !isset($fields[$flexFormField])) {
-                    // Add the FlexForm field configuration if it's not already present
-                    $fields[$flexFormField] = $tca['columns'][$flexFormField] ?? [];
-                }
+
+            if (isset($fields[$fieldName])) {
+                continue;
             }
-        }
-        
-        // Handle traditional subtypes_addlist (deprecated but still supported)
-        $subtypesAddlist = $tca['types'][$type]['subtypes_addlist'] ?? [];
-        if (!empty($subtypesAddlist) && is_array($subtypesAddlist)) {
-            // This would require knowing the actual subtype value, which we don't have here
-            // For general schema purposes, we could include all possible fields from all subtypes
-            foreach ($subtypesAddlist as $subtypeValue => $addFields) {
-                if (!empty($addFields)) {
-                    $addFieldsList = GeneralUtility::trimExplode(',', $addFields, true);
-                    foreach ($addFieldsList as $fieldName) {
-                        if (isset($tca['columns'][$fieldName]) && !isset($fields[$fieldName])) {
-                            $fields[$fieldName] = $tca['columns'][$fieldName];
+
+            $dsConfig = $fieldConfig['config']['ds'] ?? [];
+            if (empty($dsConfig)) {
+                continue;
+            }
+
+            // Expose the field when a DataStructure is configured. With a
+            // record type in hand, prefer matching it against DS identifiers
+            // so we only surface FlexForms relevant to the current record
+            // type. A `ds` value can legitimately be a string (single DS) or
+            // an array keyed by identifier.
+            $shouldInclude = empty($type);
+            if (!$shouldInclude) {
+                if (is_array($dsConfig)) {
+                    foreach (array_keys($dsConfig) as $dsKey) {
+                        if ($dsKey === $type || $dsKey === 'default' || str_contains((string)$dsKey, $type)) {
+                            $shouldInclude = true;
+                            break;
                         }
                     }
+                } else {
+                    // Single DS applies to every record type.
+                    $shouldInclude = true;
                 }
+            }
+
+            if ($shouldInclude) {
+                $fields[$fieldName] = $fieldConfig;
             }
         }
     }
@@ -760,7 +744,7 @@ class TableAccessService implements SingletonInterface
             'descriptionColumn', 'type', 'languageField',
             'transOrigPointerField', 'delete', 'enablecolumns',
             'sortby', 'default_sortby', 'tstamp', 'crdate',
-            'versioningWS', 'origUid', 'searchFields',
+            'versioningWS', 'origUid',
         ];
         
         $controlInfo = [];
@@ -918,18 +902,14 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Get the search fields for a table
+     * Get the search fields for a table using the Schema API.
+     * TYPO3 14 replaced `ctrl.searchFields` with the per-field `searchable`
+     * flag, evaluated by the SearchableSchemaFieldsCollector.
      */
     public function getSearchFields(string $table): array
     {
-        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
-        $searchFields = $ctrl['searchFields'] ?? '';
-        
-        if (empty($searchFields)) {
-            return [];
-        }
-        
-        return GeneralUtility::trimExplode(',', $searchFields, true);
+        return GeneralUtility::makeInstance(\TYPO3\CMS\Core\Schema\SearchableSchemaFieldsCollector::class)
+            ->getFieldNames($table);
     }
     
     /**

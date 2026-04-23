@@ -225,12 +225,8 @@ class NewsSchemaTest extends FunctionalTestCase
             'Should have news_pi1 in FlexForm identifiers');
         
         // Verify the instruction to use GetFlexFormSchema tool
-        $this->assertStringContainsString('Use GetFlexFormSchema tool with these identifiers', $content, 
+        $this->assertStringContainsString('Use GetFlexFormSchema tool with these identifiers', $content,
             'Should provide instruction to use GetFlexFormSchema tool');
-        
-        // Check for ds_pointerField information
-        $this->assertStringContainsString('[ds_pointerField: list_type,CType]', $content, 
-            'Should show ds_pointerField configuration');
     }
 
     /**
@@ -239,42 +235,31 @@ class NewsSchemaTest extends FunctionalTestCase
     public function testGetNewsPluginFlexFormIdentifiers(): void
     {
         $tool = new GetTableSchemaTool();
-        
-        // First, check if News registers as a plugin type
+
+        // TYPO3 14 registers plugins with their own CType. News registers as
+        // "news_pi1" directly.
         $result = $tool->execute([
             'table' => 'tt_content'
         ]);
-        
+
         $this->assertFalse($result->isError);
         $content = $result->content[0]->text;
-        
-        // Look for available types to understand how News plugin is registered
+
         if (preg_match('/AVAILABLE TYPES:(.+?)(?=\n\n|$)/s', $content, $matches)) {
-            $typesSection = $matches[1];
-            
-            // News typically registers as list_type "news_pi1" rather than a direct CType
-            if (strpos($typesSection, 'list') !== false) {
-                // List type exists, which is what News uses
-                $this->assertStringContainsString('list', $typesSection, 'List type should be available for plugins');
-            }
+            $this->assertStringContainsString('news_pi1', $matches[1],
+                'news_pi1 CType should be available for the News plugin');
         }
-        
-        // Also check if the schema mentions list_type field for list content
+
+        // Inspecting the news_pi1 sub-schema should include the pi_flexform field.
         $result = $tool->execute([
             'table' => 'tt_content',
-            'type' => 'list'
+            'type' => 'news_pi1',
         ]);
-        
-        if (!$result->isError) {
-            $content = $result->content[0]->text;
-            
-            // List content should have list_type field
-            if (strpos($content, 'list_type') !== false) {
-                // Check that list_type is properly typed
-                $this->assertMatchesRegularExpression('/list_type\s*\([^)]*\):\s*select/i', $content, 
-                    'list_type should be a select field');
-            }
-        }
+
+        $this->assertFalse($result->isError);
+        $content = $result->content[0]->text;
+        $this->assertStringContainsString('pi_flexform', $content,
+            'news_pi1 schema should expose pi_flexform field');
     }
 
     protected function setUpBackendUserWithWorkspace(int $uid): void
