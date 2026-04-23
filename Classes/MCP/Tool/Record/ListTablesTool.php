@@ -67,10 +67,9 @@ class ListTablesTool extends AbstractRecordTool
                 'readOnly' => $accessInfo['read_only'],
                 'type' => $this->getTableType($table),
                 'workspace_capable' => $accessInfo['workspace_capable'],
-                'workspace_info' => $accessInfo['workspace_capable'] 
-                    ? 'Workspace-capable' 
+                'workspace_info' => $accessInfo['workspace_capable']
+                    ? 'Workspace-capable'
                     : 'Not workspace-capable',
-                'restrictions' => $accessInfo['restrictions'],
             ];
         }
         
@@ -136,12 +135,7 @@ class ListTablesTool extends AbstractRecordTool
                 if ($tableInfo['readOnly']) {
                     $result .= " [READ-ONLY]";
                 }
-                
-                // Show any restrictions
-                if (!empty($tableInfo['restrictions'])) {
-                    $result .= " [" . implode(', ', $tableInfo['restrictions']) . "]";
-                }
-                
+
                 $result .= "\n";
             }
             

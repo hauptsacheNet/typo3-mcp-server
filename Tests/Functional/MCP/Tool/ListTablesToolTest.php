@@ -179,18 +179,13 @@ class ListTablesToolTest extends FunctionalTestCase
     public function testTableDescriptions(): void
     {
         $tool = new ListTablesTool();
-        
+
         $result = $tool->execute([]);
-        
+
         $this->assertFalse($result->isError);
-        
+
         $content = $result->content[0]->text;
-        
-        // ⚠️ POTENTIAL ISSUE: The tool shows internal TCA display conditions 
-        // instead of user-friendly descriptions. This might not be ideal for LLM usage.
-        $this->assertStringContainsString('Field \'', $content);
-        $this->assertStringContainsString('has display conditions', $content);
-        
+
         // Verify table names contain descriptive labels
         $this->assertStringContainsString('pages (Page)', $content);
         $this->assertStringContainsString('tt_content (Page Content)', $content);
