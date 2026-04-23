@@ -625,23 +625,63 @@ class WriteTableTool extends AbstractRecordTool
     {
         // Resolve the live UID to workspace UID
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
-        
+
+        // Idempotency: if a delete placeholder already exists in the current workspace,
+        // skip DataHandler. Re-entering process_cmdmap on an already-placeholdered record
+        // can undo the placeholder (placeholder count goes 1 → 0) and, in cascade-aware
+        // configurations like Gridelements, can wipe sibling drafts as a side effect.
+        // Returning the same shape as a fresh delete keeps callers (e.g. an LLM retrying
+        // after a transient error) safe.
+        if ($this->hasWorkspaceDeletePlaceholder($table, $uid)) {
+            return $this->createJsonResult([
+                'action' => 'delete',
+                'table' => $table,
+                'uid' => $uid,
+            ]);
+        }
+
         // Delete the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $dataHandler->BE_USER = $GLOBALS['BE_USER'];
         $dataHandler->start([], [$table => [$workspaceUid => ['delete' => 1]]]);
         $dataHandler->process_cmdmap();
-        
+
         // Check for errors
         if ($dataHandler->errorLog) {
             return $this->createErrorResult('Error deleting record: ' . implode(', ', $dataHandler->errorLog));
         }
-        
+
         return $this->createJsonResult([
             'action' => 'delete',
             'table' => $table,
             'uid' => $uid, // Return the live UID that was passed in
         ]);
+    }
+
+    /**
+     * Check whether a delete placeholder (t3ver_state=2) already exists for the live UID
+     * in the BE user's current workspace. Used to make deleteRecord idempotent.
+     */
+    protected function hasWorkspaceDeletePlaceholder(string $table, int $liveUid): bool
+    {
+        $wsid = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        if ($wsid === 0 || !$this->isTableWorkspaceCapable($table)) {
+            return false;
+        }
+
+        $qb = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
+        $qb->getRestrictions()->removeAll();
+        $count = (int)$qb->count('uid')
+            ->from($table)
+            ->where(
+                $qb->expr()->eq('t3ver_oid', $qb->createNamedParameter($liveUid, ParameterType::INTEGER)),
+                $qb->expr()->eq('t3ver_wsid', $qb->createNamedParameter($wsid, ParameterType::INTEGER)),
+                $qb->expr()->eq('t3ver_state', $qb->createNamedParameter(2, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchOne();
+
+        return $count > 0;
     }
     
     /**
