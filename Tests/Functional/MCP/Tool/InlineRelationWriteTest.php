@@ -593,4 +593,70 @@ class InlineRelationWriteTest extends FunctionalTestCase
         $this->assertTrue($result->isError);
         $this->assertStringContainsString('must contain only positive integer UIDs', $result->jsonSerialize()['content'][0]->text);
     }
+
+    /**
+     * Test patching an existing embedded inline relation by uid.
+     *
+     * Regression: payloads like `assets: [{uid: <existing>, title: "patched"}]` previously
+     * ignored the uid and inserted a fresh sys_file_reference with uid_local=0 (broken),
+     * leaving the original reference orphaned in the workspace.
+     */
+    public function testUpdateExistingEmbeddedRelationByUid(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Page + content element with one file reference (sys_file uid=1 from fixture)
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => ['title' => 'Page for ref-update', 'doktype' => 1],
+        ]);
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'header' => 'Content with file reference',
+                'CType' => 'textmedia',
+                'assets' => [
+                    ['uid_local' => 1, 'title' => 'original'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $contentUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Read back to capture the sys_file_reference uid
+        $result = $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid]);
+        $record = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertCount(1, $record['assets']);
+        $originalRefUid = (int)$record['assets'][0]['uid'];
+        $this->assertSame(1, (int)$record['assets'][0]['uid_local']);
+        $this->assertSame('original', $record['assets'][0]['title']);
+
+        // Patch the existing reference by passing uid + new field value
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => $contentUid,
+            'data' => [
+                'assets' => [
+                    ['uid' => $originalRefUid, 'title' => 'patched'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Verify: same reference uid, title patched, uid_local preserved (not reset to 0)
+        $result = $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid]);
+        $record = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertCount(1, $record['assets'], 'No duplicate reference should be created');
+        $this->assertSame($originalRefUid, (int)$record['assets'][0]['uid'], 'Same sys_file_reference uid expected');
+        $this->assertSame('patched', $record['assets'][0]['title']);
+        $this->assertSame(1, (int)$record['assets'][0]['uid_local'], 'uid_local must not be wiped to 0');
+    }
 }

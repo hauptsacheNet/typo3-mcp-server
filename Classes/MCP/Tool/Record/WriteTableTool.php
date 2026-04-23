@@ -1108,32 +1108,52 @@ class WriteTableTool extends AbstractRecordTool
             if (!is_array($recordData)) {
                 continue;
             }
-            
-            // Create new ID for the inline record
-            $newId = 'NEW' . uniqid() . '_' . $index;
-            
+
+            // Existing record carries a numeric uid → update in place instead of inserting a new row.
+            // Without this, payloads like image: [{uid: 42, alternative: "..."}] silently created a
+            // broken sys_file_reference with uid_local=0 instead of patching the existing one.
+            $existingUid = (isset($recordData['uid']) && is_numeric($recordData['uid']) && (int)$recordData['uid'] > 0)
+                ? (int)$recordData['uid']
+                : null;
+            unset($recordData['uid']);
+
             // Don't set the foreign field here - it will be handled by RelationHandler
             // Remove it if it was accidentally included
             unset($recordData[$foreignField]);
-            $recordData['pid'] = $pid;
 
-            // Set foreign_match_fields (e.g., tablenames/fieldname for sys_file_reference)
-            if (!empty($config['foreign_match_fields'])) {
-                foreach ($config['foreign_match_fields'] as $matchField => $matchValue) {
-                    $recordData[$matchField] = $matchValue;
+            if ($existingUid === null) {
+                // New record: pid + foreign_match_fields are required for proper insertion
+                $recordData['pid'] = $pid;
+
+                // Set foreign_match_fields (e.g., tablenames/fieldname for sys_file_reference)
+                if (!empty($config['foreign_match_fields'])) {
+                    foreach ($config['foreign_match_fields'] as $matchField => $matchValue) {
+                        $recordData[$matchField] = $matchValue;
+                    }
                 }
-            }
 
-            // If we have a sorting field, set it
-            if (isset($config['foreign_sortby'])) {
-                $recordData[$config['foreign_sortby']] = ($index + 1) * 256;
+                // If we have a sorting field, set it
+                if (isset($config['foreign_sortby'])) {
+                    $recordData[$config['foreign_sortby']] = ($index + 1) * 256;
+                }
+
+                $key = 'NEW' . uniqid() . '_' . $index;
+            } else {
+                // Update path: target the workspace version so DataHandler patches the existing
+                // reference instead of touching the live record outside the workspace overlay.
+                $key = $this->resolveToWorkspaceUid($foreignTable, $existingUid);
+
+                if (empty($recordData)) {
+                    // Caller only sent a uid with no field changes — nothing to patch.
+                    continue;
+                }
             }
 
             // Add to data map
             if (!isset($dataMap[$foreignTable])) {
                 $dataMap[$foreignTable] = [];
             }
-            $dataMap[$foreignTable][$newId] = $recordData;
+            $dataMap[$foreignTable][$key] = $recordData;
         }
     }
     
