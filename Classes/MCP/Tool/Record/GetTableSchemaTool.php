@@ -89,9 +89,6 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         $result .= "Type: content\n";
         $result .= "Read-Only: " . ($accessInfo['read_only'] ? "Yes" : "No") . "\n";
-        if (!empty($accessInfo['restrictions'])) {
-            $result .= "Restrictions: " . implode(', ', $accessInfo['restrictions']) . "\n";
-        }
         $result .= "\n";
         
         // Add control fields section - only the most important ones
