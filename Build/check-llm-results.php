@@ -131,10 +131,16 @@ foreach ($testCases as $name => $result) {
 
 echo "\n" . str_repeat('=', 80) . "\n";
 
-// Fail if no tests actually executed (e.g. missing API key caused all skips)
+// Distinguish "no API key available" (expected on fork PRs — GitHub does not share
+// secrets with workflows triggered from forks) from "API key set but nothing ran"
+// (real CI/test problem). Only the latter should fail the job.
 $executedCount = count(array_filter($testCases, fn($r) => array_diff($r['models'], ['SKIP'])));
 if ($executedCount === 0) {
-    fwrite(STDERR, "\033[31mNo LLM tests were executed (all skipped). Check OPENROUTER_API_KEY.\033[0m\n");
+    if (getenv('OPENROUTER_API_KEY') === false || getenv('OPENROUTER_API_KEY') === '') {
+        fwrite(STDERR, "\033[33mNo LLM tests were executed (no OPENROUTER_API_KEY available — fork PR or local run without secret). Skipping majority-pass check.\033[0m\n");
+        exit(0);
+    }
+    fwrite(STDERR, "\033[31mNo LLM tests were executed (all skipped) despite OPENROUTER_API_KEY being set. Check test runner.\033[0m\n");
     exit(1);
 }
 
