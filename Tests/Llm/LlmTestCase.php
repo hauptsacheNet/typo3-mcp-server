@@ -59,9 +59,18 @@ abstract class LlmTestCase extends FunctionalTestCase
     /** @var string The provider being used */
     protected string $llmProvider = '';
 
+    /** Counters tracked per test attempt and written to .Build/llm-stats. */
+    protected int $llmCallCount = 0;
+    protected int $toolCallCount = 0;
+    protected int $toolErrorCount = 0;
+
     protected function setUp(): void
     {
         parent::setUp();
+
+        $this->llmCallCount = 0;
+        $this->toolCallCount = 0;
+        $this->toolErrorCount = 0;
 
         $this->initializeLlmClient();
 
@@ -73,6 +82,30 @@ abstract class LlmTestCase extends FunctionalTestCase
 
         // Initialize language service
         $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('en');
+    }
+
+    protected function tearDown(): void
+    {
+        $this->writeTestStats();
+        parent::tearDown();
+    }
+
+    private function writeTestStats(): void
+    {
+        $dir = __DIR__ . '/../../.Build/llm-stats';
+        if (!is_dir($dir) && !@mkdir($dir, 0777, true) && !is_dir($dir)) {
+            return;
+        }
+        $model = $this->dataName() !== null ? (string)$this->dataName() : '';
+        $key = sha1(static::class . '::' . $this->name() . '::' . $model);
+        file_put_contents($dir . '/' . $key . '.json', json_encode([
+            'class' => static::class,
+            'test' => $this->name(),
+            'model' => $model,
+            'llm_calls' => $this->llmCallCount,
+            'tool_calls' => $this->toolCallCount,
+            'tool_errors' => $this->toolErrorCount,
+        ]));
     }
 
     /**
@@ -194,6 +227,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             $defaults['model'] = $this->llmModel;
         }
 
+        $this->llmCallCount++;
         $this->lastResponse = $this->llmClient->complete(
             $prompt,
             $tools,
@@ -429,19 +463,21 @@ abstract class LlmTestCase extends FunctionalTestCase
      */
     protected function executeToolCall(array $toolCall): array
     {
+        $this->toolCallCount++;
         $toolRegistry = GeneralUtility::makeInstance(ToolRegistry::class);
         $tool = $toolRegistry->getTool($toolCall['name']);
-        
+
         if (!$tool) {
+            $this->toolErrorCount++;
             return [
                 'error' => "Tool '{$toolCall['name']}' not found",
                 'content' => "Error: Tool not found"
             ];
         }
-        
+
         try {
             $result = $tool->execute($toolCall['arguments'] ?? []);
-            
+
             // Convert CallToolResult to simple array
             $content = '';
             foreach ($result->content as $contentItem) {
@@ -451,17 +487,23 @@ abstract class LlmTestCase extends FunctionalTestCase
                     $content .= json_encode($contentItem);
                 }
             }
-            
+
             // Check if content indicates an error even if isError is false
-            $hasErrorContent = str_starts_with($content, 'Error:') || 
+            $hasErrorContent = str_starts_with($content, 'Error:') ||
                               str_contains($content, 'authentication') ||
                               str_contains($content, 'not properly initialized');
-            
+
+            $isError = $result->isError || $hasErrorContent;
+            if ($isError) {
+                $this->toolErrorCount++;
+            }
+
             return [
                 'content' => $content,
-                'isError' => $result->isError || $hasErrorContent
+                'isError' => $isError
             ];
         } catch (\Exception $e) {
+            $this->toolErrorCount++;
             return [
                 'error' => $e->getMessage(),
                 'content' => "Error: " . $e->getMessage()
@@ -497,6 +539,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             $defaults['model'] = $this->llmModel;
         }
 
+        $this->llmCallCount++;
         $this->lastResponse = $this->llmClient->completeWithHistory(
             $this->lastPrompt,
             $previousResponse,

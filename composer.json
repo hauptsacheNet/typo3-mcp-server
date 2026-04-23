@@ -55,6 +55,7 @@
             "paratest -c phpunit.xml.dist"
         ],
         "test:llm": [
+            "rm -rf .Build/llm-stats",
             "paratest -c Tests/Llm/phpunit-llm.xml --testdox --no-progress -p 5 --log-junit .Build/llm-results.xml || true",
             "php Build/check-llm-results.php --min-pass=3"
         ],
