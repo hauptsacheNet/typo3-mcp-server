@@ -614,7 +614,15 @@ abstract class LlmTestCase extends FunctionalTestCase
                     $args = $targetCalls[0]['arguments'] ?? [];
                     $action = $args['action'] ?? '';
                     $data = $this->extractWriteData($args);
-                    if (in_array($action, ['create', 'update', 'translate']) && empty($data)) {
+                    $hasPosition = !empty($args['position']);
+                    // Mirrors WriteTableTool validation: create/translate always
+                    // require data; update accepts position-only (reorder).
+                    $needsData = match ($action) {
+                        'create', 'translate' => empty($data),
+                        'update' => empty($data) && !$hasPosition,
+                        default => false,
+                    };
+                    if ($needsData) {
                         $currentResponse = $this->executeAndContinue($currentResponse);
                         continue;
                     }
