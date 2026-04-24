@@ -132,15 +132,18 @@ class ReadTableIntegerConversionTest extends FunctionalTestCase
     }
     
     /**
-     * Test fields with eval=int are always converted
+     * Test fields with eval=int are always converted.
+     *
+     * The control-only 'sorting' field is TYPO3-managed and not writable via
+     * WriteTableTool; the read-side conversion for it is what we verify here.
      */
     public function testFieldsWithEvalInt(): void
     {
         // Tools will automatically switch to optimal workspace
         $writeTool = new WriteTableTool();
         $readTool = new ReadTableTool();
-        
-        // Create content with sorting (has eval=int)
+
+        // Create a plain content element — sorting is assigned automatically by TYPO3.
         $result = $writeTool->execute([
             'table' => 'tt_content',
             'action' => 'create',
@@ -148,26 +151,25 @@ class ReadTableIntegerConversionTest extends FunctionalTestCase
             'data' => [
                 'header' => 'Test Sorting',
                 'CType' => 'text',
-                'sorting' => 256 // Integer field with eval=int
             ]
         ]);
-        
+
         $this->assertFalse($result->isError);
         $createdRecord = json_decode($result->content[0]->text);
         $contentUid = $createdRecord->uid;
-        
+
         // Read it back
         $result = $readTool->execute([
             'table' => 'tt_content',
             'uid' => $contentUid
         ]);
-        
+
         $this->assertFalse($result->isError);
         $readResult = json_decode($result->content[0]->text);
         $content = $readResult->records[0];
-        
+
         // sorting should be integer due to eval=int
         $this->assertIsInt($content->sorting, 'sorting should be integer due to eval=int');
-        $this->assertEquals(256, $content->sorting);
+        $this->assertGreaterThan(0, $content->sorting);
     }
 }
