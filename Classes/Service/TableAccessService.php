@@ -603,6 +603,17 @@ class TableAccessService implements SingletonInterface
         // Check TSconfig field visibility (applies to all users including admins)
         $TSconfig = BackendUtility::getPagesTSconfig(0);
 
+        // Check if field is explicitly enabled or disabled via TCEFORM.[table].[field].types.[type].disabled
+        if (isset($TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['types.'][$fieldType . '.']['disabled'])) {
+            $fieldDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['types.'][$fieldType . '.']['disabled'] ?? '';
+            if ($fieldDisabled === '1' || $fieldDisabled === 1 || $fieldDisabled === true) {
+                return false;
+            }
+            if ($fieldDisabled === '0' || $fieldDisabled === 0   || $fieldDisabled === false) {
+                return true;
+            }
+        }
+        
         // Check if field is globally disabled via TCEFORM.[table].[field].disabled
         $fieldDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['disabled'] ?? '';
         if ($fieldDisabled === '1' || $fieldDisabled === 1 || $fieldDisabled === true) {
