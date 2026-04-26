@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Event\AfterRecordReadEvent;
+use Hn\McpServer\Event\BeforeRecordReadEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Mcp\Types\CallToolResult;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Core\Database\Connection;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
@@ -273,14 +276,6 @@ class ReadTableTool extends AbstractRecordTool
             $queryBuilder->andWhere($condition);
         }
 
-        // Apply file-mount restriction for non-admin users when reading sys_file
-        if ($table === 'sys_file') {
-            $mountRestriction = $this->tableAccessService->buildFileMountRestriction($queryBuilder);
-            if ($mountRestriction !== null) {
-                $queryBuilder->andWhere($mountRestriction);
-            }
-        }
-
         // Apply default sorting from TCA
         $this->applyDefaultSorting($queryBuilder, $table);
 
@@ -345,13 +340,10 @@ class ReadTableTool extends AbstractRecordTool
             $countQueryBuilder->andWhere($condition);
         }
 
-        // Apply file-mount restriction for non-admin users when counting sys_file
-        if ($table === 'sys_file') {
-            $countMountRestriction = $this->tableAccessService->buildFileMountRestriction($countQueryBuilder);
-            if ($countMountRestriction !== null) {
-                $countQueryBuilder->andWhere($countMountRestriction);
-            }
-        }
+        // Allow listeners to add restrictions (e.g. file mounts, tenant scopes)
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $countQueryBuilder, 'count'));
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select'));
 
         try {
             $totalCount = $countQueryBuilder->executeQuery()->fetchOne();
@@ -365,6 +357,11 @@ class ReadTableTool extends AbstractRecordTool
         } catch (\Doctrine\DBAL\Exception $e) {
             throw new DatabaseException('select', $table, $e);
         }
+
+        // Allow listeners to enrich or redact rows before post-processing
+        $afterEvent = new AfterRecordReadEvent($table, $records, 'top');
+        $eventDispatcher->dispatch($afterEvent);
+        $records = $afterEvent->getRecords();
 
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
@@ -833,9 +830,12 @@ class ReadTableTool extends AbstractRecordTool
         $foreignMatchFields = $fieldConfig['config']['foreign_match_fields'] ?? [];
         $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy, $foreignMatchFields);
 
-        // For sys_file_reference, enrich with file metadata so LLMs know what file is referenced
-        if ($foreignTable === 'sys_file_reference' && !empty($relatedRecords)) {
-            $relatedRecords = $this->enrichFileReferences($relatedRecords);
+        // Allow listeners to enrich or redact inline children (e.g. attach file metadata)
+        if (!empty($relatedRecords)) {
+            $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+            $afterEvent = new AfterRecordReadEvent($foreignTable, $relatedRecords, 'inline');
+            $eventDispatcher->dispatch($afterEvent);
+            $relatedRecords = $afterEvent->getRecords();
         }
 
         // Group related records by parent record
@@ -870,75 +870,6 @@ class ReadTableTool extends AbstractRecordTool
                 }
             }
         }
-    }
-
-    /**
-     * Enrich sys_file_reference records with file metadata from sys_file.
-     * Adds file_name, file_identifier, and public_url so LLMs know what file is referenced.
-     */
-    protected function enrichFileReferences(array $records): array
-    {
-        // Collect unique sys_file UIDs from uid_local
-        $fileUids = [];
-        foreach ($records as $record) {
-            $fileUid = (int)($record['uid_local'] ?? 0);
-            if ($fileUid > 0) {
-                $fileUids[$fileUid] = true;
-            }
-        }
-
-        if (empty($fileUids)) {
-            return $records;
-        }
-
-        // Fetch file metadata in a single query
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('sys_file');
-        $queryBuilder->getRestrictions()->removeAll();
-
-        $fileRecords = $queryBuilder
-            ->select('uid', 'name', 'identifier', 'storage', 'type', 'mime_type', 'size')
-            ->from('sys_file')
-            ->where(
-                $queryBuilder->expr()->in(
-                    'uid',
-                    $queryBuilder->createNamedParameter(array_keys($fileUids), Connection::PARAM_INT_ARRAY)
-                )
-            )
-            ->executeQuery()
-            ->fetchAllAssociative();
-
-        // Index by uid
-        $fileMap = [];
-        foreach ($fileRecords as $fileRecord) {
-            $fileMap[(int)$fileRecord['uid']] = $fileRecord;
-        }
-
-        // Resolve public URLs via ResourceFactory
-        $resourceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class);
-
-        // Enrich each file reference record
-        foreach ($records as &$record) {
-            $fileUid = (int)($record['uid_local'] ?? 0);
-            if ($fileUid > 0 && isset($fileMap[$fileUid])) {
-                $file = $fileMap[$fileUid];
-                $record['file_name'] = $file['name'];
-                $record['file_identifier'] = $file['identifier'];
-                $record['file_mime_type'] = $file['mime_type'];
-                $record['file_size'] = (int)$file['size'];
-
-                // Try to resolve public URL
-                try {
-                    $fileObject = $resourceFactory->getFileObject($fileUid);
-                    $record['public_url'] = $fileObject->getPublicUrl();
-                } catch (\Exception $e) {
-                    // File might not be accessible
-                    $record['public_url'] = null;
-                }
-            }
-        }
-
-        return $records;
     }
 
     /**
@@ -988,9 +919,11 @@ class ReadTableTool extends AbstractRecordTool
             );
         }
 
+        // Allow listeners to add restrictions to inline-child lookups too
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select'));
+
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
-
-
 
         // Process records for workspace transparency
         $processedRecords = [];

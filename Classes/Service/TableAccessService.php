@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use Doctrine\DBAL\ArrayParameterType;
+use Hn\McpServer\Event\ModifyAvailableFieldsEvent;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
-use TYPO3\CMS\Core\Database\Query\Expression\CompositeExpression;
-use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -113,7 +113,6 @@ class TableAccessService implements SingletonInterface
         $info = [
             'accessible' => false,
             'reasons' => [],
-            'restrictions' => [],
             'workspace_capable' => false,
             'read_only' => false,
             'permissions' => [
@@ -159,17 +158,10 @@ class TableAccessService implements SingletonInterface
         // Check if table is read-only
         $info['read_only'] = $this->isTableReadOnly($table);
         if ($info['read_only']) {
-            $info['restrictions'][] = 'Table is read-only';
             $info['permissions']['write'] = false;
             $info['permissions']['delete'] = false;
         }
-        
-        // Check field restrictions
-        $fieldRestrictions = $this->getFieldRestrictions($table);
-        if (!empty($fieldRestrictions)) {
-            $info['restrictions'] = array_merge($info['restrictions'], $fieldRestrictions);
-        }
-        
+
         // If we made it here, the table is accessible
         $info['accessible'] = true;
         
@@ -298,8 +290,11 @@ class TableAccessService implements SingletonInterface
                 unset($fields[$fieldName]);
             }
         }
-        
-        return $fields;
+
+        // Allow extensions to add, remove, or reconfigure fields
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $event = $eventDispatcher->dispatch(new ModifyAvailableFieldsEvent($table, $type, $fields));
+        return $event->getFields();
     }
     
     /**
@@ -378,29 +373,6 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Get restrictions for a table
-     * 
-     * @param string $table Table name
-     * @return array List of restrictions
-     */
-    public function getTableRestrictions(string $table): array
-    {
-        $restrictions = [];
-        
-        // Check if entire table is read-only
-        if ($this->isTableReadOnly($table)) {
-            $restrictions[] = 'Table is read-only';
-        }
-        
-        // Get field-level restrictions
-        $fieldRestrictions = $this->getFieldRestrictions($table);
-        $restrictions = array_merge($restrictions, $fieldRestrictions);
-        
-        return $restrictions;
-    }
-    
-    
-    /**
      * Get the file mount paths accessible to the current user.
      * Each entry is ['storage' => int, 'path' => string] where path is the folder prefix
      * (e.g. "/user_upload/") relative to the storage root.
@@ -433,55 +405,6 @@ class TableAccessService implements SingletonInterface
             $mounts[] = ['storage' => $storageUid, 'path' => $path];
         }
         return $mounts;
-    }
-
-    /**
-     * Build a WHERE expression to restrict a sys_file query to files within the current user's
-     * accessible file mounts. Returns null when no restriction applies (admin user).
-     * Returns an always-false expression when user has no mounts at all.
-     */
-    public function buildFileMountRestriction(QueryBuilder $queryBuilder): ?CompositeExpression
-    {
-        $isAdmin = false;
-        $mounts = $this->getAccessibleFileMounts($isAdmin);
-        if ($isAdmin) {
-            return null;
-        }
-        if (empty($mounts)) {
-            // No mounts → user cannot see any files
-            return $queryBuilder->expr()->and('1 = 0');
-        }
-
-        // Group mount paths by storage for a cleaner query structure
-        $perStorage = [];
-        foreach ($mounts as $mount) {
-            $perStorage[$mount['storage']][] = $mount['path'];
-        }
-
-        $storageExpressions = [];
-        foreach ($perStorage as $storageUid => $paths) {
-            $pathExpressions = [];
-            foreach ($paths as $path) {
-                $normalized = rtrim($path, '/') . '/';
-                // Match files whose identifier begins with this mount path (including subfolders)
-                $pathExpressions[] = $queryBuilder->expr()->like(
-                    'identifier',
-                    $queryBuilder->createNamedParameter(
-                        $queryBuilder->escapeLikeWildcards($normalized) . '%'
-                    )
-                );
-            }
-
-            $storageExpressions[] = $queryBuilder->expr()->and(
-                $queryBuilder->expr()->eq(
-                    'storage',
-                    $queryBuilder->createNamedParameter($storageUid, \Doctrine\DBAL\ParameterType::INTEGER)
-                ),
-                $queryBuilder->expr()->or(...$pathExpressions)
-            );
-        }
-
-        return $queryBuilder->expr()->or(...$storageExpressions);
     }
 
     /**
@@ -546,27 +469,6 @@ class TableAccessService implements SingletonInterface
             if (!$isWorkspaceCapable && !$isAdditionalReadOnly) {
                 return true;
             }
-        }
-        
-        // Specific dangerous system tables that should never be accessed via MCP
-        $restrictedTables = [
-            'sys_log', // System log - read-only, managed by system
-            'sys_history', // Change history - read-only, managed by system
-            'sys_refindex', // Reference index - managed by system
-            'sys_registry', // System registry - internal configuration
-            'sys_lockedrecords', // Lock management - managed by system
-            'be_sessions', // Backend sessions - security risk
-            'fe_sessions', // Frontend sessions - security risk
-            'cache_treelist', // Cache tables - managed by system
-            'cache_pages', // Cache tables - managed by system
-            'cache_pagesection', // Cache tables - managed by system
-            'cache_hash', // Cache tables - managed by system
-            'sys_be_shortcuts', // User shortcuts - user-specific
-            'sys_news', // System news - admin-only
-        ];
-        
-        if (in_array($table, $restrictedTables)) {
-            return true;
         }
         
         // Check for system group tables with workspace support
@@ -665,34 +567,6 @@ class TableAccessService implements SingletonInterface
         }
         
         return $permissions;
-    }
-    
-    /**
-     * Get field restrictions for a table
-     */
-    protected function getFieldRestrictions(string $table): array
-    {
-        $restrictions = [];
-        $tca = $GLOBALS['TCA'][$table] ?? [];
-        
-        if (empty($tca['columns'])) {
-            return $restrictions;
-        }
-        
-        foreach ($tca['columns'] as $fieldName => $fieldConfig) {
-            // Check exclude fields
-            if (!empty($fieldConfig['exclude']) && !$this->getBackendUser()->check('non_exclude_fields', $table . ':' . $fieldName)) {
-                $restrictions[] = "Field '{$fieldName}' is excluded for current user";
-            }
-            
-            // Check displayCond
-            if (!empty($fieldConfig['displayCond'])) {
-                // This is simplified - displayCond evaluation is complex
-                $restrictions[] = "Field '{$fieldName}' has display conditions";
-            }
-        }
-        
-        return $restrictions;
     }
     
     /**
