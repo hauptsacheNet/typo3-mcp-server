@@ -8,21 +8,33 @@ use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Hn\McpServer\Tests\Functional\Fixtures\TestDataBuilder;
 use Hn\McpServer\Tests\Functional\Traits\McpAssertionsTrait;
+use Hn\McpServer\Tests\Functional\Traits\PluginContentTrait;
 use Mcp\Types\TextContent;
 
 class ReadTableToolTest extends AbstractFunctionalTest
 {
     use McpAssertionsTrait;
-    
+    use PluginContentTrait;
+
     private ReadTableTool $tool;
     private TestDataBuilder $data;
-    
+
     protected function setUp(): void
     {
         parent::setUp();
-        
+
         $this->tool = new ReadTableTool();
         $this->data = new TestDataBuilder();
+
+        // Plugin row used by testFieldFilteringBasedOnCType. Inserted
+        // programmatically because the tt_content shape differs between
+        // TYPO3 13 (CType=list + list_type) and TYPO3 14 (CType=plugin).
+        $this->insertPluginContentElement(
+            uid: 105,
+            pid: 6,
+            pluginIdentifier: 'news_pi1',
+            extra: ['header' => 'Contact Form', 'bodytext' => 'Get in touch']
+        );
     }
 
     /**
@@ -342,8 +354,8 @@ class ReadTableToolTest extends AbstractFunctionalTest
         // For textmedia, bodytext should be present if it's in the showitem
         $this->assertArrayHasKey('bodytext', $textmediaRecord);
         
-        // Test news plugin record (UID 105). TYPO3 14 registers plugins with
-        // their own CType, replacing the former list/list_type pairing.
+        // Test plugin record (UID 105). The CType differs between TYPO3 13
+        // (CType=list, list_type=news_pi1) and TYPO3 14 (CType=news_pi1).
         $result = $tool->execute([
             'table' => 'tt_content',
             'uid' => 105,
@@ -354,7 +366,8 @@ class ReadTableToolTest extends AbstractFunctionalTest
         $data = json_decode($result->content[0]->text, true);
         $pluginRecord = $data['records'][0];
 
-        $this->assertEquals('news_pi1', $pluginRecord['CType']);
+        $expectedCType = \Hn\McpServer\Service\TableAccessService::hasPluginSubtypes() ? 'list' : 'news_pi1';
+        $this->assertEquals($expectedCType, $pluginRecord['CType']);
 
         $commonFields = ['uid', 'pid', 'CType', 'header', 'sorting', 'tstamp', 'crdate'];
         foreach ($commonFields as $field) {
@@ -367,7 +380,7 @@ class ReadTableToolTest extends AbstractFunctionalTest
         $this->assertContains('bodytext', $textmediaFields, "Textmedia should have bodytext");
 
         $this->assertLessThan(100, count($textmediaFields), "Too many fields returned for textmedia");
-        $this->assertLessThan(100, count($pluginFields), "Too many fields returned for news_pi1 plugin");
+        $this->assertLessThan(100, count($pluginFields), "Too many fields returned for the plugin");
     }
 
     /**

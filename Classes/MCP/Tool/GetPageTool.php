@@ -641,28 +641,21 @@ class GetPageTool extends AbstractRecordTool
                         }
                         break;
 
+                    case 'list':
+                        // TYPO3 13: plugins use the dedicated "list" CType plus a
+                        // `list_type` subtype field. (Removed in TYPO3 14.)
+                        if (!empty($element['list_type'])) {
+                            $this->renderPluginInfo($result, $element, $element['list_type']);
+                        }
+                        break;
+
                     default:
-                        // TYPO3 14 removed the dedicated "list" CType: plugins are
-                        // now registered with their own CType directly. Surface
-                        // plugin information whenever the element looks like a
-                        // plugin (i.e. carries a FlexForm payload or an unknown
-                        // CType outside the core content element set).
+                        // TYPO3 14 (and v13 plugins registered directly as CType):
+                        // plugins carry their own CType. Surface plugin information
+                        // whenever the element looks like a plugin (carries a
+                        // FlexForm payload or an unknown CType outside the core set).
                         if (!empty($element['pi_flexform']) || $this->isPluginCType($cType)) {
-                            $pluginName = $this->getPluginLabel($cType);
-                            $result .= "  Plugin: " . $pluginName . " [" . $cType . "]\n";
-
-                            $pluginTable = $this->getPluginDataTable($cType);
-                            if ($pluginTable) {
-                                $isWorkspaceCapable = $this->isTableWorkspaceCapable($pluginTable);
-                                if (!$isWorkspaceCapable) {
-                                    $result .= "  ⚠️  Note: This plugin's data table (" . $pluginTable . ") is not workspace-capable\n";
-                                    $result .= "  💡 Tip: Look for record storage folders (doktype=254) to find and edit the actual records\n";
-                                }
-                            }
-
-                            if (!empty($element['pi_flexform'])) {
-                                $result .= "  Has configuration (FlexForm)\n";
-                            }
+                            $this->renderPluginInfo($result, $element, $cType);
                         }
                         break;
                 }
@@ -830,14 +823,45 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
-     * Get a human-readable label for a plugin CType
+     * Append plugin info (label, data table, FlexForm presence) to the output
+     * for a given plugin identifier. The identifier is the plugin's `list_type`
+     * value on TYPO3 13 (CType=list) and the plugin's own CType on v14.
      */
-    protected function getPluginLabel(string $cType): string
+    protected function renderPluginInfo(string &$result, array $element, string $pluginIdentifier): void
     {
-        if (isset($GLOBALS['TCA']['tt_content']['columns']['CType']['config']['items'])) {
-            foreach ($GLOBALS['TCA']['tt_content']['columns']['CType']['config']['items'] as $item) {
-                if ((isset($item['value']) && $item['value'] === $cType) ||
-                    (isset($item[1]) && $item[1] === $cType)) {
+        $pluginName = $this->getPluginLabel($pluginIdentifier);
+        $result .= "  Plugin: " . $pluginName . " [" . $pluginIdentifier . "]\n";
+
+        $pluginTable = $this->getPluginDataTable($pluginIdentifier);
+        if ($pluginTable) {
+            $isWorkspaceCapable = $this->isTableWorkspaceCapable($pluginTable);
+            if (!$isWorkspaceCapable) {
+                $result .= "  ⚠️  Note: This plugin's data table (" . $pluginTable . ") is not workspace-capable\n";
+                $result .= "  💡 Tip: Look for record storage folders (doktype=254) to find and edit the actual records\n";
+            }
+        }
+
+        if (!empty($element['pi_flexform'])) {
+            $result .= "  Has configuration (FlexForm)\n";
+        }
+    }
+
+    /**
+     * Get a human-readable label for a plugin identifier. Looks up the CType
+     * items first; on TYPO3 13 falls back to the `list_type` items because
+     * plugins are registered there.
+     */
+    protected function getPluginLabel(string $pluginIdentifier): string
+    {
+        $itemSources = [$GLOBALS['TCA']['tt_content']['columns']['CType']['config']['items'] ?? []];
+        if (TableAccessService::hasPluginSubtypes()) {
+            $itemSources[] = $GLOBALS['TCA']['tt_content']['columns']['list_type']['config']['items'] ?? [];
+        }
+
+        foreach ($itemSources as $items) {
+            foreach ($items as $item) {
+                if ((isset($item['value']) && $item['value'] === $pluginIdentifier) ||
+                    (isset($item[1]) && $item[1] === $pluginIdentifier)) {
                     $label = $item['label'] ?? $item[0] ?? '';
                     if ($label) {
                         return TableAccessService::translateLabel($label);
@@ -846,7 +870,7 @@ class GetPageTool extends AbstractRecordTool
             }
         }
 
-        $parts = explode('_', $cType);
+        $parts = explode('_', $pluginIdentifier);
         if (count($parts) > 1) {
             if ($parts[0] === 'tx') {
                 array_shift($parts);
@@ -854,7 +878,7 @@ class GetPageTool extends AbstractRecordTool
             return ucfirst(implode(' ', $parts));
         }
 
-        return $cType;
+        return $pluginIdentifier;
     }
 
     /**

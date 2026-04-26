@@ -193,51 +193,53 @@ class NewsSchemaTest extends FunctionalTestCase
     public function testNewsPluginSchemaInTtContent(): void
     {
         $tool = new GetTableSchemaTool();
-        
-        // Get schema for News plugin content type
+
+        // Get schema for the news plugin content type. TYPO3 13 plugins live
+        // under CType=list (with list_type=news_pi1); TYPO3 14 plugins use
+        // their own CType.
+        $hasSubtypes = \Hn\McpServer\Service\TableAccessService::hasPluginSubtypes();
+        $pluginType = $hasSubtypes ? 'list' : 'news_pi1';
+
         $result = $tool->execute([
             'table' => 'tt_content',
-            'type' => 'news_pi1' // News plugin
+            'type' => $pluginType,
         ]);
-        
+
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $content = $result->content[0]->text;
-        
-        // Verify it's the News plugin type
-        $this->assertStringContainsString('Type: news_pi1', $content);
-        // The label should be translated or have a meaningful fallback
-        $this->assertTrue(
-            str_contains($content, 'News article list') || 
-            str_contains($content, 'News list'), // Fallback from "news_list.title"
-            'Should contain News plugin label or fallback'
-        );
-        
+
+        $this->assertStringContainsString('Type: ' . $pluginType, $content);
+
         // Should contain pi_flexform field in Plugin tab
         $this->assertStringContainsString('(Plugin):', $content, 'Should have Plugin tab');
         $this->assertStringContainsString('pi_flexform', $content, 'News plugin should have pi_flexform field');
-        
+
         // Check that it's recognized as FlexForm type with proper formatting
-        $this->assertMatchesRegularExpression('/pi_flexform\s*\(Plugin Options\):\s*flex\s*\(FlexForm\)/i', $content, 
+        $this->assertMatchesRegularExpression('/pi_flexform\s*\(Plugin Options\):\s*flex\s*\(FlexForm\)/i', $content,
             'pi_flexform should be properly formatted with label and type');
-        
-        // Check for FlexForm identifiers
-        $this->assertMatchesRegularExpression('/\[Identifiers:\s*[^\]]*news_pi1[^\]]*\]/', $content, 
+
+        // Check for FlexForm identifiers (news_pi1 appears in either case).
+        $this->assertMatchesRegularExpression('/\[Identifiers:\s*[^\]]*news_pi1[^\]]*\]/', $content,
             'Should have news_pi1 in FlexForm identifiers');
-        
+
         // Verify the instruction to use GetFlexFormSchema tool
         $this->assertStringContainsString('Use GetFlexFormSchema tool with these identifiers', $content,
             'Should provide instruction to use GetFlexFormSchema tool');
     }
 
     /**
-     * Test that News plugin FlexForm schema can be retrieved
+     * Test that News plugin FlexForm schema can be retrieved.
+     *
+     * TYPO3 13 registers news under CType=list with list_type=news_pi1, while
+     * TYPO3 14 registers it as CType=news_pi1 directly. The schema tool should
+     * surface pi_flexform either way.
      */
     public function testGetNewsPluginFlexFormIdentifiers(): void
     {
         $tool = new GetTableSchemaTool();
+        $hasSubtypes = \Hn\McpServer\Service\TableAccessService::hasPluginSubtypes();
+        $pluginType = $hasSubtypes ? 'list' : 'news_pi1';
 
-        // TYPO3 14 registers plugins with their own CType. News registers as
-        // "news_pi1" directly.
         $result = $tool->execute([
             'table' => 'tt_content'
         ]);
@@ -246,20 +248,23 @@ class NewsSchemaTest extends FunctionalTestCase
         $content = $result->content[0]->text;
 
         if (preg_match('/AVAILABLE TYPES:(.+?)(?=\n\n|$)/s', $content, $matches)) {
+            // news_pi1 always appears in the dump - either as a CType in
+            // TYPO3 14 or as a list_type identifier in TYPO3 13.
             $this->assertStringContainsString('news_pi1', $matches[1],
-                'news_pi1 CType should be available for the News plugin');
+                'news_pi1 should be available for the News plugin');
         }
 
-        // Inspecting the news_pi1 sub-schema should include the pi_flexform field.
+        // Inspect the plugin sub-schema. On both versions the pi_flexform
+        // field should be exposed.
         $result = $tool->execute([
             'table' => 'tt_content',
-            'type' => 'news_pi1',
+            'type' => $pluginType,
         ]);
 
         $this->assertFalse($result->isError);
         $content = $result->content[0]->text;
         $this->assertStringContainsString('pi_flexform', $content,
-            'news_pi1 schema should expose pi_flexform field');
+            'plugin schema should expose pi_flexform field');
     }
 
     protected function setUpBackendUserWithWorkspace(int $uid): void

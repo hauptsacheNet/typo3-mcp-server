@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Mcp\Types\CallToolResult;
-use TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools;
+use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
 use Hn\McpServer\Service\TableAccessService;
@@ -94,11 +94,13 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
         // TYPO3 14 removed ds_pointerField and the multi-entry ds array.
         // DataStructures are now attached to a record type via
         // `types.{type}.columnsOverrides.{field}.config.ds` (single DS per
-        // type). We look up the DS for the identifier (i.e. the record's
-        // CType) first, falling back to the legacy ds[$identifier] shape for
-        // extensions that still register multiple DataStructures centrally.
+        // type). On TYPO3 13 the same field still uses the central `ds` map
+        // keyed by `<list_type>` or `*,<list_type>` (and form_formframework
+        // historically uses `*,form_formframework`). We try every shape.
         $dsValue = $GLOBALS['TCA'][$table]['types'][$identifier]['columnsOverrides'][$field]['config']['ds']
-            ?? ($flexFormConfig['ds'][$identifier] ?? null);
+            ?? ($flexFormConfig['ds'][$identifier] ?? null)
+            ?? ($flexFormConfig['ds']['*,' . $identifier] ?? null)
+            ?? ($flexFormConfig['ds'][$identifier . ',list'] ?? null);
 
         if ($dsValue !== null) {
 
@@ -689,13 +691,13 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                 if (file_exists($file)) {
                     $content = file_get_contents($file);
                     if (!empty($content)) {
-                        $flexFormTools = GeneralUtility::makeInstance(FlexFormTools::class);
-                        return $flexFormTools->convertFlexFormContentToArray($content);
+                        $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
+                        return $flexFormService->convertFlexFormContentToArray($content);
                     }
                 }
             } elseif (is_string($flexFormDS)) {
-                $flexFormTools = GeneralUtility::makeInstance(FlexFormTools::class);
-                return $flexFormTools->convertFlexFormContentToArray($flexFormDS);
+                $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
+                return $flexFormService->convertFlexFormContentToArray($flexFormDS);
             } elseif (is_array($flexFormDS)) {
                 return $flexFormDS;
             }

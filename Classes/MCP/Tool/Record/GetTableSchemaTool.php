@@ -397,6 +397,12 @@ class GetTableSchemaTool extends AbstractRecordTool
             $result .= " [Identifiers: " . implode(', ', $identifiers) . "]";
             $result .= " (Use GetFlexFormSchema tool with these identifiers for details)";
         }
+
+        // TYPO3 13: surface the ds_pointerField configuration so callers know
+        // which fields determine the DS lookup. Removed in TYPO3 14.
+        if (!empty($config['ds_pointerField'])) {
+            $result .= " [ds_pointerField: " . $config['ds_pointerField'] . "]";
+        }
     }
     
     

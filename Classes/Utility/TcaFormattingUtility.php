@@ -162,7 +162,11 @@ class TcaFormattingUtility
                 break;
                 
             case 'flex':
-                // FlexForm fields are detailed via GetFlexFormSchema tool.
+                // TYPO3 13: surface ds_pointerField configuration if present.
+                // Removed in TYPO3 14; schemas use columnsOverrides instead.
+                if (isset($config['ds_pointerField'])) {
+                    $result .= " [ds_pointerField: " . $config['ds_pointerField'] . "]";
+                }
                 break;
 
 

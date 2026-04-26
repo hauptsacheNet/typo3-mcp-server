@@ -34,6 +34,16 @@ class TableAccessService implements SingletonInterface
     }
 
     /**
+     * Whether the running TYPO3 still distinguishes plugin content elements
+     * via the `list_type` subtype field (TYPO3 13). TYPO3 14 removed plugin
+     * subtypes; plugins now register with their own CType directly.
+     */
+    public static function hasPluginSubtypes(): bool
+    {
+        return isset($GLOBALS['TCA']['tt_content']['columns']['list_type']);
+    }
+
+    /**
      * Get the list of additional non-workspace tables exposed as read-only.
      * Configured via extension settings (additionalReadOnlyTables).
      */
@@ -330,10 +340,21 @@ class TableAccessService implements SingletonInterface
             $shouldInclude = empty($type);
             if (!$shouldInclude) {
                 if (is_array($dsConfig)) {
-                    foreach (array_keys($dsConfig) as $dsKey) {
-                        if ($dsKey === $type || $dsKey === 'default' || str_contains((string)$dsKey, $type)) {
-                            $shouldInclude = true;
-                            break;
+                    // TYPO3 13: the plugin container type ("list") has DS
+                    // entries keyed by `*,<list_type>` for every plugin. None
+                    // of those keys equal "list" directly, so surface the
+                    // field whenever the type uses subtypes (e.g. CType=list).
+                    if (self::hasPluginSubtypes()
+                        && !empty($tca['types'][$type]['subtype_value_field'])
+                    ) {
+                        $shouldInclude = true;
+                    }
+                    if (!$shouldInclude) {
+                        foreach (array_keys($dsConfig) as $dsKey) {
+                            if ($dsKey === $type || $dsKey === 'default' || str_contains((string)$dsKey, $type)) {
+                                $shouldInclude = true;
+                                break;
+                            }
                         }
                     }
                 } else {
@@ -738,13 +759,14 @@ class TableAccessService implements SingletonInterface
     {
         $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
         
-        // Extract only relevant control fields
+        // Extract only relevant control fields. `searchFields` is read on
+        // TYPO3 13; v14 dropped it in favour of per-field `searchable` config.
         $relevantFields = [
             'title', 'label', 'label_alt', 'label_alt_force',
             'descriptionColumn', 'type', 'languageField',
             'transOrigPointerField', 'delete', 'enablecolumns',
             'sortby', 'default_sortby', 'tstamp', 'crdate',
-            'versioningWS', 'origUid',
+            'versioningWS', 'origUid', 'searchFields',
         ];
         
         $controlInfo = [];
@@ -902,14 +924,26 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Get the search fields for a table using the Schema API.
+     * Get the search fields for a table.
+     *
      * TYPO3 14 replaced `ctrl.searchFields` with the per-field `searchable`
-     * flag, evaluated by the SearchableSchemaFieldsCollector.
+     * flag, evaluated by the SearchableSchemaFieldsCollector. On TYPO3 13 the
+     * collector is not available, so we fall back to the legacy ctrl entry.
      */
     public function getSearchFields(string $table): array
     {
-        return GeneralUtility::makeInstance(\TYPO3\CMS\Core\Schema\SearchableSchemaFieldsCollector::class)
-            ->getFieldNames($table);
+        if (class_exists(\TYPO3\CMS\Core\Schema\SearchableSchemaFieldsCollector::class)) {
+            $collector = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Schema\SearchableSchemaFieldsCollector::class);
+            if (method_exists($collector, 'getFieldNames')) {
+                return $collector->getFieldNames($table);
+            }
+        }
+
+        $searchFields = $GLOBALS['TCA'][$table]['ctrl']['searchFields'] ?? '';
+        if (empty($searchFields)) {
+            return [];
+        }
+        return GeneralUtility::trimExplode(',', $searchFields, true);
     }
     
     /**

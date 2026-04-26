@@ -18,6 +18,7 @@ use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
+use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 
 /**
@@ -366,12 +367,24 @@ class GetPageTreeTool extends AbstractRecordTool
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
         
+        // Match news plugins on both TYPO3 13 (CType=list, list_type=news_pi1)
+        // and TYPO3 14 (CType=news_pi1).
+        $newsPluginCondition = TableAccessService::hasPluginSubtypes()
+            ? $queryBuilder->expr()->or(
+                $queryBuilder->expr()->eq('CType', $queryBuilder->createNamedParameter('news_pi1')),
+                $queryBuilder->expr()->and(
+                    $queryBuilder->expr()->eq('CType', $queryBuilder->createNamedParameter('list')),
+                    $queryBuilder->expr()->eq('list_type', $queryBuilder->createNamedParameter('news_pi1'))
+                )
+            )
+            : $queryBuilder->expr()->eq('CType', $queryBuilder->createNamedParameter('news_pi1'));
+
         $plugins = $queryBuilder
             ->select('*')
             ->from('tt_content')
             ->where(
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
-                $queryBuilder->expr()->eq('CType', $queryBuilder->createNamedParameter('news_pi1'))
+                $newsPluginCondition
             )
             ->executeQuery()
             ->fetchAllAssociative();

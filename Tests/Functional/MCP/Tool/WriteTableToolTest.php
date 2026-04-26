@@ -8,6 +8,7 @@ use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Hn\McpServer\Tests\Functional\Fixtures\TestDataBuilder;
 use Hn\McpServer\Tests\Functional\Traits\McpAssertionsTrait;
+use Hn\McpServer\Tests\Functional\Traits\PluginContentTrait;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -19,17 +20,26 @@ use Hn\McpServer\MCP\ToolRegistry;
 class WriteTableToolTest extends AbstractFunctionalTest
 {
     use McpAssertionsTrait;
-    
+    use PluginContentTrait;
+
+    // Extend the default extension load list with `news` so plugin-style
+    // tests have a real plugin CType available on TYPO3 14 (the built-in
+    // `list` CType is gone in v14 because list_type was removed).
+    protected array $testExtensionsToLoad = [
+        'mcp_server',
+        'news',
+    ];
+
     private WriteTableTool $tool;
     private TestDataBuilder $data;
-    
+
     protected function setUp(): void
     {
         parent::setUp();
-        
+
         // Import additional fixtures needed for this test
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
-        
+
         $this->tool = new WriteTableTool();
         $this->data = new TestDataBuilder();
     }
@@ -1198,14 +1208,15 @@ class WriteTableToolTest extends AbstractFunctionalTest
     {
         $tool = new WriteTableTool();
         
-        // Test creating content with FlexForm data
-        // Use a plugin CType (news_pi1) which has a pi_flexform field
+        // Test creating content with FlexForm data on a plugin element. The
+        // plugin shape differs between TYPO3 13 (CType=list+list_type) and
+        // TYPO3 14 (CType=plugin), so resolve via the version-aware helper.
         $result = $tool->execute([
             'action' => 'create',
             'table' => 'tt_content',
             'pid' => 1,
             'data' => [
-                'CType' => 'news_pi1',
+                ...$this->buildPluginContentRow('news_pi1'),
                 'header' => 'Plugin with FlexForm',
                 'pi_flexform' => [
                     'settings' => [
