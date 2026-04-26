@@ -35,6 +35,52 @@ jobs:
       - name: Run functional test suite
         run: composer test
 
+  e2e-tests:
+    runs-on: ubuntu-latest
+    name: E2E Tests
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@accd6127cb78bee3e8082180cb391013d204ef9f # v2
+        with:
+          php-version: '8.4'
+          extensions: sqlite3, pdo_sqlite, intl
+          coverage: none
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: Build/package-lock.json
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Install Playwright npm packages
+        working-directory: Build
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: Build
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E test suite
+        run: bash Build/runTests.sh -s e2e --no-docker
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: |
+            Build/playwright-report
+            Build/test-results
+          retention-days: 7
+
   llm-trigger:
     runs-on: ubuntu-latest
     name: Check LLM trigger
