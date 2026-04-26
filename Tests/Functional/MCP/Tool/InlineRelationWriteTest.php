@@ -659,4 +659,151 @@ class InlineRelationWriteTest extends FunctionalTestCase
         $this->assertSame('patched', $record['assets'][0]['title']);
         $this->assertSame(1, (int)$record['assets'][0]['uid_local'], 'uid_local must not be wiped to 0');
     }
+
+    /**
+     * Embedded inline relations must not be stealable from another parent by uid.
+     *
+     * The update path that patches existing children by uid (testUpdateExistingEmbeddedRelationByUid)
+     * could otherwise be abused: passing parent B's child uid into parent A's update would mutate
+     * B's row and — through the orphan-deletion of children not in the new list — silently wipe
+     * parent A's real children too.
+     */
+    public function testCannotStealEmbeddedRelationFromAnotherParent(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => ['title' => 'Page for steal-test', 'doktype' => 1],
+        ]);
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Parent A with its own asset
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'header' => 'Parent A',
+                'CType' => 'textmedia',
+                'assets' => [['uid_local' => 1, 'title' => 'A-original']],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $parentAUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Parent B with its own asset
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'header' => 'Parent B',
+                'CType' => 'textmedia',
+                'assets' => [['uid_local' => 1, 'title' => 'B-original']],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $parentBUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $aRef = (int)json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $parentAUid])->content[0]->text,
+            true
+        )['records'][0]['assets'][0]['uid'];
+        $bRef = (int)json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $parentBUid])->content[0]->text,
+            true
+        )['records'][0]['assets'][0]['uid'];
+        $this->assertNotSame($aRef, $bRef);
+
+        // Attempt to "steal" parent B's reference by patching it under parent A
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => $parentAUid,
+            'data' => [
+                'assets' => [['uid' => $bRef, 'title' => 'stolen']],
+            ],
+        ]);
+        $this->assertTrue($result->isError, 'Stealing a child uid from another parent must be rejected');
+        $this->assertStringContainsString('does not belong to the current parent', $result->jsonSerialize()['content'][0]->text);
+
+        // Parent A keeps its original reference unchanged
+        $aAfter = json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $parentAUid])->content[0]->text,
+            true
+        )['records'][0]['assets'];
+        $this->assertCount(1, $aAfter, 'Parent A must keep its original reference');
+        $this->assertSame($aRef, (int)$aAfter[0]['uid']);
+        $this->assertSame('A-original', $aAfter[0]['title']);
+
+        // Parent B is untouched as well
+        $bAfter = json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $parentBUid])->content[0]->text,
+            true
+        )['records'][0]['assets'];
+        $this->assertCount(1, $bAfter, 'Parent B must keep its reference');
+        $this->assertSame($bRef, (int)$bAfter[0]['uid']);
+        $this->assertSame('B-original', $bAfter[0]['title']);
+    }
+
+    /**
+     * The create path must not silently update an existing child by uid either.
+     */
+    public function testCreateRejectsExistingChildUid(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => ['title' => 'Page for create-steal-test', 'doktype' => 1],
+        ]);
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'header' => 'Existing parent',
+                'CType' => 'textmedia',
+                'assets' => [['uid_local' => 1, 'title' => 'existing']],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $existingParentUid = json_decode($result->content[0]->text, true)['uid'];
+        $existingRef = (int)json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $existingParentUid])->content[0]->text,
+            true
+        )['records'][0]['assets'][0]['uid'];
+
+        // Create a new parent that tries to claim an existing child by uid
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'header' => 'Hijacker',
+                'CType' => 'textmedia',
+                'assets' => [['uid' => $existingRef, 'title' => 'hijacked']],
+            ],
+        ]);
+        $this->assertTrue($result->isError, 'Create must reject embedded children that reference an existing uid');
+        $this->assertStringContainsString('does not belong to the current parent', $result->jsonSerialize()['content'][0]->text);
+
+        // Original parent is untouched
+        $assets = json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $existingParentUid])->content[0]->text,
+            true
+        )['records'][0]['assets'];
+        $this->assertCount(1, $assets);
+        $this->assertSame($existingRef, (int)$assets[0]['uid']);
+        $this->assertSame('existing', $assets[0]['title']);
+    }
 }

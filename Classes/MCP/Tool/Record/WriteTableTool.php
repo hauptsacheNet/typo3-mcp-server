@@ -1124,12 +1124,42 @@ class WriteTableTool extends AbstractRecordTool
         array $config,
         ?int $liveUid = null
     ): void {
-        // If we're updating, handle existing relations
         $foreignMatchFields = $config['foreign_match_fields'] ?? [];
-        if ($liveUid !== null) {
-            $this->handleExistingEmbeddedRelations($foreignTable, $foreignField, $liveUid, $records, $foreignMatchFields);
+
+        // Existing children of this parent (live uids). Empty for the create path.
+        $existingChildUids = $liveUid !== null
+            ? $this->fetchEmbeddedRelationChildUids($foreignTable, $foreignField, $liveUid, $foreignMatchFields)
+            : [];
+
+        // Reject any uid that does not currently belong to this parent. Otherwise a caller
+        // could "steal" a child by sending another parent's child uid — combined with the
+        // orphan-deletion below this would silently delete this parent's real children and
+        // mutate an unrelated record.
+        foreach ($records as $index => $recordData) {
+            if (!is_array($recordData) || !isset($recordData['uid'])) {
+                continue;
+            }
+            if (!is_numeric($recordData['uid']) || (int)$recordData['uid'] <= 0) {
+                continue;
+            }
+            $childUid = (int)$recordData['uid'];
+            if (!in_array($childUid, $existingChildUids, true)) {
+                throw new ValidationException([
+                    sprintf(
+                        'Inline relation %s.%s at index %d references uid %d which does not belong to the current parent record. Embedded relations cannot be moved between parents.',
+                        $foreignTable,
+                        $foreignField,
+                        $index,
+                        $childUid
+                    )
+                ]);
+            }
         }
-        
+
+        if ($liveUid !== null) {
+            $this->deleteOrphanedEmbeddedRelations($foreignTable, $existingChildUids, $records);
+        }
+
         foreach ($records as $index => $recordData) {
             if (!is_array($recordData)) {
                 continue;
@@ -1263,16 +1293,19 @@ class WriteTableTool extends AbstractRecordTool
     }
     
     /**
-     * Handle existing embedded relations during updates
+     * Fetch the live uids of embedded children currently attached to a parent.
+     *
+     * Workspace overlays are folded onto their live uid (t3ver_oid) so the result
+     * matches the uids visible to the MCP client.
+     *
+     * @return int[]
      */
-    protected function handleExistingEmbeddedRelations(
+    protected function fetchEmbeddedRelationChildUids(
         string $foreignTable,
         string $foreignField,
         int $parentUid,
-        array $newRecords,
         array $foreignMatchFields = []
-    ): void {
-        // Get all existing child records for this parent
+    ): array {
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable($foreignTable);
 
@@ -1282,7 +1315,7 @@ class WriteTableTool extends AbstractRecordTool
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
         $queryBuilder
-            ->select('uid')
+            ->select('uid', 't3ver_oid')
             ->from($foreignTable)
             ->where(
                 $queryBuilder->expr()->eq($foreignField, $queryBuilder->createNamedParameter($parentUid, ParameterType::INTEGER))
@@ -1295,39 +1328,52 @@ class WriteTableTool extends AbstractRecordTool
             );
         }
 
-        $existingRecords = $queryBuilder->executeQuery()->fetchAllAssociative();
-        
-        if (!empty($existingRecords)) {
-            // Extract UIDs of new records that have UIDs (updates)
-            $keepUids = [];
-            foreach ($newRecords as $record) {
-                if (is_array($record) && isset($record['uid']) && is_numeric($record['uid'])) {
-                    $keepUids[] = (int)$record['uid'];
-                }
-            }
-            
-            // Delete records that are not in the new set
-            $deleteUids = [];
-            foreach ($existingRecords as $existingRecord) {
-                if (!in_array((int)$existingRecord['uid'], $keepUids, true)) {
-                    $deleteUids[] = (int)$existingRecord['uid'];
-                }
-            }
-            
-            if (!empty($deleteUids)) {
-                // Use DataHandler to delete records (respects workspaces)
-                $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
-                $dataHandler->BE_USER = $GLOBALS['BE_USER'];
-                
-                $cmdMap = [];
-                foreach ($deleteUids as $deleteUid) {
-                    $cmdMap[$foreignTable][$deleteUid]['delete'] = 1;
-                }
-                
-                $dataHandler->start([], $cmdMap);
-                $dataHandler->process_cmdmap();
+        $rows = $queryBuilder->executeQuery()->fetchAllAssociative();
+
+        $liveUids = [];
+        foreach ($rows as $row) {
+            $liveUids[] = (int)($row['t3ver_oid'] ?: $row['uid']);
+        }
+        return array_values(array_unique($liveUids));
+    }
+
+    /**
+     * Delete embedded children that the caller dropped from the new record list.
+     *
+     * @param int[] $existingChildUids live uids previously attached to the parent
+     * @param array $newRecords records as supplied by the caller
+     */
+    protected function deleteOrphanedEmbeddedRelations(
+        string $foreignTable,
+        array $existingChildUids,
+        array $newRecords
+    ): void {
+        if (empty($existingChildUids)) {
+            return;
+        }
+
+        $keepUids = [];
+        foreach ($newRecords as $record) {
+            if (is_array($record) && isset($record['uid']) && is_numeric($record['uid'])) {
+                $keepUids[] = (int)$record['uid'];
             }
         }
+
+        $deleteUids = array_values(array_diff($existingChildUids, $keepUids));
+        if (empty($deleteUids)) {
+            return;
+        }
+
+        $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+
+        $cmdMap = [];
+        foreach ($deleteUids as $deleteUid) {
+            $cmdMap[$foreignTable][$deleteUid]['delete'] = 1;
+        }
+
+        $dataHandler->start([], $cmdMap);
+        $dataHandler->process_cmdmap();
     }
     
     /**
