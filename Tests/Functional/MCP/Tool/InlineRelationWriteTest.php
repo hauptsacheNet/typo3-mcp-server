@@ -806,4 +806,75 @@ class InlineRelationWriteTest extends FunctionalTestCase
         $this->assertSame($existingRef, (int)$assets[0]['uid']);
         $this->assertSame('existing', $assets[0]['title']);
     }
+
+    /**
+     * Reordering embedded children must follow array order.
+     *
+     * sorting_foreign is hidden from the write schema (auto-managed), so the only way
+     * a caller can reorder embedded relations is by passing them in the desired order.
+     */
+    public function testReorderEmbeddedRelationsByArrayOrder(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => ['title' => 'Page for reorder', 'doktype' => 1],
+        ]);
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Three references in order A, B, C
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'header' => 'Reorder me',
+                'CType' => 'textmedia',
+                'assets' => [
+                    ['uid_local' => 1, 'title' => 'A'],
+                    ['uid_local' => 1, 'title' => 'B'],
+                    ['uid_local' => 1, 'title' => 'C'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $contentUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $assets = json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid])->content[0]->text,
+            true
+        )['records'][0]['assets'];
+        $this->assertSame(['A', 'B', 'C'], array_column($assets, 'title'));
+        $byTitle = [];
+        foreach ($assets as $asset) {
+            $byTitle[$asset['title']] = (int)$asset['uid'];
+        }
+
+        // Reorder to C, A, B by passing only the uids in the new desired order.
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => $contentUid,
+            'data' => [
+                'assets' => [
+                    ['uid' => $byTitle['C']],
+                    ['uid' => $byTitle['A']],
+                    ['uid' => $byTitle['B']],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $assets = json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid])->content[0]->text,
+            true
+        )['records'][0]['assets'];
+        $this->assertCount(3, $assets, 'No references should be lost during reorder');
+        $this->assertSame(['C', 'A', 'B'], array_column($assets, 'title'),
+            'Embedded references must follow the order supplied in the update payload');
+    }
 }

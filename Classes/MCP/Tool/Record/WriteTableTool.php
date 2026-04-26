@@ -81,6 +81,10 @@ class WriteTableTool extends AbstractRecordTool
                             'Uses the same field syntax as ReadTable output.' .
                             ($hasMultipleLanguages ? ' Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs.' : '') . ' ' .
                             'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
+                            'For embedded tables (e.g. file references), the array fully replaces the existing list: ' .
+                            'children present in the previous record but missing from the new array are deleted. ' .
+                            'To keep an existing child include it as {"uid": <existing>, ...}; only the fields you set are patched. ' .
+                            'Array order drives display order. ' .
                             'For text fields in update actions, instead of providing the full text, you can provide an array of search-and-replace operations: ' .
                             '[{"search": "old text", "replace": "new text"}]. Each operation can optionally include "replaceAll": true. ' .
                             'Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true.',
@@ -1188,21 +1192,24 @@ class WriteTableTool extends AbstractRecordTool
                     }
                 }
 
-                // If we have a sorting field, set it
-                if (isset($config['foreign_sortby'])) {
-                    $recordData[$config['foreign_sortby']] = ($index + 1) * 256;
-                }
-
                 $key = 'NEW' . uniqid() . '_' . $index;
             } else {
                 // Update path: target the workspace version so DataHandler patches the existing
                 // reference instead of touching the live record outside the workspace overlay.
                 $key = $this->resolveToWorkspaceUid($foreignTable, $existingUid);
+            }
 
-                if (empty($recordData)) {
-                    // Caller only sent a uid with no field changes — nothing to patch.
-                    continue;
-                }
+            // Drive sort order from array position for both new and existing records.
+            // foreign_sortby is hidden from the schema (auto-managed), so reordering is
+            // only possible via the order in which the caller lists the children here.
+            if (isset($config['foreign_sortby'])) {
+                $recordData[$config['foreign_sortby']] = ($index + 1) * 256;
+            }
+
+            if ($existingUid !== null && empty($recordData)) {
+                // Caller only sent a uid with no field changes and the table has no
+                // foreign_sortby — nothing to patch.
+                continue;
             }
 
             // Add to data map
