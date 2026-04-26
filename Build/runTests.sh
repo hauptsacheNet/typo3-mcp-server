@@ -375,6 +375,8 @@ case "${TEST_SUITE}" in
             if [ ! -d node_modules ]; then
                 npm ci
             fi
+            # Idempotent: a no-op once the matching browser is cached.
+            npx playwright install chromium
             TYPO3_BASE_URL="${LOCAL_WEB_URL}" CI="${CI:-}" \
                 npx playwright test ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
             exit 0
