@@ -50,7 +50,10 @@ jobs:
         run: composer update --no-interaction --prefer-dist
 
       - name: Run functional test suite
-        run: composer test
+        # paratest hits transient isolation races on TYPO3 14 + testing-framework
+        # 9.x; run plain phpunit in CI for reliable matrix results. Local
+        # development can still use `composer test` (paratest) for speed.
+        run: vendor/bin/phpunit -c phpunit.xml.dist
 
   llm-trigger:
     runs-on: ubuntu-latest
