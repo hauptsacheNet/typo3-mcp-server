@@ -350,8 +350,23 @@ class TableAccessService implements SingletonInterface
                         $shouldInclude = true;
                     }
                     if (!$shouldInclude) {
-                        foreach (array_keys($dsConfig) as $dsKey) {
-                            if ($dsKey === $type || $dsKey === 'default' || str_contains((string)$dsKey, $type)) {
+                        // DS keys follow well-defined TCA conventions:
+                        //   - `<type>` (v14 direct) or `default`
+                        //   - `*,<type>` / `<type>,*` (wildcard pointer-field)
+                        //   - `<type>,list` (legacy v13 form for plugins
+                        //     registered directly as their own CType while
+                        //     ds_pointerField=`list_type,CType`)
+                        // Anything else is not a match — substring tests
+                        // would over-match unrelated plugin keys.
+                        $candidates = [
+                            $type,
+                            'default',
+                            '*,' . $type,
+                            $type . ',*',
+                            $type . ',list',
+                        ];
+                        foreach ($candidates as $candidate) {
+                            if (isset($dsConfig[$candidate])) {
                                 $shouldInclude = true;
                                 break;
                             }

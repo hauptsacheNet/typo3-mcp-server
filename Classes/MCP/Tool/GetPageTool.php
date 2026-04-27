@@ -882,26 +882,43 @@ class GetPageTool extends AbstractRecordTool
     }
 
     /**
-     * Detect whether a CType refers to a plugin (i.e. not one of the
-     * built-in core content element types).
+     * Detect whether a CType refers to a plugin. Driven by TCA structure
+     * rather than a hardcoded core-type list so it stays correct as TYPO3
+     * grows new built-in CTypes (content_blocks, etc.).
+     *
+     * A CType is treated as a plugin when one of the following holds:
+     *   - it has a FlexForm DataStructure registered via the central
+     *     `pi_flexform.config.ds` map (key `<cType>` on v14, `*,<cType>` on
+     *     v13 when the plugin was registered directly as a CType), OR
+     *   - the CType's sub-schema attaches a DS via `columnsOverrides`
+     *     (v14 columnsOverrides path), OR
+     *   - the CType item declares `group: 'plugins'` — the convention
+     *     used by ExtensionUtility::registerPlugin() in v14.
      */
     protected function isPluginCType(string $cType): bool
     {
-        static $coreTypes = [
-            'header', 'text', 'textpic', 'textmedia', 'image', 'bullets',
-            'table', 'uploads', 'menu_abstract', 'menu_categorized_content',
-            'menu_categorized_pages', 'menu_pages', 'menu_recently_updated',
-            'menu_related_pages', 'menu_section', 'menu_section_pages',
-            'menu_sitemap', 'menu_sitemap_pages', 'menu_subpages',
-            'shortcut', 'div', 'html', 'search', 'login',
-        ];
+        $tcaContent = $GLOBALS['TCA']['tt_content'] ?? [];
 
-        if (in_array($cType, $coreTypes, true)) {
-            return false;
+        $dsMap = $tcaContent['columns']['pi_flexform']['config']['ds'] ?? [];
+        if (is_array($dsMap)) {
+            if (isset($dsMap[$cType]) || isset($dsMap['*,' . $cType])) {
+                return true;
+            }
         }
 
-        // Plugins typically follow the "<ext>_<plugin>" naming pattern.
-        return str_contains($cType, '_');
+        if (isset($tcaContent['types'][$cType]['columnsOverrides']['pi_flexform']['config']['ds'])) {
+            return true;
+        }
+
+        foreach ($tcaContent['columns']['CType']['config']['items'] ?? [] as $item) {
+            $value = $item['value'] ?? $item[1] ?? null;
+            if ($value !== $cType) {
+                continue;
+            }
+            return ($item['group'] ?? null) === 'plugins';
+        }
+
+        return false;
     }
     
     /**
