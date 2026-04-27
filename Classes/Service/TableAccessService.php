@@ -1300,8 +1300,16 @@ class TableAccessService implements SingletonInterface
                 }
             }
             
-            $translated = $GLOBALS['LANG']->sL($label);
-            
+            try {
+                $translated = $GLOBALS['LANG']->sL($label);
+            } catch (\TYPO3\CMS\Core\Package\Exception\UnknownPackagePathException) {
+                // The label references an extension that is not currently
+                // loaded (e.g. stale TCA pointing at EXT:foo/... where foo is
+                // not active in this request). Fall through to the fallback
+                // logic below by treating the lookup as empty.
+                $translated = '';
+            }
+
             // If translation failed, try to extract a meaningful fallback
             if (empty($translated)) {
                 // Extract the last part of the LLL path as fallback
