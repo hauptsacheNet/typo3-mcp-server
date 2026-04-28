@@ -151,13 +151,19 @@ class TcaFormattingUtility
                 $isHiddenTable = ($foreignTCA['ctrl']['hideTable'] ?? false) === true;
 
                 if ($isHiddenTable) {
-                    // Embedded relation: LLM writes array of record objects
-                    $result .= " [embedded records from " . $foreignTable . " - write as: [";
-                    $result .= self::generateMiniExample($foreignTable);
-                    $result .= "]. Use GetTableSchema on " . $foreignTable . " for all fields.]";
+                    // Embedded relation: LLM writes array of record objects.
+                    // Spell out the three operations explicitly — without this, models
+                    // routinely either omit the field entirely (afraid of dropping refs)
+                    // or rebuild from scratch with uid_local=0 (broken).
+                    $newExample = self::generateMiniExample($foreignTable);
+                    $result .= ' [embedded records from ' . $foreignTable
+                        . '. The array fully replaces the existing list (omitted entries are deleted; array order = display order).'
+                        . ' Add new: ' . $newExample . '.'
+                        . ' Keep/patch existing: {"uid": <existing entry uid>, ...} (only fields you set are patched; omit "uid_local" so the file stays attached).'
+                        . ' Use GetTableSchema on ' . $foreignTable . ' for all fields.]';
                 } else {
                     // Independent relation: LLM writes array of UIDs
-                    $result .= " [relation to " . $foreignTable . " - write as array of UIDs, e.g. [12, 34]]";
+                    $result .= ' [relation to ' . $foreignTable . ' - write as array of UIDs, e.g. [12, 34]]';
                 }
                 break;
                 
@@ -221,9 +227,13 @@ class TcaFormattingUtility
                 continue;
             }
 
-            $fieldType = $fieldConfig['config']['type'] ?? '';
+            $config = $fieldConfig['config'] ?? [];
+            $fieldType = $config['type'] ?? '';
 
-            // Generate a placeholder value based on field type
+            // Generate a placeholder value based on field type. Distinguish group
+            // pointers (e.g. uid_local → sys_file) from plain numbers so the model
+            // sees "<sys_file uid>" instead of a literal "0", which has previously
+            // been copied verbatim and produced broken sys_file_references.
             switch ($fieldType) {
                 case 'input':
                 case 'text':
@@ -232,10 +242,14 @@ class TcaFormattingUtility
                 case 'slug':
                     $exampleFields[$fieldName] = '...';
                     break;
-                case 'number':
                 case 'group':
-                    $exampleFields[$fieldName] = '0';
+                    $allowed = $config['allowed'] ?? '';
+                    $allowedTable = $allowed !== '' ? trim(explode(',', $allowed)[0]) : '';
+                    $exampleFields[$fieldName] = $allowedTable !== ''
+                        ? '<' . $allowedTable . ' uid>'
+                        : '<uid>';
                     break;
+                case 'number':
                 case 'check':
                     $exampleFields[$fieldName] = '0';
                     break;
@@ -256,7 +270,10 @@ class TcaFormattingUtility
 
         $parts = [];
         foreach ($exampleFields as $name => $placeholder) {
-            if ($placeholder === '0') {
+            // Render numeric / angle-bracket placeholders unquoted so they
+            // signal "integer here" rather than a literal string value.
+            $isNumericPlaceholder = $placeholder === '0' || str_starts_with($placeholder, '<');
+            if ($isNumericPlaceholder) {
                 $parts[] = '"' . $name . '": ' . $placeholder;
             } else {
                 $parts[] = '"' . $name . '": "' . $placeholder . '"';

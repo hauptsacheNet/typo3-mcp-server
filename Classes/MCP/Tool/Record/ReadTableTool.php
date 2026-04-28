@@ -856,8 +856,15 @@ class ReadTableTool extends AbstractRecordTool
             if ($uid !== null) {
                 if (isset($groupedRecords[$uid]) && !empty($groupedRecords[$uid])) {
                     if ($isHiddenTable) {
-                        // Embed full records for hidden tables (like sys_file_reference)
-                        $record[$fieldName] = $groupedRecords[$uid];
+                        // Embed full records for hidden tables (like sys_file_reference),
+                        // but strip system fields the LLM never writes — they bloat the
+                        // payload and have caused models to fixate on internal plumbing
+                        // (uid_foreign, tablenames, sorting_foreign, t3ver_*) instead of
+                        // the patch-by-uid pattern.
+                        $record[$fieldName] = array_map(
+                            fn(array $row) => $this->stripEmbeddedRecordSystemFields($row),
+                            $groupedRecords[$uid]
+                        );
                     } else {
                         // Return only UIDs for independent tables (like tt_content)
                         $record[$fieldName] = array_column($groupedRecords[$uid], 'uid');
@@ -870,6 +877,34 @@ class ReadTableTool extends AbstractRecordTool
                 }
             }
         }
+    }
+
+    /**
+     * System / auto-managed fields that are returned by `SELECT *` on hidden inline
+     * children but should not be surfaced when the row is embedded inside its parent:
+     * the parent context already implies them, and they have no place in a write
+     * payload (they're either set by the framework, derived from foreign_match_fields,
+     * or carry workspace plumbing the tools mask elsewhere).
+     */
+    protected function stripEmbeddedRecordSystemFields(array $record): array
+    {
+        static $internal = [
+            'pid' => true,
+            'tstamp' => true,
+            'crdate' => true,
+            'deleted' => true,
+            'sorting_foreign' => true,
+            'uid_foreign' => true,
+            'tablenames' => true,
+            'fieldname' => true,
+            't3ver_oid' => true,
+            't3ver_wsid' => true,
+            't3ver_state' => true,
+            't3ver_stage' => true,
+            'l10n_state' => true,
+            'l10n_diffsource' => true,
+        ];
+        return array_diff_key($record, $internal);
     }
 
     /**
