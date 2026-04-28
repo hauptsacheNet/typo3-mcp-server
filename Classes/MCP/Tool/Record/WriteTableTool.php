@@ -1181,6 +1181,11 @@ class WriteTableTool extends AbstractRecordTool
             // Remove it if it was accidentally included
             unset($recordData[$foreignField]);
 
+            // Run the same field-level conversions we apply to top-level records
+            // (notably JSON-encoding imageManipulation values) so embedded children
+            // like sys_file_reference.crop survive the round trip.
+            $recordData = $this->convertDataForStorage($foreignTable, $recordData);
+
             if ($existingUid === null) {
                 // New record: pid + foreign_match_fields are required for proper insertion
                 $recordData['pid'] = $pid;
@@ -1620,6 +1625,17 @@ class WriteTableTool extends AbstractRecordTool
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
             if ($fieldConfig && ($fieldConfig['config']['type'] ?? '') === 'slug' && is_string($value)) {
                 $data[$fieldName] = '/' . trim($value, '/');
+            }
+
+            // imageManipulation (e.g. sys_file_reference.crop) is stored as a JSON
+            // string. DataHandler treats the type as passthrough, so an array value
+            // gets cast to the literal string "Array" on the way to the DB. Encode
+            // here so the round trip with ReadTableTool (which json_decodes the value
+            // back into an array) is symmetric.
+            $fieldType = $fieldConfig['config']['type'] ?? '';
+            if ($fieldType === 'imageManipulation' && is_array($value)) {
+                $data[$fieldName] = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                continue;
             }
 
             // Handle FlexForm fields
