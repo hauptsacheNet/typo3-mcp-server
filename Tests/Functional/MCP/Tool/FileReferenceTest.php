@@ -7,6 +7,8 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\Service\SiteInformationService;
+use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -349,6 +351,28 @@ class FileReferenceTest extends FunctionalTestCase
         foreach (['file_name', 'file_identifier', 'file_mime_type', 'file_size', 'public_url'] as $field) {
             $this->assertStringContainsString($field, $content, "computed field '$field' should appear");
         }
+    }
+
+    /**
+     * The LLM needs an absolute URL to download a file. TYPO3's getPublicUrl()
+     * returns a path relative to the document root; the listener must promote
+     * it to "<scheme>://<host>/<path>" using the current request context.
+     */
+    public function testPublicUrlIsAbsoluteWhenRequestIsAvailable(): void
+    {
+        $request = new ServerRequest('https://typo3.example.com/api/mcp');
+        GeneralUtility::makeInstance(SiteInformationService::class)->setCurrentRequest($request);
+
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $file = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayHasKey('public_url', $file);
+        $this->assertStringStartsWith('https://typo3.example.com/', $file['public_url']);
     }
 
     /**

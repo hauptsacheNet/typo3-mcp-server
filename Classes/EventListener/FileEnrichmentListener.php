@@ -6,6 +6,7 @@ namespace Hn\McpServer\EventListener;
 
 use Hn\McpServer\Event\AfterRecordReadEvent;
 use Hn\McpServer\Event\AfterSchemaLoadEvent;
+use Hn\McpServer\Service\SiteInformationService;
 use TYPO3\CMS\Core\Database\Connection;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Resource\ResourceFactory;
@@ -181,9 +182,13 @@ final class FileEnrichmentListener
     private function resolvePublicUrl(ResourceFactory $resourceFactory, int $fileUid): ?string
     {
         try {
-            return $resourceFactory->getFileObject($fileUid)->getPublicUrl();
+            $url = $resourceFactory->getFileObject($fileUid)->getPublicUrl();
         } catch (\Exception) {
             return null;
         }
+        // TYPO3 returns a path relative to the document root; the LLM needs an
+        // absolute URL to actually fetch the file from the outside.
+        $siteInfo = GeneralUtility::makeInstance(SiteInformationService::class);
+        return $siteInfo->makeAbsoluteUrl($url);
     }
 }
