@@ -358,17 +358,20 @@ class ReadTableTool extends AbstractRecordTool
             throw new DatabaseException('select', $table, $e);
         }
 
-        // Allow listeners to enrich or redact rows before post-processing
-        $afterEvent = new AfterRecordReadEvent($table, $records, 'top');
-        $eventDispatcher->dispatch($afterEvent);
-        $records = $afterEvent->getRecords();
-
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
         foreach ($records as $record) {
             $processedRecord = $this->processRecord($record, $table, $requestedFields);
             $processedRecords[] = $processedRecord;
         }
+
+        // Allow listeners to enrich or redact rows after type-based field filtering, so
+        // enrichment fields (e.g. file_name, public_url on sys_file) survive. Inline
+        // children dispatch the same event after their own processRecord pass, keeping
+        // the contract consistent across read paths.
+        $afterEvent = new AfterRecordReadEvent($table, $processedRecords, 'top');
+        $eventDispatcher->dispatch($afterEvent);
+        $processedRecords = $afterEvent->getRecords();
 
         // Return the result with metadata
         return [

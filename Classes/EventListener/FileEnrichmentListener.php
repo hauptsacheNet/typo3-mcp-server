@@ -11,18 +11,23 @@ use TYPO3\CMS\Core\Resource\ResourceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
- * Enriches sys_file_reference rows with a minimal sys_file summary so the LLM
- * knows which file each reference points at without having to do a follow-up
- * read on sys_file.
+ * Enriches sys_file_reference rows with a minimal sys_file summary, and
+ * sys_file rows with a public_url, so the LLM can locate and load files
+ * without having to compose URLs from raw storage/identifier columns.
  */
-final class SysFileReferenceEnrichmentListener
+final class FileEnrichmentListener
 {
     public function __invoke(AfterRecordReadEvent $event): void
     {
-        if ($event->getTable() !== 'sys_file_reference') {
-            return;
-        }
+        match ($event->getTable()) {
+            'sys_file_reference' => $this->enrichFileReferences($event),
+            'sys_file' => $this->enrichFiles($event),
+            default => null,
+        };
+    }
 
+    private function enrichFileReferences(AfterRecordReadEvent $event): void
+    {
         $records = $event->getRecords();
         if (empty($records)) {
             return;
@@ -70,16 +75,39 @@ final class SysFileReferenceEnrichmentListener
                 $record['file_identifier'] = $file['identifier'];
                 $record['file_mime_type'] = $file['mime_type'];
                 $record['file_size'] = (int)$file['size'];
-
-                try {
-                    $record['public_url'] = $resourceFactory->getFileObject($fileUid)->getPublicUrl();
-                } catch (\Exception $e) {
-                    $record['public_url'] = null;
-                }
+                $record['public_url'] = $this->resolvePublicUrl($resourceFactory, $fileUid);
             }
         }
         unset($record);
 
         $event->setRecords($records);
+    }
+
+    private function enrichFiles(AfterRecordReadEvent $event): void
+    {
+        $records = $event->getRecords();
+        if (empty($records)) {
+            return;
+        }
+
+        $resourceFactory = GeneralUtility::makeInstance(ResourceFactory::class);
+        foreach ($records as &$record) {
+            $fileUid = (int)($record['uid'] ?? 0);
+            if ($fileUid > 0) {
+                $record['public_url'] = $this->resolvePublicUrl($resourceFactory, $fileUid);
+            }
+        }
+        unset($record);
+
+        $event->setRecords($records);
+    }
+
+    private function resolvePublicUrl(ResourceFactory $resourceFactory, int $fileUid): ?string
+    {
+        try {
+            return $resourceFactory->getFileObject($fileUid)->getPublicUrl();
+        } catch (\Exception) {
+            return null;
+        }
     }
 }

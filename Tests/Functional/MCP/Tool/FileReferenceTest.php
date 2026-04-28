@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
+use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -259,6 +260,62 @@ class FileReferenceTest extends FunctionalTestCase
         $this->assertEquals(1, $file['uid']);
         $this->assertEquals('test.jpg', $file['name']);
         $this->assertEquals('/user_upload/test.jpg', $file['identifier']);
+    }
+
+    /**
+     * sys_file rows must expose a public_url so an LLM can navigate from a raw
+     * sys_file listing to the file content without composing URLs from storage
+     * and identifier columns. This mirrors the enrichment on sys_file_reference.
+     */
+    public function testSysFileExposesPublicUrl(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $data = json_decode($result->content[0]->text, true);
+        $file = $data['records'][0];
+        $this->assertArrayHasKey('public_url', $file, 'sys_file row should be enriched with public_url');
+    }
+
+    /**
+     * GetTableSchema(sys_file) used to short-circuit with "No field layout defined
+     * for this type" because sys_file's TCA only defines a showitem for type "1".
+     * Picking a different default type (or any type without showitem) hid every
+     * useful column. The schema must list filterable columns regardless.
+     */
+    public function testSysFileSchemaListsFilterableColumns(): void
+    {
+        $tool = GeneralUtility::makeInstance(GetTableSchemaTool::class);
+        $result = $tool->execute(['table' => 'sys_file']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+        $this->assertStringNotContainsString('No field layout defined', $content);
+        foreach (['name', 'identifier', 'mime_type', 'sha1', 'size', 'type'] as $column) {
+            $this->assertStringContainsString($column, $content, "sys_file schema should mention '$column'");
+        }
+    }
+
+    /**
+     * GetTableSchema(sys_file_reference) used to expose only the type-"1" palette
+     * (title, description, uid_local, hidden, sys_language_uid, l10n_parent),
+     * hiding fields like alternative/link/crop/autoplay even though WriteTable
+     * accepts them. Foreign type notation must surface the union of fields.
+     */
+    public function testSysFileReferenceSchemaIncludesAllWritableFields(): void
+    {
+        $tool = GeneralUtility::makeInstance(GetTableSchemaTool::class);
+        $result = $tool->execute(['table' => 'sys_file_reference']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+        foreach (['title', 'description', 'alternative', 'link', 'crop', 'autoplay'] as $column) {
+            $this->assertStringContainsString($column, $content, "sys_file_reference schema should mention '$column'");
+        }
     }
 
     /**
