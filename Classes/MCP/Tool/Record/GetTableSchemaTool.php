@@ -338,7 +338,7 @@ class GetTableSchemaTool extends AbstractRecordTool
         }
 
         if (!empty($additionalFields)) {
-            $result .= "  (Additional fields — outside the form layout):\n";
+            $result .= "  (Additional Fields):\n";
             foreach ($additionalFields as $fieldName => $fieldConfig) {
                 $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                 $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
