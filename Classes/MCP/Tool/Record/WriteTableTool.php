@@ -916,7 +916,7 @@ class WriteTableTool extends AbstractRecordTool
 
     /**
      * Validate record data against TCA
-     * 
+     *
      * @param int|null $uid Record UID (required for update actions)
      * @return true|string True if valid, error message if invalid
      */
@@ -924,7 +924,7 @@ class WriteTableTool extends AbstractRecordTool
     {
         // Table access has already been validated by ensureTableAccess() before this method is called
         // No need to re-check table existence here
-        
+
         // Special handling for uid and pid
         if (isset($data['uid'])) {
             return "Field 'uid' cannot be modified directly";
@@ -932,7 +932,16 @@ class WriteTableTool extends AbstractRecordTool
         if (isset($data['pid']) && $action !== 'create') {
             return "Field 'pid' can only be set during record creation";
         }
-        
+
+        // Gridelements: records linked to a Gridelements container live outside page columns
+        // and must carry colPos = -1 (a magic value Gridelements sets implicitly but that is not
+        // declared in TCA select items). Normalise colPos here so callers do not have to know
+        // the magic value, and so the TCA-select validation below accepts it.
+        $isGridelementsChild = $this->isGridelementsContainerChild($table, $data, $action, $uid);
+        if ($isGridelementsChild) {
+            $data['colPos'] = -1;
+        }
+
         // Validate and convert field values
         foreach ($data as $fieldName => $value) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
@@ -943,6 +952,12 @@ class WriteTableTool extends AbstractRecordTool
             // Check if field is accessible (filters out inaccessible inline relations)
             if (!$this->tableAccessService->canAccessField($table, $fieldName)) {
                 return "Field '{$fieldName}' is not accessible";
+            }
+
+            // Gridelements container children carry colPos = -1 (see isGridelementsContainerChild).
+            // That value is not in the TCA select items, so skip the value check for this case.
+            if ($isGridelementsChild && $fieldName === 'colPos' && (int)$value === -1) {
+                continue;
             }
 
             // Validate field value
@@ -1040,8 +1055,15 @@ class WriteTableTool extends AbstractRecordTool
                     // Example: tx_news_related_news stores the foreign key for inline relations
                     continue;
                 }
-                
-                
+
+                // Gridelements manages tx_gridelements_container / tx_gridelements_columns behind
+                // the scenes (no showitem entry on standard CTypes), but they are valid TCA columns
+                // that must be writable to attach a record to a container.
+                if ($table === 'tt_content' && in_array($fieldName, ['tx_gridelements_container', 'tx_gridelements_columns'], true)) {
+                    continue;
+                }
+
+
                 // If we have available fields configured and this field is not in the list
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
                     return "Field '{$fieldName}' is not available for this record type";
@@ -1051,8 +1073,43 @@ class WriteTableTool extends AbstractRecordTool
         
         return true;
     }
-    
-    
+
+    /**
+     * Determine whether a tt_content record is (or is becoming) a child of a
+     * Gridelements container. Children live outside page columns and are linked
+     * to their parent via tx_gridelements_container; TYPO3 represents that state
+     * as colPos = -1, a value not declared in TCA select items and therefore
+     * rejected by the standard field validator.
+     *
+     * Returns false when Gridelements is not installed (column absent from TCA)
+     * so the method is inert in projects that do not use it.
+     */
+    protected function isGridelementsContainerChild(string $table, array $data, string $action, ?int $uid): bool
+    {
+        if ($table !== 'tt_content') {
+            return false;
+        }
+        if (!isset($GLOBALS['TCA'][$table]['columns']['tx_gridelements_container'])) {
+            return false;
+        }
+
+        // If the caller explicitly sets the container link in this operation, trust it.
+        if (array_key_exists('tx_gridelements_container', $data)) {
+            return (int)$data['tx_gridelements_container'] > 0;
+        }
+
+        // For updates without the field in data, fall back to the existing record.
+        if ($action === 'update' && $uid !== null) {
+            $current = BackendUtility::getRecord($table, $uid, 'tx_gridelements_container');
+            if ($current && (int)($current['tx_gridelements_container'] ?? 0) > 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+
     /**
      * Extract inline relations from data array
      */
