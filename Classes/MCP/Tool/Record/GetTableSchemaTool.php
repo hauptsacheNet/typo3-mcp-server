@@ -314,12 +314,17 @@ class GetTableSchemaTool extends AbstractRecordTool
             }
         }
         
-        // Split remaining fields into "additional" (regular fields not in showitem,
-        // e.g. pi_flexform on plugin types) and "computed" (mcp.computed=true fields
-        // contributed by AfterSchemaLoadEvent listeners). Computed fields are opt-in
-        // — the LLM has to list them in `fields` to get them — so they get a
-        // separate, clearly labelled section.
-        $unassignedFields = [];
+        // Fields advertised by the schema but not present in the type's showitem
+        // form layout fall here. Two real cases:
+        //   - Dynamically wired-in fields like pi_flexform on tt_content `list`
+        //     plugins, which the plugin registration adds outside the default
+        //     showitem string.
+        //   - Tables whose showitem is sparse (e.g. sys_file's only-defined type
+        //     lists three form fields while the LLM cares about a dozen columns).
+        // Computed read-only fields (mcp.computed=true) registered by
+        // AfterSchemaLoadEvent listeners get their own labelled section so the
+        // LLM knows they originate from outside the table and cannot be written.
+        $additionalFields = [];
         $computedFields = [];
         foreach ($availableFields as $fieldName => $fieldConfig) {
             if (isset($processedFields[$fieldName])) {
@@ -328,13 +333,13 @@ class GetTableSchemaTool extends AbstractRecordTool
             if (!empty($fieldConfig['mcp']['computed'])) {
                 $computedFields[$fieldName] = $fieldConfig;
             } else {
-                $unassignedFields[$fieldName] = $fieldConfig;
+                $additionalFields[$fieldName] = $fieldConfig;
             }
         }
 
-        if (!empty($unassignedFields)) {
-            $result .= "  (Additional Fields):\n";
-            foreach ($unassignedFields as $fieldName => $fieldConfig) {
+        if (!empty($additionalFields)) {
+            $result .= "  (Additional readable columns):\n";
+            foreach ($additionalFields as $fieldName => $fieldConfig) {
                 $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                 $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
                 $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
@@ -346,7 +351,7 @@ class GetTableSchemaTool extends AbstractRecordTool
         }
 
         if (!empty($computedFields)) {
-            $result .= "  (Computed read-only — pass via `fields` to include):\n";
+            $result .= "  (Computed read-only — included by default, cannot be written):\n";
             foreach ($computedFields as $fieldName => $fieldConfig) {
                 $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                 $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';

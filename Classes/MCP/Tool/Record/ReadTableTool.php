@@ -394,16 +394,16 @@ class ReadTableTool extends AbstractRecordTool
      *
      * 1. Schema filter — only fields advertised by TableAccessService::getAvailableFields()
      *    survive (TCA columns the user can access, plus essential ctrl fields, plus any
-     *    extra fields a listener registered via AfterSchemaLoadEvent). When a record has
-     *    a writable type field, sub-schema rules narrow the set further. When the type
-     *    cannot be derived from the row (no type field, foreign type notation), the
-     *    table's main schema fields apply — important for embedded children of tables
-     *    like sys_file_reference, where without this clamp every TYPO3 plumbing column
-     *    (t3ver_*, l10n_*) would leak into the response.
+     *    extra fields a listener registered via AfterSchemaLoadEvent — e.g. computed
+     *    read-only fields like public_url). When a record has a writable type field,
+     *    sub-schema rules narrow the set further. When the type cannot be derived from
+     *    the row (no type field, foreign type notation), the table's main schema fields
+     *    apply — important for embedded children of tables like sys_file_reference,
+     *    where without this clamp every TYPO3 plumbing column (t3ver_*, l10n_*) would
+     *    leak into the response.
      *
      * 2. Caller's `fields` whitelist — optional second pass, narrows further. uid is
-     *    always added. Computed fields (mcp.computed=true) only pass the schema filter
-     *    when the caller explicitly listed them, keeping default reads lean.
+     *    always added.
      *
      * @param array $record Raw database row
      * @param string $table Table name
@@ -460,17 +460,10 @@ class ReadTableTool extends AbstractRecordTool
                 }
             }
 
-            // Schema filter: drop fields not advertised by getAvailableFields()
+            // Schema filter: drop fields not advertised by getAvailableFields(). Computed
+            // fields registered via AfterSchemaLoadEvent are advertised and pass through
+            // the same as any TCA column — they are part of the default response.
             if (!in_array($field, $allowedFields, true)) {
-                continue;
-            }
-
-            // Computed (read-only) fields are opt-in: only included when the caller
-            // listed them in `fields`. Skipping them here keeps default responses
-            // lean and matches the behaviour the listener relied on already.
-            $fieldConfig = $availableFields[$field] ?? null;
-            $isComputed = !empty($fieldConfig['mcp']['computed']);
-            if ($isComputed && !in_array($field, $requestedFields, true)) {
                 continue;
             }
 

@@ -263,34 +263,33 @@ class FileReferenceTest extends FunctionalTestCase
     }
 
     /**
-     * public_url is computed by FileEnrichmentListener and not part of TCA, so it
-     * should stay out of the default response (otherwise every sys_file listing
-     * pays for URL resolution the LLM did not ask for). The LLM opts in by listing
-     * it in `fields`, mirroring how any whitelist works.
+     * public_url is registered as a computed field via AfterSchemaLoadEvent, so it
+     * behaves like any other advertised column: returned by default, narrowed by
+     * the `fields` whitelist when the caller passes one.
      */
-    public function testSysFilePublicUrlIsOptIn(): void
+    public function testSysFilePublicUrlIsAdvertisedField(): void
     {
         $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
 
-        // Default: no public_url
+        // Default: public_url is part of the standard response
         $result = $readTool->execute([
             'table' => 'sys_file',
             'uid' => 1,
         ]);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $defaultFile = json_decode($result->content[0]->text, true)['records'][0];
-        $this->assertArrayNotHasKey('public_url', $defaultFile, 'public_url should be hidden by default');
+        $this->assertArrayHasKey('public_url', $defaultFile, 'public_url should be in the default response');
 
-        // Explicit opt-in: public_url is returned
+        // Whitelist that omits public_url drops it like any other column
         $result = $readTool->execute([
             'table' => 'sys_file',
             'uid' => 1,
-            'fields' => ['name', 'public_url'],
+            'fields' => ['name'],
         ]);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
-        $optInFile = json_decode($result->content[0]->text, true)['records'][0];
-        $this->assertArrayHasKey('public_url', $optInFile, 'public_url should be returned when explicitly requested');
-        $this->assertEquals('test.jpg', $optInFile['name']);
+        $narrowed = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayNotHasKey('public_url', $narrowed, 'public_url should drop when whitelist excludes it');
+        $this->assertEquals('test.jpg', $narrowed['name']);
     }
 
     /**
@@ -340,13 +339,13 @@ class FileReferenceTest extends FunctionalTestCase
 
         $sysFile = $tool->execute(['table' => 'sys_file']);
         $this->assertFalse($sysFile->isError, json_encode($sysFile->jsonSerialize()));
-        $this->assertStringContainsString('Computed read-only', $sysFile->content[0]->text);
+        $this->assertStringContainsString('Computed read-only — included by default', $sysFile->content[0]->text);
         $this->assertStringContainsString('public_url', $sysFile->content[0]->text);
 
         $sysFileReference = $tool->execute(['table' => 'sys_file_reference']);
         $this->assertFalse($sysFileReference->isError, json_encode($sysFileReference->jsonSerialize()));
         $content = $sysFileReference->content[0]->text;
-        $this->assertStringContainsString('Computed read-only', $content);
+        $this->assertStringContainsString('Computed read-only — included by default', $content);
         foreach (['file_name', 'file_identifier', 'file_mime_type', 'file_size', 'public_url'] as $field) {
             $this->assertStringContainsString($field, $content, "computed field '$field' should appear");
         }

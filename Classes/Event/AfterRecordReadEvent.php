@@ -78,13 +78,20 @@ final class AfterRecordReadEvent
     /**
      * Returns true when at least one of the given fields should be produced.
      *
-     * Inline children always need enrichment (option a: embedded relations
-     * ignore the parent's `fields` filter). Top-level reads only need it
-     * when the caller explicitly listed at least one of the fields.
+     * - Inline children always need enrichment (option a: embedded relations
+     *   ignore the parent's `fields` filter).
+     * - When the caller did not pass a `fields` whitelist, the default
+     *   response includes every advertised field — including computed ones —
+     *   so enrichment runs.
+     * - When the caller did pass a whitelist, only run enrichment if at
+     *   least one of the listener's fields is in it.
      */
     public function shouldEnrich(string ...$fields): bool
     {
         if ($this->context !== 'top') {
+            return true;
+        }
+        if (empty($this->requestedFields)) {
             return true;
         }
         foreach ($fields as $field) {
