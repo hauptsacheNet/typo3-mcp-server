@@ -358,20 +358,22 @@ class ReadTableTool extends AbstractRecordTool
             throw new DatabaseException('select', $table, $e);
         }
 
+        // Allow listeners to enrich or redact rows on raw data, so listeners that
+        // derive computed fields (e.g. FileEnrichmentListener uses uid_local to look
+        // up sys_file) see all source columns regardless of the caller's `fields`
+        // filter. processRecord drops non-TCA fields by default; type filtering in
+        // processRecord allows enrichment fields through only when explicitly listed
+        // in `fields`.
+        $afterEvent = new AfterRecordReadEvent($table, $records, 'top');
+        $eventDispatcher->dispatch($afterEvent);
+        $records = $afterEvent->getRecords();
+
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
         foreach ($records as $record) {
             $processedRecord = $this->processRecord($record, $table, $requestedFields);
             $processedRecords[] = $processedRecord;
         }
-
-        // Allow listeners to enrich or redact rows after type-based field filtering, so
-        // enrichment fields (e.g. file_name, public_url on sys_file) survive. Inline
-        // children dispatch the same event after their own processRecord pass, keeping
-        // the contract consistent across read paths.
-        $afterEvent = new AfterRecordReadEvent($table, $processedRecords, 'top');
-        $eventDispatcher->dispatch($afterEvent);
-        $processedRecords = $afterEvent->getRecords();
 
         // Return the result with metadata
         return [
@@ -462,9 +464,16 @@ class ReadTableTool extends AbstractRecordTool
                 }
             }
 
-            // Skip fields not relevant to this record type (only if we have a valid type configuration)
+            // Skip fields not relevant to this record type. Listener-added fields (not
+            // in TCA — e.g. public_url, file_name from FileEnrichmentListener) get a
+            // pass when the caller explicitly lists them in `fields`, so the LLM can
+            // opt into enrichment without exposing it by default.
             if ($hasValidTypeConfig && !in_array($field, $typeSpecificFields)) {
-                continue;
+                $isComputedField = !isset($GLOBALS['TCA'][$table]['columns'][$field]);
+                $isExplicitlyRequested = !empty($requestedFields) && in_array($field, $requestedFields);
+                if (!($isComputedField && $isExplicitlyRequested)) {
+                    continue;
+                }
             }
 
             // Skip fields not in the requested field list

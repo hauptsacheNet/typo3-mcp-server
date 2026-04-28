@@ -263,22 +263,34 @@ class FileReferenceTest extends FunctionalTestCase
     }
 
     /**
-     * sys_file rows must expose a public_url so an LLM can navigate from a raw
-     * sys_file listing to the file content without composing URLs from storage
-     * and identifier columns. This mirrors the enrichment on sys_file_reference.
+     * public_url is computed by FileEnrichmentListener and not part of TCA, so it
+     * should stay out of the default response (otherwise every sys_file listing
+     * pays for URL resolution the LLM did not ask for). The LLM opts in by listing
+     * it in `fields`, mirroring how any whitelist works.
      */
-    public function testSysFileExposesPublicUrl(): void
+    public function testSysFilePublicUrlIsOptIn(): void
     {
         $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Default: no public_url
         $result = $readTool->execute([
             'table' => 'sys_file',
             'uid' => 1,
         ]);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $defaultFile = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayNotHasKey('public_url', $defaultFile, 'public_url should be hidden by default');
 
-        $data = json_decode($result->content[0]->text, true);
-        $file = $data['records'][0];
-        $this->assertArrayHasKey('public_url', $file, 'sys_file row should be enriched with public_url');
+        // Explicit opt-in: public_url is returned
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+            'fields' => ['name', 'public_url'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $optInFile = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayHasKey('public_url', $optInFile, 'public_url should be returned when explicitly requested');
+        $this->assertEquals('test.jpg', $optInFile['name']);
     }
 
     /**
