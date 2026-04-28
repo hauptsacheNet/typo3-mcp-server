@@ -827,6 +827,50 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
+     * Fields to drop from inline children of hidden tables.
+     *
+     * When a hidden table (e.g. sys_file_metadata) is embedded in a parent record,
+     * the parent already provides language/workspace/timestamp context. Surfacing
+     * those fields again, plus the foreign reference back to the parent and TCA
+     * columns that are virtual or DB-only, is just noise for the LLM.
+     *
+     * Excluded:
+     *  - pid (always plumbing for embedded children)
+     *  - ctrl-registered tracking fields (tstamp, crdate, languageField,
+     *    transOrigPointerField, transOrigDiffSourceField, translationSource)
+     *  - the foreign_field that links back to the parent
+     *  - TCA columns of type passthrough / category / none (virtual or
+     *    rendering-only — no useful value for the LLM)
+     *
+     * Computed read-only fields registered via AfterSchemaLoadEvent
+     * (file_name, public_url, ...) are not in TCA columns and therefore stay.
+     */
+    public function getEmbeddedRecordExclusions(string $table, string $foreignField = ''): array
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        $exclude = ['pid'];
+
+        foreach (['tstamp', 'crdate', 'languageField', 'transOrigPointerField', 'transOrigDiffSourceField', 'translationSource'] as $ctrlKey) {
+            if (!empty($ctrl[$ctrlKey])) {
+                $exclude[] = $ctrl[$ctrlKey];
+            }
+        }
+
+        if ($foreignField !== '') {
+            $exclude[] = $foreignField;
+        }
+
+        foreach ($GLOBALS['TCA'][$table]['columns'] ?? [] as $name => $config) {
+            $type = $config['config']['type'] ?? '';
+            if (in_array($type, ['passthrough', 'category', 'none'], true)) {
+                $exclude[] = $name;
+            }
+        }
+
+        return array_values(array_unique($exclude));
+    }
+
+    /**
      * Get essential fields for a table (fields that should always be included)
      */
     public function getEssentialFields(string $table): array

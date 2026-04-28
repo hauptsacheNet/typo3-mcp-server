@@ -98,29 +98,27 @@ class NewsLinkInlineTest extends FunctionalTestCase
             $linksByTitle[$link['title']] = $link;
         }
         
-        // Verify External link
+        // Verify External link. The foreign field 'parent' is intentionally
+        // dropped from embedded children — the parent is implied by the embedding.
         $this->assertArrayHasKey('External link', $linksByTitle);
         $externalLink = $linksByTitle['External link'];
         $this->assertArrayHasKey('uid', $externalLink);
         $this->assertArrayHasKey('uri', $externalLink);
         $this->assertArrayHasKey('description', $externalLink);
-        $this->assertArrayHasKey('parent', $externalLink);
+        $this->assertArrayNotHasKey('parent', $externalLink);
         $this->assertEquals('https://example.com', $externalLink['uri']);
         $this->assertEquals('Link to external website', $externalLink['description']);
-        $this->assertEquals($newsUid, $externalLink['parent']);
-        
+
         // Verify Internal page link
         $this->assertArrayHasKey('Internal page', $linksByTitle);
         $internalLink = $linksByTitle['Internal page'];
         $this->assertEquals('t3://page?uid=42', $internalLink['uri']);
         $this->assertEquals('Link to internal page', $internalLink['description']);
-        $this->assertEquals($newsUid, $internalLink['parent']);
-        
+
         // Verify Email link (no description)
         $this->assertArrayHasKey('Email link', $linksByTitle);
         $emailLink = $linksByTitle['Email link'];
         $this->assertEquals('mailto:info@example.com', $emailLink['uri']);
-        $this->assertEquals($newsUid, $emailLink['parent']);
     }
 
     /**
