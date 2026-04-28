@@ -458,6 +458,14 @@ class ReadTableTool extends AbstractRecordTool
                 }
 
                 if ($hasFlexFormConfig) {
+                    // The bypass exists so plugin pi_flexform survives the
+                    // type-filter (line below). But an explicit field
+                    // whitelist must still be respected — otherwise a caller
+                    // asking for {"fields":["uid","header"]} unexpectedly gets
+                    // a (potentially large) FlexForm payload back.
+                    if (!empty($requestedFields) && !in_array($field, $requestedFields, true)) {
+                        continue;
+                    }
                     $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
                     continue;
                 }

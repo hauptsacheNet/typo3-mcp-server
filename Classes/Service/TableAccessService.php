@@ -327,6 +327,18 @@ class TableAccessService implements SingletonInterface
                 continue;
             }
 
+            // TYPO3 14 commonly attaches a per-type DataStructure via
+            // `types.{type}.columnsOverrides.{field}.config.ds` rather than
+            // through the central `columns.{field}.config.ds` map. When a
+            // type-scoped override exists, the field belongs to this type by
+            // definition — surface it directly.
+            if (!empty($type)
+                && !empty($tca['types'][$type]['columnsOverrides'][$fieldName]['config']['ds'])
+            ) {
+                $fields[$fieldName] = $fieldConfig;
+                continue;
+            }
+
             $dsConfig = $fieldConfig['config']['ds'] ?? [];
             if (empty($dsConfig)) {
                 continue;
