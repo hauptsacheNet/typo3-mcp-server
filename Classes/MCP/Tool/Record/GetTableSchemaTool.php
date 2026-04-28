@@ -211,94 +211,108 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         // Process each tab's fields
         $processedFields = [];
-        
+
         foreach ($tabFields as $tabName => $tabFieldsList) {
-            // Translate the tab name
-            $translatedTabName = TableAccessService::translateLabel($tabName);
-            $result .= "  (" . $translatedTabName . "):\n";
-            
+            $tabContent = '';
+
             foreach ($tabFieldsList as $item) {
                 $itemParts = GeneralUtility::trimExplode(';', $item, true);
                 $fieldName = $itemParts[0];
-                
+
                 // Check if this is a palette
                 if ($fieldName === '--palette--' || strpos($fieldName, '--palette--') === 0) {
                     // Extract palette name from the parts
                     $paletteParts = explode(';', $item);
                     $paletteName = $paletteParts[2] ?? '';
                     $paletteLabel = $paletteParts[1] ?? '';
-                    
+
                     // Translate the palette label if it's a language reference
                     if (!empty($paletteLabel)) {
                         $paletteLabel = TableAccessService::translateLabel($paletteLabel);
                     }
-                    
+
                     // Use palette name as fallback if label is empty
                     if (empty($paletteLabel)) {
                         $paletteLabel = ucfirst(str_replace('_', ' ', $paletteName));
                     }
-                    
+
                     if (!empty($paletteName) && isset($GLOBALS['TCA'][$table]['palettes'][$paletteName])) {
-                        // Add the palette to the current tab's fields
-                        $result .= "    ┌─ (" . $paletteLabel . ")\n";
-                        
                         // Get the palette fields
                         $paletteFields = $GLOBALS['TCA'][$table]['palettes'][$paletteName]['showitem'] ?? '';
                         $paletteFieldsList = GeneralUtility::trimExplode(',', $paletteFields, true);
-                        
-                        // Process each palette field
-                        $lastPaletteField = end($paletteFieldsList);
-                        reset($paletteFieldsList);
-                        
+
+                        // Pre-filter to only items whose fields are accessible so we
+                        // don't emit a palette header with no children.
+                        $accessiblePaletteItems = [];
                         foreach ($paletteFieldsList as $paletteItem) {
                             $paletteItemParts = GeneralUtility::trimExplode(';', $paletteItem, true);
                             $paletteFieldName = $paletteItemParts[0];
-                            
-                            // Skip special fields
                             if ($paletteFieldName === '--linebreak--') {
                                 continue;
                             }
-                            
-                            // Add the field to the result if it's accessible
                             if (isset($availableFields[$paletteFieldName])) {
-                                $fieldConfig = $availableFields[$paletteFieldName];
-                                
-                                // Mark as processed
-                                $processedFields[$paletteFieldName] = true;
-                                
-                                // Add the field to the result with proper indentation
-                                $prefix = ($paletteItem === $lastPaletteField) ? "└─ " : "├─ ";
-                                $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $paletteFieldName;
-                                // TcaSchemaFactory returns flattened config where type is at top level
-                                $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
-                                $result .= "    " . $prefix . $paletteFieldName . " (" . $fieldLabel . "): " . $fieldType;
-                                
-                                // Add field details inline
-                                $this->addFieldDetailsInline($result, $fieldConfig, $paletteFieldName, $table, $filterType);
-                                $result .= "\n";
+                                $accessiblePaletteItems[] = $paletteItem;
                             }
+                        }
+
+                        if (empty($accessiblePaletteItems)) {
+                            continue;
+                        }
+
+                        $tabContent .= "    ┌─ (" . $paletteLabel . ")\n";
+
+                        $lastPaletteField = end($accessiblePaletteItems);
+                        reset($accessiblePaletteItems);
+
+                        foreach ($accessiblePaletteItems as $paletteItem) {
+                            $paletteItemParts = GeneralUtility::trimExplode(';', $paletteItem, true);
+                            $paletteFieldName = $paletteItemParts[0];
+                            $fieldConfig = $availableFields[$paletteFieldName];
+
+                            // Mark as processed
+                            $processedFields[$paletteFieldName] = true;
+
+                            // Add the field to the result with proper indentation
+                            $prefix = ($paletteItem === $lastPaletteField) ? "└─ " : "├─ ";
+                            $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $paletteFieldName;
+                            // TcaSchemaFactory returns flattened config where type is at top level
+                            $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
+                            $tabContent .= "    " . $prefix . $paletteFieldName . " (" . $fieldLabel . "): " . $fieldType;
+
+                            // Add field details inline
+                            $this->addFieldDetailsInline($tabContent, $fieldConfig, $paletteFieldName, $table, $filterType);
+                            $tabContent .= "\n";
                         }
                     }
                 } else {
                     // Regular field
                     if (isset($availableFields[$fieldName])) {
                         $fieldConfig = $availableFields[$fieldName];
-                        
+
                         // Mark as processed
                         $processedFields[$fieldName] = true;
-                        
+
                         // Add the field to the result
                         $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                         // TcaSchemaFactory returns flattened config where type is at top level
                         $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
-                        $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
-                        
+                        $tabContent .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
+
                         // Add field details inline
-                        $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType);
-                        $result .= "\n";
+                        $this->addFieldDetailsInline($tabContent, $fieldConfig, $fieldName, $table, $filterType);
+                        $tabContent .= "\n";
                     }
                 }
             }
+
+            // Skip tabs that have no accessible fields after filtering.
+            if ($tabContent === '') {
+                continue;
+            }
+
+            $translatedTabName = TableAccessService::translateLabel($tabName);
+            $result .= "  (" . $translatedTabName . "):\n";
+            $result .= $tabContent;
         }
         
         // Check for fields that are available but not in showitem (e.g., dynamically added fields like pi_flexform for plugins)
