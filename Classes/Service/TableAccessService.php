@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use Doctrine\DBAL\ArrayParameterType;
-use Hn\McpServer\Event\ModifyAvailableFieldsEvent;
+use Hn\McpServer\Event\AfterSchemaLoadEvent;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
@@ -313,7 +313,7 @@ class TableAccessService implements SingletonInterface
 
         // Allow extensions to add, remove, or reconfigure fields
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
-        $event = $eventDispatcher->dispatch(new ModifyAvailableFieldsEvent($table, $type, $fields));
+        $event = $eventDispatcher->dispatch(new AfterSchemaLoadEvent($table, $type, $fields));
         return $event->getFields();
     }
     

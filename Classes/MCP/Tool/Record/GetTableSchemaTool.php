@@ -314,28 +314,50 @@ class GetTableSchemaTool extends AbstractRecordTool
             }
         }
         
-        // Check for fields that are available but not in showitem (e.g., dynamically added fields like pi_flexform for plugins)
+        // Split remaining fields into "additional" (regular fields not in showitem,
+        // e.g. pi_flexform on plugin types) and "computed" (mcp.computed=true fields
+        // contributed by AfterSchemaLoadEvent listeners). Computed fields are opt-in
+        // — the LLM has to list them in `fields` to get them — so they get a
+        // separate, clearly labelled section.
         $unassignedFields = [];
+        $computedFields = [];
         foreach ($availableFields as $fieldName => $fieldConfig) {
-            if (!isset($processedFields[$fieldName])) {
+            if (isset($processedFields[$fieldName])) {
+                continue;
+            }
+            if (!empty($fieldConfig['mcp']['computed'])) {
+                $computedFields[$fieldName] = $fieldConfig;
+            } else {
                 $unassignedFields[$fieldName] = $fieldConfig;
             }
         }
-        
-        // If there are unassigned fields, add them to a special section
+
         if (!empty($unassignedFields)) {
             $result .= "  (Additional Fields):\n";
             foreach ($unassignedFields as $fieldName => $fieldConfig) {
                 $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                 $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
                 $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
-                
+
                 // Add field details inline
                 $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType);
                 $result .= "\n";
             }
         }
-        
+
+        if (!empty($computedFields)) {
+            $result .= "  (Computed read-only — pass via `fields` to include):\n";
+            foreach ($computedFields as $fieldName => $fieldConfig) {
+                $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
+                $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
+                $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
+                if (!empty($fieldConfig['description'])) {
+                    $result .= " — " . TableAccessService::translateLabel($fieldConfig['description']);
+                }
+                $result .= "\n";
+            }
+        }
+
         return $result;
     }
     

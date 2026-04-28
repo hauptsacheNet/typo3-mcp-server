@@ -55,8 +55,13 @@ services:
   Hn\McpServer\EventListener\FileEnrichmentListener:
     tags:
       - name: event.listener
+        event: Hn\McpServer\Event\AfterSchemaLoadEvent
+        method: onSchemaLoad
+        identifier: 'mcp-server/file-enrichment-schema'
+      - name: event.listener
         event: Hn\McpServer\Event\AfterRecordReadEvent
-        identifier: 'mcp-server/file-enrichment'
+        method: onRecordRead
+        identifier: 'mcp-server/file-enrichment-read'
 
   Hn\McpServer\EventListener\SysFileMountRestrictionListener:
     tags:

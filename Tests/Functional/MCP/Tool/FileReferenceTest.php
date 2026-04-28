@@ -331,6 +331,54 @@ class FileReferenceTest extends FunctionalTestCase
     }
 
     /**
+     * Computed fields registered via AfterSchemaLoadEvent must show up in their
+     * own section so the LLM can discover them and opt in via `fields`.
+     */
+    public function testComputedFieldsAreAdvertisedInSchema(): void
+    {
+        $tool = GeneralUtility::makeInstance(GetTableSchemaTool::class);
+
+        $sysFile = $tool->execute(['table' => 'sys_file']);
+        $this->assertFalse($sysFile->isError, json_encode($sysFile->jsonSerialize()));
+        $this->assertStringContainsString('Computed read-only', $sysFile->content[0]->text);
+        $this->assertStringContainsString('public_url', $sysFile->content[0]->text);
+
+        $sysFileReference = $tool->execute(['table' => 'sys_file_reference']);
+        $this->assertFalse($sysFileReference->isError, json_encode($sysFileReference->jsonSerialize()));
+        $content = $sysFileReference->content[0]->text;
+        $this->assertStringContainsString('Computed read-only', $content);
+        foreach (['file_name', 'file_identifier', 'file_mime_type', 'file_size', 'public_url'] as $field) {
+            $this->assertStringContainsString($field, $content, "computed field '$field' should appear");
+        }
+    }
+
+    /**
+     * Embedded sys_file_reference children used to leak every TYPO3 plumbing
+     * field (t3ver_*, l10n_state, deleted) because processRecord skipped its
+     * field filter when the type field uses foreign type notation. Now the
+     * filter always applies — non-TCA columns are gone, TCA columns plus
+     * declared computed fields remain.
+     */
+    public function testInlineChildrenStripWorkspaceAndTranslationPlumbing(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $ref = json_decode($result->content[0]->text, true)['records'][0]['assets'][0];
+        foreach (['t3ver_oid', 't3ver_wsid', 't3ver_state', 't3ver_stage', 'l10n_state', 'deleted'] as $leaked) {
+            $this->assertArrayNotHasKey($leaked, $ref, "embedded ref should not expose '$leaked'");
+        }
+
+        // Option a: inline children always include enrichment regardless of fields.
+        $this->assertArrayHasKey('public_url', $ref);
+        $this->assertArrayHasKey('file_name', $ref);
+    }
+
+    /**
      * Test that sys_file is read-only (writing should fail)
      */
     public function testSysFileIsReadOnly(): void
