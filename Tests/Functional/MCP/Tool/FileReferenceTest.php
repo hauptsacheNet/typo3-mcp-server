@@ -279,6 +279,174 @@ class FileReferenceTest extends FunctionalTestCase
     }
 
     /**
+     * The crop value (TCA type=imageManipulation) is stored as a JSON string in
+     * the database and ReadTableTool decodes it back into an array. A round trip
+     * through update must preserve the structure — sending the value back as the
+     * same array shape that read returned must not corrupt it into the literal
+     * string "Array" (which is what a (string)$array cast yields).
+     */
+    public function testCropFieldRoundTripThroughCreateUpdateRead(): void
+    {
+        // Use fractional values so the JSON round trip can't paper over a type
+        // change from float to int.
+        $cropPayload = [
+            'default' => [
+                'cropArea' => [
+                    'x' => 0.1,
+                    'y' => 0.2,
+                    'width' => 0.8,
+                    'height' => 0.7,
+                ],
+                'selectedRatio' => 'NaN',
+                'focusArea' => [],
+            ],
+        ];
+
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Create with crop provided as an array (shape clients see when reading)
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'header' => 'Crop array round trip',
+                'CType' => 'textmedia',
+                'assets' => [
+                    [
+                        'uid_local' => 1,
+                        'title' => 'Image with crop',
+                        'crop' => $cropPayload,
+                    ],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $contentUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Read after create — crop must come back as the same array
+        $result = $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $afterCreate = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertCount(1, $afterCreate['assets']);
+        $this->assertIsArray(
+            $afterCreate['assets'][0]['crop'] ?? null,
+            'crop must be returned as an array after create, got: '
+            . var_export($afterCreate['assets'][0]['crop'] ?? null, true)
+        );
+        $this->assertEquals($cropPayload, $afterCreate['assets'][0]['crop']);
+
+        // Get the existing reference uid so update patches the same row
+        $referenceUid = (int)$afterCreate['assets'][0]['uid'];
+
+        // Update — feed crop back as an array (the shape the read returned)
+        $newCrop = $cropPayload;
+        $newCrop['default']['cropArea']['width'] = 0.42;
+
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => $contentUid,
+            'data' => [
+                'assets' => [
+                    [
+                        'uid' => $referenceUid,
+                        'title' => 'Image with crop updated',
+                        'crop' => $newCrop,
+                    ],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Read after update — crop must still be the (updated) array, not "Array"
+        $result = $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $afterUpdate = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertCount(1, $afterUpdate['assets']);
+
+        $cropAfterUpdate = $afterUpdate['assets'][0]['crop'] ?? null;
+        $this->assertNotSame(
+            'Array',
+            $cropAfterUpdate,
+            'crop got cast to the string "Array" — array value reached the DB without being JSON-encoded'
+        );
+        $this->assertIsArray(
+            $cropAfterUpdate,
+            'crop must be returned as an array after update, got: ' . var_export($cropAfterUpdate, true)
+        );
+        $this->assertEquals($newCrop, $cropAfterUpdate);
+    }
+
+    /**
+     * Updating only sibling fields on an existing reference must not corrupt the
+     * crop value already stored in the database. This is the read-modify-write
+     * scenario flagged in real usage: the LLM updates the title, leaves crop
+     * untouched, and the existing crop JSON survives.
+     */
+    public function testCropSurvivesUpdateOfSiblingFieldsOnly(): void
+    {
+        $cropPayload = [
+            'default' => [
+                'cropArea' => ['x' => 0.1, 'y' => 0.2, 'width' => 0.8, 'height' => 0.7],
+                'selectedRatio' => 'NaN',
+                'focusArea' => [],
+            ],
+        ];
+
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Seed the row with a crop value via create
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'header' => 'Sibling-only update',
+                'CType' => 'textmedia',
+                'assets' => [
+                    ['uid_local' => 1, 'title' => 'Initial', 'crop' => $cropPayload],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $contentUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $afterCreate = json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid])->content[0]->text,
+            true
+        )['records'][0];
+        $referenceUid = (int)$afterCreate['assets'][0]['uid'];
+
+        // Update only the title — do not send crop
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => $contentUid,
+            'data' => [
+                'assets' => [
+                    ['uid' => $referenceUid, 'title' => 'Just retitled'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $afterUpdate = json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid])->content[0]->text,
+            true
+        )['records'][0];
+
+        $this->assertSame('Just retitled', $afterUpdate['assets'][0]['title']);
+        $this->assertIsArray(
+            $afterUpdate['assets'][0]['crop'] ?? null,
+            'pre-existing crop must survive an update that does not touch it'
+        );
+        $this->assertEquals($cropPayload, $afterUpdate['assets'][0]['crop']);
+    }
+
+    /**
      * Test removing file references by updating with empty array
      */
     public function testRemoveFileReferences(): void
