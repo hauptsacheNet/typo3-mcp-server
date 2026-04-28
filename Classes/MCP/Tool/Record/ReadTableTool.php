@@ -358,8 +358,13 @@ class ReadTableTool extends AbstractRecordTool
             throw new DatabaseException('select', $table, $e);
         }
 
-        // Allow listeners to enrich or redact rows before post-processing
-        $afterEvent = new AfterRecordReadEvent($table, $records, 'top');
+        // Allow listeners to enrich or redact rows on raw data so they see all source
+        // columns (uid_local, etc.) regardless of the caller's `fields` filter. The
+        // requested-fields list is passed through so listeners can short-circuit
+        // expensive work the caller did not ask for. processRecord then applies the
+        // schema and `fields` filters; computed (mcp.computed) fields only survive
+        // when the caller explicitly listed them.
+        $afterEvent = new AfterRecordReadEvent($table, $records, 'top', $requestedFields);
         $eventDispatcher->dispatch($afterEvent);
         $records = $afterEvent->getRecords();
 
@@ -385,15 +390,20 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Process a raw database record into a filtered, converted result.
      *
-     * Applies two layers of field filtering:
-     * 1. TCA type filtering — fields not in the record type's showitem definition are excluded.
-     *    Essential fields (uid, pid, type, label, timestamps, hidden, sorting) are merged into
-     *    the type-specific set so they always pass this check — TCA showitem doesn't declare them
-     *    because they're ctrl fields not shown in backend forms, but they're valid to read.
-     *    canAccessField() is also enforced here since getFieldNamesForType() already strips
-     *    inaccessible fields (file fields, inline to restricted tables, TSconfig-disabled, etc.).
-     * 2. Requested fields — optional user-provided whitelist that narrows the result further.
-     *    When provided, uid is always added. When empty, all fields from step 1 are returned.
+     * Field selection works in two layers:
+     *
+     * 1. Schema filter — only fields advertised by TableAccessService::getAvailableFields()
+     *    survive (TCA columns the user can access, plus essential ctrl fields, plus any
+     *    extra fields a listener registered via AfterSchemaLoadEvent — e.g. computed
+     *    read-only fields like public_url). When a record has a writable type field,
+     *    sub-schema rules narrow the set further. When the type cannot be derived from
+     *    the row (no type field, foreign type notation), the table's main schema fields
+     *    apply — important for embedded children of tables like sys_file_reference,
+     *    where without this clamp every TYPO3 plumbing column (t3ver_*, l10n_*) would
+     *    leak into the response.
+     *
+     * 2. Caller's `fields` whitelist — optional second pass, narrows further. uid is
+     *    always added.
      *
      * @param array $record Raw database row
      * @param string $table Table name
@@ -419,23 +429,14 @@ class ReadTableTool extends AbstractRecordTool
             $requestedFields[] = 'uid';
         }
 
-        // Get type-specific fields if a type field exists.
-        // Essential fields (uid, pid, timestamps, etc.) are merged in because TCA showitem
-        // doesn't declare ctrl fields, but they are valid to read.
+        // Build the set of fields the schema lets through. Always include essential
+        // ctrl fields (uid, pid, timestamps, etc.) since they are valid to read but
+        // are typically absent from TCA showitem definitions.
         $essentialFields = $this->tableAccessService->getEssentialFields($table);
         $typeField = $this->tableAccessService->getTypeFieldName($table);
-        $typeSpecificFields = [];
-        $hasValidTypeConfig = false;
-
-        if ($typeField && isset($record[$typeField])) {
-            $recordType = (string)$record[$typeField];
-            $typeSpecificFields = $this->tableAccessService->getFieldNamesForType($table, $recordType);
-            $hasValidTypeConfig = !empty($typeSpecificFields);
-
-            if ($hasValidTypeConfig) {
-                $typeSpecificFields = array_unique(array_merge($typeSpecificFields, $essentialFields));
-            }
-        }
+        $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        $allowedFields = array_unique(array_merge(array_keys($availableFields), $essentialFields));
 
         // Process each field
         foreach ($record as $field => $value) {
@@ -459,8 +460,10 @@ class ReadTableTool extends AbstractRecordTool
                 }
             }
 
-            // Skip fields not relevant to this record type (only if we have a valid type configuration)
-            if ($hasValidTypeConfig && !in_array($field, $typeSpecificFields)) {
+            // Schema filter: drop fields not advertised by getAvailableFields(). Computed
+            // fields registered via AfterSchemaLoadEvent are advertised and pass through
+            // the same as any TCA column — they are part of the default response.
+            if (!in_array($field, $allowedFields, true)) {
                 continue;
             }
 

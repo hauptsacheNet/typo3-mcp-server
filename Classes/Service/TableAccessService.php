@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use Doctrine\DBAL\ArrayParameterType;
-use Hn\McpServer\Event\ModifyAvailableFieldsEvent;
+use Hn\McpServer\Event\AfterSchemaLoadEvent;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
@@ -225,18 +225,38 @@ class TableAccessService implements SingletonInterface
     public function getAvailableFields(string $table, string $type = ''): array
     {
         $this->validateTableAccess($table);
-        
+
         // Check if schema exists for this table
         if (!$this->tcaSchemaFactory->has($table)) {
             return [];
         }
-        
+
         $schema = $this->tcaSchemaFactory->get($table);
         $fields = [];
         $subtypeField = null;
-        
-        // If a specific type is provided and the schema supports sub-schemas
-        if (!empty($type) && $schema->hasSubSchema($type)) {
+
+        // Two cases bypass sub-schema filtering and use the full main schema:
+        //
+        // 1) Foreign type notation (e.g. "uid_local:type" on sys_file_reference): the
+        //    record type is derived from a related record at runtime, so there is no
+        //    local type column the LLM can choose. Each "type" maps to a different
+        //    palette (basicoverlayPalette vs imageoverlayPalette etc.), and picking
+        //    one would hide fields like `alternative` or `crop` even though they are
+        //    writable for any type.
+        //
+        // 2) Read-only tables (e.g. sys_file): showitem describes a backend form
+        //    layout, which is irrelevant when the LLM can only read. The user expects
+        //    the schema to advertise every column they can filter on (mime_type, sha1,
+        //    size, identifier, ...). sys_file's TCA only defines a showitem for type
+        //    "1" listing 3 fields, so a sub-schema view drops the rest.
+        $rawTypeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
+        $usesForeignTypeNotation = is_string($rawTypeField) && str_contains($rawTypeField, ':');
+        $isReadOnly = $this->isTableReadOnly($table);
+        if ($usesForeignTypeNotation || $isReadOnly) {
+            foreach ($schema->getFields() as $field) {
+                $fields[$field->getName()] = $field->getConfiguration();
+            }
+        } elseif (!empty($type) && $schema->hasSubSchema($type)) {
             $subSchema = $schema->getSubSchema($type);
             
             // Check if this type uses subtypes (e.g., plugins using list_type)
@@ -293,7 +313,7 @@ class TableAccessService implements SingletonInterface
 
         // Allow extensions to add, remove, or reconfigure fields
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
-        $event = $eventDispatcher->dispatch(new ModifyAvailableFieldsEvent($table, $type, $fields));
+        $event = $eventDispatcher->dispatch(new AfterSchemaLoadEvent($table, $type, $fields));
         return $event->getFields();
     }
     

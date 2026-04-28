@@ -52,11 +52,16 @@ services:
     public: true
     
   # Event listeners
-  Hn\McpServer\EventListener\SysFileReferenceEnrichmentListener:
+  Hn\McpServer\EventListener\FileEnrichmentListener:
     tags:
       - name: event.listener
+        event: Hn\McpServer\Event\AfterSchemaLoadEvent
+        method: onSchemaLoad
+        identifier: 'mcp-server/file-enrichment-schema'
+      - name: event.listener
         event: Hn\McpServer\Event\AfterRecordReadEvent
-        identifier: 'mcp-server/sys-file-reference-enrichment'
+        method: onRecordRead
+        identifier: 'mcp-server/file-enrichment-read'
 
   Hn\McpServer\EventListener\SysFileMountRestrictionListener:
     tags:

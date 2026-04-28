@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
+use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\Service\SiteInformationService;
+use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -259,6 +262,143 @@ class FileReferenceTest extends FunctionalTestCase
         $this->assertEquals(1, $file['uid']);
         $this->assertEquals('test.jpg', $file['name']);
         $this->assertEquals('/user_upload/test.jpg', $file['identifier']);
+    }
+
+    /**
+     * public_url is registered as a computed field via AfterSchemaLoadEvent, so it
+     * behaves like any other advertised column: returned by default, narrowed by
+     * the `fields` whitelist when the caller passes one.
+     */
+    public function testSysFilePublicUrlIsAdvertisedField(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Default: public_url is part of the standard response
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $defaultFile = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayHasKey('public_url', $defaultFile, 'public_url should be in the default response');
+
+        // Whitelist that omits public_url drops it like any other column
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+            'fields' => ['name'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $narrowed = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayNotHasKey('public_url', $narrowed, 'public_url should drop when whitelist excludes it');
+        $this->assertEquals('test.jpg', $narrowed['name']);
+    }
+
+    /**
+     * GetTableSchema(sys_file) used to short-circuit with "No field layout defined
+     * for this type" because sys_file's TCA only defines a showitem for type "1".
+     * Picking a different default type (or any type without showitem) hid every
+     * useful column. The schema must list filterable columns regardless.
+     */
+    public function testSysFileSchemaListsFilterableColumns(): void
+    {
+        $tool = GeneralUtility::makeInstance(GetTableSchemaTool::class);
+        $result = $tool->execute(['table' => 'sys_file']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+        $this->assertStringNotContainsString('No field layout defined', $content);
+        foreach (['name', 'identifier', 'mime_type', 'sha1', 'size', 'type'] as $column) {
+            $this->assertStringContainsString($column, $content, "sys_file schema should mention '$column'");
+        }
+    }
+
+    /**
+     * GetTableSchema(sys_file_reference) used to expose only the type-"1" palette
+     * (title, description, uid_local, hidden, sys_language_uid, l10n_parent),
+     * hiding fields like alternative/link/crop/autoplay even though WriteTable
+     * accepts them. Foreign type notation must surface the union of fields.
+     */
+    public function testSysFileReferenceSchemaIncludesAllWritableFields(): void
+    {
+        $tool = GeneralUtility::makeInstance(GetTableSchemaTool::class);
+        $result = $tool->execute(['table' => 'sys_file_reference']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+        foreach (['title', 'description', 'alternative', 'link', 'crop', 'autoplay'] as $column) {
+            $this->assertStringContainsString($column, $content, "sys_file_reference schema should mention '$column'");
+        }
+    }
+
+    /**
+     * Computed fields registered via AfterSchemaLoadEvent must show up in their
+     * own section so the LLM can discover them and opt in via `fields`.
+     */
+    public function testComputedFieldsAreAdvertisedInSchema(): void
+    {
+        $tool = GeneralUtility::makeInstance(GetTableSchemaTool::class);
+
+        $sysFile = $tool->execute(['table' => 'sys_file']);
+        $this->assertFalse($sysFile->isError, json_encode($sysFile->jsonSerialize()));
+        $this->assertStringContainsString('Computed read-only — included by default', $sysFile->content[0]->text);
+        $this->assertStringContainsString('public_url', $sysFile->content[0]->text);
+
+        $sysFileReference = $tool->execute(['table' => 'sys_file_reference']);
+        $this->assertFalse($sysFileReference->isError, json_encode($sysFileReference->jsonSerialize()));
+        $content = $sysFileReference->content[0]->text;
+        $this->assertStringContainsString('Computed read-only — included by default', $content);
+        foreach (['file_name', 'file_identifier', 'file_mime_type', 'file_size', 'public_url'] as $field) {
+            $this->assertStringContainsString($field, $content, "computed field '$field' should appear");
+        }
+    }
+
+    /**
+     * The LLM needs an absolute URL to download a file. TYPO3's getPublicUrl()
+     * returns a path relative to the document root; the listener must promote
+     * it to "<scheme>://<host>/<path>" using the current request context.
+     */
+    public function testPublicUrlIsAbsoluteWhenRequestIsAvailable(): void
+    {
+        $request = new ServerRequest('https://typo3.example.com/api/mcp');
+        GeneralUtility::makeInstance(SiteInformationService::class)->setCurrentRequest($request);
+
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $file = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayHasKey('public_url', $file);
+        $this->assertStringStartsWith('https://typo3.example.com/', $file['public_url']);
+    }
+
+    /**
+     * Embedded sys_file_reference children used to leak every TYPO3 plumbing
+     * field (t3ver_*, l10n_state, deleted) because processRecord skipped its
+     * field filter when the type field uses foreign type notation. Now the
+     * filter always applies — non-TCA columns are gone, TCA columns plus
+     * declared computed fields remain.
+     */
+    public function testInlineChildrenStripWorkspaceAndTranslationPlumbing(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $ref = json_decode($result->content[0]->text, true)['records'][0]['assets'][0];
+        foreach (['t3ver_oid', 't3ver_wsid', 't3ver_state', 't3ver_stage', 'l10n_state', 'deleted'] as $leaked) {
+            $this->assertArrayNotHasKey($leaked, $ref, "embedded ref should not expose '$leaked'");
+        }
+
+        // Option a: inline children always include enrichment regardless of fields.
+        $this->assertArrayHasKey('public_url', $ref);
+        $this->assertArrayHasKey('file_name', $ref);
     }
 
     /**

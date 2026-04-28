@@ -148,13 +148,27 @@ class GetTableSchemaTool extends AbstractRecordTool
             return "ERROR: The requested type '$filterType' does not exist or has been excluded. Available types are: " . implode(', ', array_keys($types));
         }
         
-        // If no specific type is requested, use the first available type
+        // If no specific type is requested, use the first type that actually has a
+        // showitem layout. Some tables (e.g. sys_file) only define a layout for one
+        // type value while listing several in the type field's items list — picking
+        // the first item alphabetically would land on a type without a form.
         if (empty($filterType)) {
-            // Skip dividers when selecting the default type
+            $tcaTypes = $GLOBALS['TCA'][$table]['types'] ?? [];
             foreach ($types as $typeValue => $typeLabel) {
-                if ($typeValue !== '--div--') {
+                if ($typeValue === '--div--') {
+                    continue;
+                }
+                if (!empty($tcaTypes[$typeValue]['showitem'])) {
                     $filterType = (string)$typeValue;
                     break;
+                }
+            }
+            if (empty($filterType)) {
+                foreach ($types as $typeValue => $typeLabel) {
+                    if ($typeValue !== '--div--') {
+                        $filterType = (string)$typeValue;
+                        break;
+                    }
                 }
             }
         }
@@ -179,26 +193,25 @@ class GetTableSchemaTool extends AbstractRecordTool
             return $result;
         }
         
-        // Get the type configuration to understand field organization (tabs, palettes)
+        // Get the type configuration to understand field organization (tabs, palettes).
+        // showitem may be empty for tables where the chosen type has no backend form
+        // (e.g. sys_file's "unknown" type, or any read-only table). In that case we
+        // skip showitem-based grouping and let the "Additional Fields" section below
+        // emit every accessible field — readers still need to see what's available.
         $typeConfig = $GLOBALS['TCA'][$table]['types'][$filterType] ?? [];
         $showitem = $typeConfig['showitem'] ?? '';
-        
-        if (empty($showitem)) {
-            $result .= "No field layout defined for this type.\n";
-            return $result;
-        }
-        
-        // Parse the showitem string for organization info
+
+        // Parse the showitem string for organization info (empty showitem yields no items)
         $fields = GeneralUtility::trimExplode(',', $showitem, true);
-        
+
         // Group fields by tab
         $tabFields = [];
         $currentTab = 'General';
-        
+
         foreach ($fields as $item) {
             $itemParts = GeneralUtility::trimExplode(';', $item, true);
             $fieldName = $itemParts[0];
-            
+
             // Check if this is a tab
             if ($fieldName === '--div--') {
                 $tabLabel = $itemParts[1] ?? 'Tab';
@@ -208,7 +221,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                 $tabFields[$currentTab][] = $item;
             }
         }
-        
+
         // Process each tab's fields
         $processedFields = [];
 
@@ -315,28 +328,55 @@ class GetTableSchemaTool extends AbstractRecordTool
             $result .= $tabContent;
         }
         
-        // Check for fields that are available but not in showitem (e.g., dynamically added fields like pi_flexform for plugins)
-        $unassignedFields = [];
+        // Fields advertised by the schema but not present in the type's showitem
+        // form layout fall here. Two real cases:
+        //   - Dynamically wired-in fields like pi_flexform on tt_content `list`
+        //     plugins, which the plugin registration adds outside the default
+        //     showitem string.
+        //   - Tables whose showitem is sparse (e.g. sys_file's only-defined type
+        //     lists three form fields while the LLM cares about a dozen columns).
+        // Computed read-only fields (mcp.computed=true) registered by
+        // AfterSchemaLoadEvent listeners get their own labelled section so the
+        // LLM knows they originate from outside the table and cannot be written.
+        $additionalFields = [];
+        $computedFields = [];
         foreach ($availableFields as $fieldName => $fieldConfig) {
-            if (!isset($processedFields[$fieldName])) {
-                $unassignedFields[$fieldName] = $fieldConfig;
+            if (isset($processedFields[$fieldName])) {
+                continue;
+            }
+            if (!empty($fieldConfig['mcp']['computed'])) {
+                $computedFields[$fieldName] = $fieldConfig;
+            } else {
+                $additionalFields[$fieldName] = $fieldConfig;
             }
         }
-        
-        // If there are unassigned fields, add them to a special section
-        if (!empty($unassignedFields)) {
+
+        if (!empty($additionalFields)) {
             $result .= "  (Additional Fields):\n";
-            foreach ($unassignedFields as $fieldName => $fieldConfig) {
+            foreach ($additionalFields as $fieldName => $fieldConfig) {
                 $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                 $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
                 $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
-                
+
                 // Add field details inline
                 $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType);
                 $result .= "\n";
             }
         }
-        
+
+        if (!empty($computedFields)) {
+            $result .= "  (Computed read-only — included by default, cannot be written):\n";
+            foreach ($computedFields as $fieldName => $fieldConfig) {
+                $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
+                $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
+                $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
+                if (!empty($fieldConfig['description'])) {
+                    $result .= " — " . TableAccessService::translateLabel($fieldConfig['description']);
+                }
+                $result .= "\n";
+            }
+        }
+
         return $result;
     }
     
