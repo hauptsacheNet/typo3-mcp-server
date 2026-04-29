@@ -102,13 +102,21 @@ class ContentBuilder
     }
     
     /**
-     * Set as list/plugin type
+     * Set as plugin content element. TYPO3 13 stores plugins as
+     * `CType=list, list_type=<plugin>`; TYPO3 14 dropped the `list` CType
+     * altogether and stores plugins via their own CType. We pick the right
+     * shape for the running TYPO3.
      */
-    public function asPlugin(string $listType, string $header = ''): self
+    public function asPlugin(string $pluginIdentifier, string $header = ''): self
     {
-        $this->data['CType'] = 'list';
-        $this->data['header'] = $header ?: $listType;
-        return $this->with('list_type', $listType);
+        if (\Hn\McpServer\Service\TableAccessService::hasPluginSubtypes()) {
+            $this->data['CType'] = 'list';
+            $this->data['list_type'] = $pluginIdentifier;
+        } else {
+            $this->data['CType'] = $pluginIdentifier;
+        }
+        $this->data['header'] = $header ?: $pluginIdentifier;
+        return $this;
     }
     
     /**

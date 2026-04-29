@@ -405,53 +405,53 @@ class GetTableSchemaTool extends AbstractRecordTool
     protected function addFlexFormIdentifiers(string &$result, array $config, string $table, string $fieldName, string $filterType = ''): void
     {
         $result .= " (FlexForm)";
-        
-        // Get available FlexForm identifiers
-        if (isset($config['ds']) && is_array($config['ds'])) {
-            $identifiers = array_keys($config['ds']);
-            
-            // Filter out default identifier
-            $identifiers = array_filter($identifiers, function($id) {
-                return $id !== 'default';
-            });
-            
-            // Filter identifiers based on the requested type
-            if (!empty($filterType) && !empty($config['ds_pointerField'])) {
-                $pointerFields = GeneralUtility::trimExplode(',', $config['ds_pointerField'], true);
-                
-                // Filter identifiers that match the current type
-                // Either directly or with a wildcard
-                $filteredIdentifiers = [];
-                foreach ($identifiers as $id) {
-                    if (strpos($id, ',') !== false) {
-                        $parts = explode(',', $id);
-                        // Check if the identifier matches the current type
-                        // Either directly or with a wildcard
-                        if (($parts[0] === '*' && $parts[1] === $filterType) || 
-                            ($parts[1] === '*' && $parts[0] === $filterType) ||
-                            ($parts[0] === $filterType) ||
-                            ($parts[1] === $filterType)) {
-                            $filteredIdentifiers[] = $id;
-                        }
-                    } elseif ($id === $filterType) {
-                        $filteredIdentifiers[] = $id;
-                    }
-                }
-                
-                // Use filtered identifiers if any were found
-                if (!empty($filteredIdentifiers)) {
-                    $identifiers = $filteredIdentifiers;
-                }
-            }
-            
-            if (!empty($identifiers)) {
-                $result .= " [Identifiers: " . implode(', ', $identifiers) . "]";
+
+        if (empty($config['ds'])) {
+            return;
+        }
+
+        // TYPO3 14: a single DataStructure is now stored as a string on the
+        // field's `ds` config (via columnsOverrides). Multiple DataStructures
+        // are still represented as an array keyed by identifier.
+        if (is_string($config['ds'])) {
+            // When resolved from a sub-schema's columnsOverrides, the DS
+            // applies to that record type. Use the filter type (the CType)
+            // as identifier so it can be fed into GetFlexFormSchema.
+            if (!empty($filterType)) {
+                $result .= " [Identifiers: " . $filterType . "]";
                 $result .= " (Use GetFlexFormSchema tool with these identifiers for details)";
+            } else {
+                $result .= " (Use GetFlexFormSchema tool with the record CType as identifier)";
+            }
+            return;
+        }
+
+        if (!is_array($config['ds'])) {
+            return;
+        }
+
+        $identifiers = array_values(array_filter(array_keys($config['ds']), fn($id) => $id !== 'default'));
+
+        if (!empty($filterType)) {
+            $filtered = array_values(array_filter(
+                $identifiers,
+                fn($id) => $id === $filterType
+                    || str_contains((string)$id, ',' . $filterType)
+                    || str_contains((string)$id, $filterType . ',')
+            ));
+            if (!empty($filtered)) {
+                $identifiers = $filtered;
             }
         }
-        
-        // Add ds_pointerField information if available
-        if (isset($config['ds_pointerField'])) {
+
+        if (!empty($identifiers)) {
+            $result .= " [Identifiers: " . implode(', ', $identifiers) . "]";
+            $result .= " (Use GetFlexFormSchema tool with these identifiers for details)";
+        }
+
+        // TYPO3 13: surface the ds_pointerField configuration so callers know
+        // which fields determine the DS lookup. Removed in TYPO3 14.
+        if (!empty($config['ds_pointerField'])) {
             $result .= " [ds_pointerField: " . $config['ds_pointerField'] . "]";
         }
     }

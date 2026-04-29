@@ -162,12 +162,14 @@ class TcaFormattingUtility
                 break;
                 
             case 'flex':
-                // Only applicable for TCA
+                // TYPO3 13: surface ds_pointerField configuration if present.
+                // Removed in TYPO3 14; schemas use columnsOverrides instead.
                 if (isset($config['ds_pointerField'])) {
                     $result .= " [ds_pointerField: " . $config['ds_pointerField'] . "]";
                 }
                 break;
-                
+
+
             case 'language':
                 // Special handling for language type fields (TYPO3 11.2+)
                 // Add note about ISO code support

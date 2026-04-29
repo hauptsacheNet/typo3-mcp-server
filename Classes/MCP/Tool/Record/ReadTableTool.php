@@ -451,21 +451,30 @@ class ReadTableTool extends AbstractRecordTool
 
         // Process each field
         foreach ($record as $field => $value) {
-            // Special handling for pi_flexform in list content elements
-            if ($field === 'pi_flexform' && $table === 'tt_content' &&
-                isset($record['CType']) && $record['CType'] === 'list' &&
-                !empty($record['list_type'])) {
-                // Check if there's a FlexForm DS configured for this plugin
+            // Special handling for pi_flexform on plugin content elements.
+            // TYPO3 13 plugins use CType=list with a list_type subtype; TYPO3 14
+            // plugins register their own CType directly.
+            if ($field === 'pi_flexform' && $table === 'tt_content' && !empty($record['CType'])) {
                 $flexFormDs = $GLOBALS['TCA']['tt_content']['columns']['pi_flexform']['config']['ds'] ?? [];
-                $listType = $record['list_type'];
+                $cType = $record['CType'];
+                $listType = $record['list_type'] ?? '';
 
-                // Check various DS key patterns
-                $hasFlexFormConfig = isset($flexFormDs[$listType . ',list']) ||
-                                    isset($flexFormDs['*,' . $listType]) ||
-                                    isset($flexFormDs[$listType]);
+                $hasFlexFormConfig = isset($flexFormDs[$cType]) || isset($flexFormDs['*,' . $cType]);
+                if (!$hasFlexFormConfig && $cType === 'list' && $listType !== '') {
+                    $hasFlexFormConfig = isset($flexFormDs[$listType])
+                        || isset($flexFormDs['*,' . $listType])
+                        || isset($flexFormDs[$listType . ',list']);
+                }
 
                 if ($hasFlexFormConfig) {
-                    // Include pi_flexform for this plugin
+                    // The bypass exists so plugin pi_flexform survives the
+                    // type-filter (line below). But an explicit field
+                    // whitelist must still be respected — otherwise a caller
+                    // asking for {"fields":["uid","header"]} unexpectedly gets
+                    // a (potentially large) FlexForm payload back.
+                    if (!empty($requestedFields) && !in_array($field, $requestedFields, true)) {
+                        continue;
+                    }
                     $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
                     continue;
                 }
@@ -551,7 +560,9 @@ class ReadTableTool extends AbstractRecordTool
         // Convert FlexForm XML to JSON
         if ($this->tableAccessService->isFlexFormField($table, $field) && is_string($value) && !empty($value) && strpos($value, '<?xml') === 0) {
             try {
-                // Use TYPO3's FlexFormService to convert XML to array
+                // Use TYPO3's FlexFormService to convert XML to array. The
+                // class is aliased to FlexFormTools in TYPO3 14 (#107945) but
+                // the method signature is identical.
                 $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
                 $flexFormArray = $flexFormService->convertFlexFormContentToArray($value);
 
