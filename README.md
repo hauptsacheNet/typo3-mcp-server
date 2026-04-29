@@ -45,6 +45,18 @@ All these operations happen safely in workspaces, giving you full control to rev
 
 While there are a lot of automated tests, and even some [LLM test](Tests/Llm/README.md), TYPO3 instances are widely different and Language Models are also widely different. Feel free to [create issues here on GitHub](https://github.com/logiscape/mcp-sdk-php/issues) or [share experiences in the typo3-core-ai channel](https://typo3.slack.com/archives/C091M0M7BL6). 
 
+### Tested LLMs
+
+The [LLM test suite](Tests/Llm/README.md) runs every model below against the extension on every merge to `main`, and pushes the results to a public Google Sheet. Once the Sheet is deployed (see [Build/llm-stats-apps-script.gs](Build/llm-stats-apps-script.gs)), uncomment the block below and replace `SHEET_DEPLOY_ID` / `SHEET_PUBLIC_URL` to surface live shields.io badges that link to the run-by-run history.
+
+<!-- Tested-LLMs badges — uncomment and fill in after first deploy:
+[![haiku-4.5](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dhaiku-4.5&label=haiku-4.5)](SHEET_PUBLIC_URL)
+[![gpt-5.4-mini](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dgpt-5.4-mini&label=gpt-5.4-mini)](SHEET_PUBLIC_URL)
+[![gpt-oss-120b](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dgpt-oss-120b&label=gpt-oss-120b)](SHEET_PUBLIC_URL)
+[![mistral-large-2512](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dmistral-large-2512&label=mistral-large-2512)](SHEET_PUBLIC_URL)
+[![gemini-3-flash](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dgemini-3-flash&label=gemini-3-flash)](SHEET_PUBLIC_URL)
+-->
+
 ## Installation
 
 ```bash

@@ -132,3 +132,12 @@ jobs:
 
       - name: Check majority pass rule
         run: php Build/check-llm-results.php --min-pass=3
+
+      - name: Publish LLM stats to Google Sheet
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          LLM_STATS_SHEET_URL: ${{ secrets.LLM_STATS_SHEET_URL }}
+          LLM_STATS_SHEET_TOKEN: ${{ secrets.LLM_STATS_SHEET_TOKEN }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: php Build/post-llm-stats.php
