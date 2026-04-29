@@ -948,15 +948,22 @@ class ReadTableTool extends AbstractRecordTool
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
 
         // Embedded children get a curated default whitelist passed through the
-        // standard requestedFields filter. The caller still drops the foreign
-        // field at embedding time — it is re-injected here only so grouping by
-        // parent UID works.
-        $requestedFields = $embedAsChildren
-            ? $this->tableAccessService->getEmbeddedRecordFields($table, $foreignField)
-            : [];
+        // standard requestedFields filter. The whitelist is computed per record
+        // off the row's own type so children of different sub-types in the same
+        // batch each keep their type-specific fields. The foreign field is
+        // re-injected below only so grouping by parent UID works; the caller
+        // drops it at embedding time.
+        $typeField = $embedAsChildren ? $this->tableAccessService->getTypeFieldName($table) : null;
 
         $processedRecords = [];
         foreach ($records as $record) {
+            if ($embedAsChildren) {
+                $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
+                $requestedFields = $this->tableAccessService->getEmbeddedRecordFields($table, $foreignField, $recordType);
+            } else {
+                $requestedFields = [];
+            }
+
             $processed = $this->processRecord($record, $table, $requestedFields);
 
             // Ensure the foreign field is always included if it exists in the raw record

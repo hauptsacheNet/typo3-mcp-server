@@ -846,10 +846,13 @@ class TableAccessService implements SingletonInterface
      *
      * Computed read-only fields registered via AfterSchemaLoadEvent
      * (file_name, public_url, ...) are not in TCA columns and therefore stay.
+     *
+     * The caller passes each child's own type so sub-schema-specific columns
+     * are not silently dropped on a mixed-type child set.
      */
-    public function getEmbeddedRecordFields(string $table, string $foreignField = ''): array
+    public function getEmbeddedRecordFields(string $table, string $foreignField = '', string $recordType = ''): array
     {
-        $availableFields = $this->getAvailableFields($table, '');
+        $availableFields = $this->getAvailableFields($table, $recordType);
 
         $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
         $exclude = ['pid'];
