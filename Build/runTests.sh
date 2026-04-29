@@ -17,6 +17,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PHP_VERSION="8.3"
 DBMS="sqlite"
 TEST_SUITE="functional"
+NO_DOCKER=0
 EXTRA_ARGS=()
 
 # Unique prefix for this run (used for container and network names)
@@ -41,6 +42,7 @@ Options:
     -p <version>    PHP version: 8.2, 8.3 (default), 8.4, 8.5
     -d <dbms>       Database backend: sqlite (default), mysql, mariadb, postgres
     -s <suite>      Test suite: functional (default), lint, e2e
+    -n, --no-docker Run e2e locally without Docker (uses host PHP, SQLite, local Playwright)
     -h, --help      Show this help
 
 Any arguments after -- are passed directly to phpunit.
@@ -75,6 +77,10 @@ while [ $# -gt 0 ]; do
             TEST_SUITE="$2"
             shift 2
             ;;
+        -n|--no-docker)
+            NO_DOCKER=1
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -108,11 +114,25 @@ case "${TEST_SUITE}" in
     *) echo "Error: unsupported test suite '${TEST_SUITE}'. Use functional, lint, or e2e." >&2; exit 1 ;;
 esac
 
-# Cleanup function — removes containers and network
+# Auto-enable no-docker mode when docker is not installed or the daemon is unreachable.
+if [ "${NO_DOCKER}" -eq 0 ] && [ "${TEST_SUITE}" = "e2e" ]; then
+    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+        echo "Note: docker unavailable, running e2e tests locally (--no-docker)." >&2
+        NO_DOCKER=1
+    fi
+fi
+
+# Cleanup function — removes containers and network (docker mode) or background PHP server (local mode)
+LOCAL_WEB_PID=""
 cleanup() {
     set +e
-    docker rm -f "${CONTAINER_NAME}" "${RUN_ID}-web" "${RUN_ID}-db" "${RUN_ID}-pw" >/dev/null 2>&1
-    docker network rm "${NETWORK_NAME}" >/dev/null 2>&1
+    if [ -n "${LOCAL_WEB_PID}" ]; then
+        kill "${LOCAL_WEB_PID}" >/dev/null 2>&1
+    fi
+    if command -v docker >/dev/null 2>&1; then
+        docker rm -f "${CONTAINER_NAME}" "${RUN_ID}-web" "${RUN_ID}-db" "${RUN_ID}-pw" >/dev/null 2>&1
+        docker network rm "${NETWORK_NAME}" >/dev/null 2>&1
+    fi
     set -e
 }
 trap cleanup EXIT
@@ -291,6 +311,77 @@ case "${TEST_SUITE}" in
             "
         ;;
     e2e)
+        if [ "${NO_DOCKER}" -eq 1 ]; then
+            echo "Running E2E tests locally (host PHP + SQLite + Playwright)..."
+
+            command -v php >/dev/null 2>&1 || { echo "Error: php is required for --no-docker mode." >&2; exit 1; }
+            command -v composer >/dev/null 2>&1 || { echo "Error: composer is required for --no-docker mode." >&2; exit 1; }
+            command -v npx >/dev/null 2>&1 || { echo "Error: npx (Node.js) is required for --no-docker mode." >&2; exit 1; }
+            php -r 'exit(extension_loaded("pdo_sqlite")?0:1);' \
+                || { echo "Error: PHP extension pdo_sqlite is required for --no-docker mode." >&2; exit 1; }
+
+            cd "${ROOT_DIR}"
+            rm -rf var/cache var/log config/system/settings.php config/system/additional.php var/*.db 2>/dev/null || true
+
+            echo "Installing composer dependencies..."
+            composer install --no-interaction --prefer-dist --no-scripts -q
+
+            echo "Setting up TYPO3 (SQLite)..."
+            vendor/bin/typo3 setup \
+                --driver=sqlite \
+                --dbname="${ROOT_DIR}/var/sqlite.db" \
+                --admin-username=admin \
+                --admin-user-password=Admin123! \
+                --admin-email=admin@example.com \
+                --project-name=mcp-server-e2e \
+                --server-type=other \
+                --no-interaction \
+                --force >/dev/null
+
+            # Relax trusted-hosts / devIPmask for the built-in web server.
+            php -r '$s=include"config/system/settings.php";$s["SYS"]["trustedHostsPattern"]=".*";$s["SYS"]["devIPmask"]="*";file_put_contents("config/system/settings.php","<?php\nreturn ".var_export($s,true).";\n");'
+            rm -rf var/cache
+
+            LOCAL_WEB_HOST="127.0.0.1"
+            LOCAL_WEB_PORT="${TYPO3_E2E_PORT:-8080}"
+            LOCAL_WEB_URL="http://${LOCAL_WEB_HOST}:${LOCAL_WEB_PORT}"
+
+            echo "Starting PHP built-in web server at ${LOCAL_WEB_URL}..."
+            mkdir -p var/log
+            php -S "${LOCAL_WEB_HOST}:${LOCAL_WEB_PORT}" -t public/ >"${ROOT_DIR}/var/log/typo3-e2e-web.log" 2>&1 &
+            LOCAL_WEB_PID=$!
+
+            echo "Waiting for TYPO3..."
+            for i in $(seq 1 60); do
+                if ! kill -0 "${LOCAL_WEB_PID}" 2>/dev/null; then
+                    echo "Web server exited unexpectedly. Logs:" >&2
+                    tail -30 "${ROOT_DIR}/var/log/typo3-e2e-web.log" >&2
+                    exit 1
+                fi
+                if curl -sf "${LOCAL_WEB_URL}/typo3/" -o /dev/null 2>&1; then
+                    echo "TYPO3 is ready."
+                    break
+                fi
+                if [ "$i" -eq 60 ]; then
+                    echo "TYPO3 web server timeout. Logs:" >&2
+                    tail -30 "${ROOT_DIR}/var/log/typo3-e2e-web.log" >&2
+                    exit 1
+                fi
+                sleep 1
+            done
+
+            echo "Running Playwright tests..."
+            cd "${ROOT_DIR}/Build"
+            if [ ! -d node_modules ]; then
+                npm ci
+            fi
+            # Idempotent: a no-op once the matching browser is cached.
+            npx playwright install chromium
+            TYPO3_BASE_URL="${LOCAL_WEB_URL}" CI="${CI:-}" \
+                npx playwright test ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+            exit 0
+        fi
+
         echo "Running E2E tests (Docker: MySQL + PHP web server + Playwright)..."
 
         # Clean up stale state from previous runs (may be root-owned from Docker)

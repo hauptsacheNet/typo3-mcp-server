@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Event\AfterRecordReadEvent;
+use Hn\McpServer\Event\BeforeRecordReadEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Mcp\Types\CallToolResult;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Core\Database\Connection;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
@@ -15,6 +18,7 @@ use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use Hn\McpServer\Service\LanguageService;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -273,14 +277,6 @@ class ReadTableTool extends AbstractRecordTool
             $queryBuilder->andWhere($condition);
         }
 
-        // Apply file-mount restriction for non-admin users when reading sys_file
-        if ($table === 'sys_file') {
-            $mountRestriction = $this->tableAccessService->buildFileMountRestriction($queryBuilder);
-            if ($mountRestriction !== null) {
-                $queryBuilder->andWhere($mountRestriction);
-            }
-        }
-
         // Apply default sorting from TCA
         $this->applyDefaultSorting($queryBuilder, $table);
 
@@ -345,13 +341,10 @@ class ReadTableTool extends AbstractRecordTool
             $countQueryBuilder->andWhere($condition);
         }
 
-        // Apply file-mount restriction for non-admin users when counting sys_file
-        if ($table === 'sys_file') {
-            $countMountRestriction = $this->tableAccessService->buildFileMountRestriction($countQueryBuilder);
-            if ($countMountRestriction !== null) {
-                $countQueryBuilder->andWhere($countMountRestriction);
-            }
-        }
+        // Allow listeners to add restrictions (e.g. file mounts, tenant scopes)
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $countQueryBuilder, 'count'));
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select'));
 
         try {
             $totalCount = $countQueryBuilder->executeQuery()->fetchOne();
@@ -365,6 +358,22 @@ class ReadTableTool extends AbstractRecordTool
         } catch (\Doctrine\DBAL\Exception $e) {
             throw new DatabaseException('select', $table, $e);
         }
+
+        // Apply workspace overlay so callers see the workspace-effective row,
+        // not the underlying live record. WorkspaceRestriction strips workspace
+        // versions out of the result set; BackendUtility::workspaceOL() looks
+        // them up and folds their fields onto the live row in place.
+        $records = $this->applyWorkspaceOverlay($table, $records);
+
+        // Allow listeners to enrich or redact rows on raw data so they see all source
+        // columns (uid_local, etc.) regardless of the caller's `fields` filter. The
+        // requested-fields list is passed through so listeners can short-circuit
+        // expensive work the caller did not ask for. processRecord then applies the
+        // schema and `fields` filters; computed (mcp.computed) fields only survive
+        // when the caller explicitly listed them.
+        $afterEvent = new AfterRecordReadEvent($table, $records, 'top', $requestedFields);
+        $eventDispatcher->dispatch($afterEvent);
+        $records = $afterEvent->getRecords();
 
         // Process records to handle binary data, convert types, and filter default values
         $processedRecords = [];
@@ -388,15 +397,24 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Process a raw database record into a filtered, converted result.
      *
-     * Applies two layers of field filtering:
-     * 1. TCA type filtering — fields not in the record type's showitem definition are excluded.
-     *    Essential fields (uid, pid, type, label, timestamps, hidden, sorting) are merged into
-     *    the type-specific set so they always pass this check — TCA showitem doesn't declare them
-     *    because they're ctrl fields not shown in backend forms, but they're valid to read.
-     *    canAccessField() is also enforced here since getFieldNamesForType() already strips
-     *    inaccessible fields (file fields, inline to restricted tables, TSconfig-disabled, etc.).
-     * 2. Requested fields — optional user-provided whitelist that narrows the result further.
-     *    When provided, uid is always added. When empty, all fields from step 1 are returned.
+     * Field selection works in two layers:
+     *
+     * 1. Schema filter — only fields advertised by TableAccessService::getAvailableFields()
+     *    survive (TCA columns the user can access, plus essential ctrl fields, plus any
+     *    extra fields a listener registered via AfterSchemaLoadEvent — e.g. computed
+     *    read-only fields like public_url). When a record has a writable type field,
+     *    sub-schema rules narrow the set further. When the type cannot be derived from
+     *    the row (no type field, foreign type notation), the table's main schema fields
+     *    apply — important for embedded children of tables like sys_file_reference,
+     *    where without this clamp every TYPO3 plumbing column (t3ver_*, l10n_*) would
+     *    leak into the response.
+     *
+     * 2. Caller's `fields` whitelist — optional second pass, narrows further. uid is
+     *    always added.
+     *
+     *    Inline children of hidden tables flow through this same whitelist with a
+     *    default computed by TableAccessService::getEmbeddedRecordFields(), which
+     *    drops plumbing/virtual TCA columns the LLM has no use for.
      *
      * @param array $record Raw database row
      * @param string $table Table name
@@ -422,23 +440,14 @@ class ReadTableTool extends AbstractRecordTool
             $requestedFields[] = 'uid';
         }
 
-        // Get type-specific fields if a type field exists.
-        // Essential fields (uid, pid, timestamps, etc.) are merged in because TCA showitem
-        // doesn't declare ctrl fields, but they are valid to read.
+        // Build the set of fields the schema lets through. Always include essential
+        // ctrl fields (uid, pid, timestamps, etc.) since they are valid to read but
+        // are typically absent from TCA showitem definitions.
         $essentialFields = $this->tableAccessService->getEssentialFields($table);
         $typeField = $this->tableAccessService->getTypeFieldName($table);
-        $typeSpecificFields = [];
-        $hasValidTypeConfig = false;
-
-        if ($typeField && isset($record[$typeField])) {
-            $recordType = (string)$record[$typeField];
-            $typeSpecificFields = $this->tableAccessService->getFieldNamesForType($table, $recordType);
-            $hasValidTypeConfig = !empty($typeSpecificFields);
-
-            if ($hasValidTypeConfig) {
-                $typeSpecificFields = array_unique(array_merge($typeSpecificFields, $essentialFields));
-            }
-        }
+        $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        $allowedFields = array_unique(array_merge(array_keys($availableFields), $essentialFields));
 
         // Process each field
         foreach ($record as $field => $value) {
@@ -471,8 +480,10 @@ class ReadTableTool extends AbstractRecordTool
                 }
             }
 
-            // Skip fields not relevant to this record type (only if we have a valid type configuration)
-            if ($hasValidTypeConfig && !in_array($field, $typeSpecificFields)) {
+            // Schema filter: drop fields not advertised by getAvailableFields(). Computed
+            // fields registered via AfterSchemaLoadEvent are advertised and pass through
+            // the same as any TCA column — they are part of the default response.
+            if (!in_array($field, $allowedFields, true)) {
                 continue;
             }
 
@@ -842,11 +853,14 @@ class ReadTableTool extends AbstractRecordTool
         // (e.g., sys_file_reference uses tablenames/fieldname to distinguish which field owns each reference)
         $foreignSortBy = $fieldConfig['config']['foreign_sortby'] ?? '';
         $foreignMatchFields = $fieldConfig['config']['foreign_match_fields'] ?? [];
-        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy, $foreignMatchFields);
+        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy, $foreignMatchFields, $isHiddenTable);
 
-        // For sys_file_reference, enrich with file metadata so LLMs know what file is referenced
-        if ($foreignTable === 'sys_file_reference' && !empty($relatedRecords)) {
-            $relatedRecords = $this->enrichFileReferences($relatedRecords);
+        // Allow listeners to enrich or redact inline children (e.g. attach file metadata)
+        if (!empty($relatedRecords)) {
+            $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+            $afterEvent = new AfterRecordReadEvent($foreignTable, $relatedRecords, 'inline');
+            $eventDispatcher->dispatch($afterEvent);
+            $relatedRecords = $afterEvent->getRecords();
         }
 
         // Group related records by parent record
@@ -867,8 +881,16 @@ class ReadTableTool extends AbstractRecordTool
             if ($uid !== null) {
                 if (isset($groupedRecords[$uid]) && !empty($groupedRecords[$uid])) {
                     if ($isHiddenTable) {
-                        // Embed full records for hidden tables (like sys_file_reference)
-                        $record[$fieldName] = $groupedRecords[$uid];
+                        // Embed full records for hidden tables (like sys_file_reference).
+                        // The foreign field that links each child back to its parent is
+                        // kept until grouping is done, then dropped — the parent is
+                        // already known by virtue of the embedding.
+                        $cleaned = [];
+                        foreach ($groupedRecords[$uid] as $child) {
+                            unset($child[$foreignField]);
+                            $cleaned[] = $child;
+                        }
+                        $record[$fieldName] = $cleaned;
                     } else {
                         // Return only UIDs for independent tables (like tt_content)
                         $record[$fieldName] = array_column($groupedRecords[$uid], 'uid');
@@ -884,78 +906,16 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
-     * Enrich sys_file_reference records with file metadata from sys_file.
-     * Adds file_name, file_identifier, and public_url so LLMs know what file is referenced.
+     * Get inline related records.
+     *
+     * @param bool $embedAsChildren When true, the caller will embed the full records
+     *                              into the parent (hidden tables). processRecord
+     *                              applies the tighter "embedded" filter so plumbing
+     *                              and the foreign reference do not leak. The foreign
+     *                              field is re-injected here so the caller can group
+     *                              by parent UID; it is dropped at embedding time.
      */
-    protected function enrichFileReferences(array $records): array
-    {
-        // Collect unique sys_file UIDs from uid_local
-        $fileUids = [];
-        foreach ($records as $record) {
-            $fileUid = (int)($record['uid_local'] ?? 0);
-            if ($fileUid > 0) {
-                $fileUids[$fileUid] = true;
-            }
-        }
-
-        if (empty($fileUids)) {
-            return $records;
-        }
-
-        // Fetch file metadata in a single query
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('sys_file');
-        $queryBuilder->getRestrictions()->removeAll();
-
-        $fileRecords = $queryBuilder
-            ->select('uid', 'name', 'identifier', 'storage', 'type', 'mime_type', 'size')
-            ->from('sys_file')
-            ->where(
-                $queryBuilder->expr()->in(
-                    'uid',
-                    $queryBuilder->createNamedParameter(array_keys($fileUids), Connection::PARAM_INT_ARRAY)
-                )
-            )
-            ->executeQuery()
-            ->fetchAllAssociative();
-
-        // Index by uid
-        $fileMap = [];
-        foreach ($fileRecords as $fileRecord) {
-            $fileMap[(int)$fileRecord['uid']] = $fileRecord;
-        }
-
-        // Resolve public URLs via ResourceFactory
-        $resourceFactory = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class);
-
-        // Enrich each file reference record
-        foreach ($records as &$record) {
-            $fileUid = (int)($record['uid_local'] ?? 0);
-            if ($fileUid > 0 && isset($fileMap[$fileUid])) {
-                $file = $fileMap[$fileUid];
-                $record['file_name'] = $file['name'];
-                $record['file_identifier'] = $file['identifier'];
-                $record['file_mime_type'] = $file['mime_type'];
-                $record['file_size'] = (int)$file['size'];
-
-                // Try to resolve public URL
-                try {
-                    $fileObject = $resourceFactory->getFileObject($fileUid);
-                    $record['public_url'] = $fileObject->getPublicUrl();
-                } catch (\Exception $e) {
-                    // File might not be accessible
-                    $record['public_url'] = null;
-                }
-            }
-        }
-
-        return $records;
-    }
-
-    /**
-     * Get inline related records
-     */
-    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids, string $foreignSortBy = '', array $foreignMatchFields = []): array
+    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids, string $foreignSortBy = '', array $foreignMatchFields = [], bool $embedAsChildren = false): array
     {
         if (empty($parentUids)) {
             return [];
@@ -999,14 +959,31 @@ class ReadTableTool extends AbstractRecordTool
             );
         }
 
+        // Allow listeners to add restrictions to inline-child lookups too
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select'));
+
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
+        $records = $this->applyWorkspaceOverlay($table, $records);
 
+        // Embedded children get a curated default whitelist passed through the
+        // standard requestedFields filter. The whitelist is computed per record
+        // off the row's own type so children of different sub-types in the same
+        // batch each keep their type-specific fields. The foreign field is
+        // re-injected below only so grouping by parent UID works; the caller
+        // drops it at embedding time.
+        $typeField = $embedAsChildren ? $this->tableAccessService->getTypeFieldName($table) : null;
 
-
-        // Process records for workspace transparency
         $processedRecords = [];
         foreach ($records as $record) {
-            $processed = $this->processRecord($record, $table);
+            if ($embedAsChildren) {
+                $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
+                $requestedFields = $this->tableAccessService->getEmbeddedRecordFields($table, $foreignField, $recordType);
+            } else {
+                $requestedFields = [];
+            }
+
+            $processed = $this->processRecord($record, $table, $requestedFields);
 
             // Ensure the foreign field is always included if it exists in the raw record
             if (isset($record[$foreignField]) && !isset($processed[$foreignField])) {
@@ -1173,6 +1150,49 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
+     * Apply workspace overlay so result rows reflect the workspace-effective state.
+     *
+     * WorkspaceRestriction returns the live record (or a move pointer); the actual
+     * workspace edit lives in a sibling row that the restriction filters out.
+     * BackendUtility::workspaceOL() resolves that sibling and merges its fields
+     * onto the row in place, mirroring how TYPO3's backend list module shows
+     * workspace edits. Rows with a delete placeholder are dropped from the result.
+     */
+    protected function applyWorkspaceOverlay(string $table, array $records): array
+    {
+        if (empty($records)) {
+            return $records;
+        }
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        if ($workspaceId <= 0) {
+            return $records;
+        }
+        if (empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS'] ?? false)) {
+            return $records;
+        }
+
+        $overlaid = [];
+        foreach ($records as $row) {
+            $original = $row;
+            try {
+                BackendUtility::workspaceOL($table, $row, $workspaceId);
+            } catch (\Throwable $e) {
+                // Defensive: a corrupt workspace version (e.g. binary garbage
+                // in a string field on a strict driver) must not turn the
+                // whole read into a hard error response. Log and keep the
+                // live row.
+                $this->logException($e, sprintf('applying workspace overlay on %s', $table));
+                $row = $original;
+            }
+            if (!is_array($row)) {
+                continue;
+            }
+            $overlaid[] = $row;
+        }
+        return $overlaid;
+    }
+
+    /**
      * Load parent records for translations
      */
     protected function loadParentRecords(string $table, array $parentUids): array
@@ -1202,6 +1222,8 @@ class ReadTableTool extends AbstractRecordTool
             )
             ->executeQuery()
             ->fetchAllAssociative();
+
+        $records = $this->applyWorkspaceOverlay($table, $records);
 
         // Process and index by UID
         $indexedRecords = [];

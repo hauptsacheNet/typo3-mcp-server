@@ -292,6 +292,43 @@ class GetTableSchemaToolTest extends FunctionalTestCase
     }
 
     /**
+     * Tabs whose fields are all filtered out — or that have no fields at all
+     * in the TCA showitem (e.g. sys_file_metadata's "Extended" tab) — must not
+     * be rendered as orphan headers.
+     */
+    public function testEmptyTabsAreNotRendered(): void
+    {
+        $tool = new GetTableSchemaTool();
+
+        $result = $tool->execute([
+            'table' => 'sys_file_metadata',
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        // The "Extended" tab in sys_file_metadata's TCA contains no fields,
+        // so it should not appear in the output at all.
+        $this->assertStringNotContainsString('(Extended):', $content);
+
+        // No tab header should be left without at least one field/palette below it.
+        $lines = explode("\n", $content);
+        $tabHeader = '/^  \([^)]+\):$/';
+        $childLine = '/^    [\s\S]/';
+        foreach ($lines as $index => $line) {
+            if (!preg_match($tabHeader, $line)) {
+                continue;
+            }
+            $next = $lines[$index + 1] ?? '';
+            $this->assertMatchesRegularExpression(
+                $childLine,
+                $next,
+                "Tab header '{$line}' has no field below it (next line: '{$next}')"
+            );
+        }
+    }
+
+    /**
      * Set up backend user with workspace
      */
     protected function setUpBackendUserWithWorkspace(int $uid): void

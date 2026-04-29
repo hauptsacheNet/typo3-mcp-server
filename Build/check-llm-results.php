@@ -80,11 +80,37 @@ function collectFromSuite(SimpleXMLElement $suite, array &$testCases): void
 
         $status = $failed ? 'FAIL' : ($skipped ? 'SKIP' : 'PASS');
         $testCases[$key]['models'][$model] = $status;
+        $testCases[$key]['stats'][$model] = loadTestStats($class, $baseName, $model);
 
         if (!$failed && !$skipped) {
             $testCases[$key]['passed']++;
         }
     }
+}
+
+function loadTestStats(string $class, string $baseName, string $model): ?array
+{
+    $statsDir = __DIR__ . '/../.Build/llm-stats';
+    $modelKey = $model === 'unknown' ? '' : $model;
+    $file = $statsDir . '/' . sha1($class . '::' . $baseName . '::' . $modelKey) . '.json';
+    if (!file_exists($file)) {
+        return null;
+    }
+    $data = json_decode((string)file_get_contents($file), true);
+    return is_array($data) ? $data : null;
+}
+
+function formatStats(?array $stats): string
+{
+    if ($stats === null) {
+        return '';
+    }
+    $calls = (int)($stats['llm_calls'] ?? 0);
+    $toolCalls = (int)($stats['tool_calls'] ?? 0);
+    $errors = (int)($stats['tool_errors'] ?? 0);
+    $errColor = $errors > 0 ? "\033[31m" : "\033[2m";
+    return " \033[2m[" . $calls . " calls, " . $toolCalls . " tools, "
+        . $errColor . $errors . " err\033[2m]\033[0m";
 }
 
 // Evaluate results
@@ -116,12 +142,14 @@ foreach ($testCases as $name => $result) {
             'FAIL' => "\033[31m✗\033[0m",
             'SKIP' => "\033[33m-\033[0m",
         };
-        $modelDetails[] = "$icon $model";
+        $modelDetails[] = "$icon $model" . formatStats($result['stats'][$model] ?? null);
     }
 
     $statusIcon = $ok ? "\033[32m✓\033[0m" : "\033[31m✗\033[0m";
     echo "$statusIcon $shortName ($passCount/$totalCount)\n";
-    echo "  " . implode('  ', $modelDetails) . "\n";
+    foreach ($modelDetails as $detail) {
+        echo "  $detail\n";
+    }
 
     if (!$ok) {
         $degraded[] = ['name' => $shortName, 'passed' => $passCount, 'total' => $totalCount, 'models' => $result['models']];
@@ -131,10 +159,16 @@ foreach ($testCases as $name => $result) {
 
 echo "\n" . str_repeat('=', 80) . "\n";
 
-// Fail if no tests actually executed (e.g. missing API key caused all skips)
+// Distinguish "no API key available" (expected on fork PRs — GitHub does not share
+// secrets with workflows triggered from forks) from "API key set but nothing ran"
+// (real CI/test problem). Only the latter should fail the job.
 $executedCount = count(array_filter($testCases, fn($r) => array_diff($r['models'], ['SKIP'])));
 if ($executedCount === 0) {
-    fwrite(STDERR, "\033[31mNo LLM tests were executed (all skipped). Check OPENROUTER_API_KEY.\033[0m\n");
+    if (getenv('OPENROUTER_API_KEY') === false || getenv('OPENROUTER_API_KEY') === '') {
+        fwrite(STDERR, "\033[33mNo LLM tests were executed (no OPENROUTER_API_KEY available — fork PR or local run without secret). Skipping majority-pass check.\033[0m\n");
+        exit(0);
+    }
+    fwrite(STDERR, "\033[31mNo LLM tests were executed (all skipped) despite OPENROUTER_API_KEY being set. Check test runner.\033[0m\n");
     exit(1);
 }
 

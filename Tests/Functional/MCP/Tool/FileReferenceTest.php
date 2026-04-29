@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
+use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\Service\SiteInformationService;
+use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -29,6 +32,7 @@ class FileReferenceTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_file.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_file_metadata.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_file_reference.csv');
         $this->setUpBackendUser(1);
@@ -262,6 +266,188 @@ class FileReferenceTest extends FunctionalTestCase
     }
 
     /**
+     * public_url is registered as a computed field via AfterSchemaLoadEvent, so it
+     * behaves like any other advertised column: returned by default, narrowed by
+     * the `fields` whitelist when the caller passes one.
+     */
+    public function testSysFilePublicUrlIsAdvertisedField(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Default: public_url is part of the standard response
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $defaultFile = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayHasKey('public_url', $defaultFile, 'public_url should be in the default response');
+
+        // Whitelist that omits public_url drops it like any other column
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+            'fields' => ['name'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $narrowed = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayNotHasKey('public_url', $narrowed, 'public_url should drop when whitelist excludes it');
+        $this->assertEquals('test.jpg', $narrowed['name']);
+    }
+
+    /**
+     * GetTableSchema(sys_file) used to short-circuit with "No field layout defined
+     * for this type" because sys_file's TCA only defines a showitem for type "1".
+     * Picking a different default type (or any type without showitem) hid every
+     * useful column. The schema must list filterable columns regardless.
+     */
+    public function testSysFileSchemaListsFilterableColumns(): void
+    {
+        $tool = GeneralUtility::makeInstance(GetTableSchemaTool::class);
+        $result = $tool->execute(['table' => 'sys_file']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+        $this->assertStringNotContainsString('No field layout defined', $content);
+        foreach (['name', 'identifier', 'mime_type', 'sha1', 'size', 'type'] as $column) {
+            $this->assertStringContainsString($column, $content, "sys_file schema should mention '$column'");
+        }
+    }
+
+    /**
+     * GetTableSchema(sys_file_reference) used to expose only the type-"1" palette
+     * (title, description, uid_local, hidden, sys_language_uid, l10n_parent),
+     * hiding fields like alternative/link/crop/autoplay even though WriteTable
+     * accepts them. Foreign type notation must surface the union of fields.
+     */
+    public function testSysFileReferenceSchemaIncludesAllWritableFields(): void
+    {
+        $tool = GeneralUtility::makeInstance(GetTableSchemaTool::class);
+        $result = $tool->execute(['table' => 'sys_file_reference']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $content = $result->content[0]->text;
+        foreach (['title', 'description', 'alternative', 'link', 'crop', 'autoplay'] as $column) {
+            $this->assertStringContainsString($column, $content, "sys_file_reference schema should mention '$column'");
+        }
+    }
+
+    /**
+     * Computed fields registered via AfterSchemaLoadEvent must show up in their
+     * own section so the LLM can discover them and opt in via `fields`.
+     */
+    public function testComputedFieldsAreAdvertisedInSchema(): void
+    {
+        $tool = GeneralUtility::makeInstance(GetTableSchemaTool::class);
+
+        $sysFile = $tool->execute(['table' => 'sys_file']);
+        $this->assertFalse($sysFile->isError, json_encode($sysFile->jsonSerialize()));
+        $this->assertStringContainsString('Computed read-only — included by default', $sysFile->content[0]->text);
+        $this->assertStringContainsString('public_url', $sysFile->content[0]->text);
+
+        $sysFileReference = $tool->execute(['table' => 'sys_file_reference']);
+        $this->assertFalse($sysFileReference->isError, json_encode($sysFileReference->jsonSerialize()));
+        $content = $sysFileReference->content[0]->text;
+        $this->assertStringContainsString('Computed read-only — included by default', $content);
+        foreach (['file_name', 'file_identifier', 'file_mime_type', 'file_size', 'public_url'] as $field) {
+            $this->assertStringContainsString($field, $content, "computed field '$field' should appear");
+        }
+    }
+
+    /**
+     * The LLM needs an absolute URL to download a file. TYPO3's getPublicUrl()
+     * returns a path relative to the document root; the listener must promote
+     * it to "<scheme>://<host>/<path>" using the current request context.
+     */
+    public function testPublicUrlIsAbsoluteWhenRequestIsAvailable(): void
+    {
+        $request = new ServerRequest('https://typo3.example.com/api/mcp');
+        GeneralUtility::makeInstance(SiteInformationService::class)->setCurrentRequest($request);
+
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $file = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayHasKey('public_url', $file);
+        $this->assertStringStartsWith('https://typo3.example.com/', $file['public_url']);
+    }
+
+    /**
+     * Embedded sys_file_reference children used to leak every TYPO3 plumbing
+     * field (t3ver_*, l10n_state, deleted) because processRecord skipped its
+     * field filter when the type field uses foreign type notation. Now the
+     * filter always applies — non-TCA columns are gone, TCA columns plus
+     * declared computed fields remain.
+     */
+    public function testInlineChildrenStripWorkspaceAndTranslationPlumbing(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $ref = json_decode($result->content[0]->text, true)['records'][0]['assets'][0];
+        foreach (['t3ver_oid', 't3ver_wsid', 't3ver_state', 't3ver_stage', 'l10n_state', 'deleted'] as $leaked) {
+            $this->assertArrayNotHasKey($leaked, $ref, "embedded ref should not expose '$leaked'");
+        }
+
+        // Option a: inline children always include enrichment regardless of fields.
+        $this->assertArrayHasKey('public_url', $ref);
+        $this->assertArrayHasKey('file_name', $ref);
+    }
+
+    /**
+     * Embedded sys_file_metadata used to leak every plumbing column the LLM has
+     * no use for (pid, tstamp, crdate, sys_language_uid, l10n_parent,
+     * l10n_diffsource, categories, file). The parent sys_file already provides
+     * that context — the embedded child should expose only the user-visible
+     * data fields plus uid.
+     */
+    public function testInlineSysFileMetadataExposesOnlyDataFields(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $file = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayHasKey('metadata', $file);
+        $this->assertCount(1, $file['metadata']);
+        $meta = $file['metadata'][0];
+
+        // Plumbing and virtual columns must be gone.
+        foreach ([
+            'pid',
+            'tstamp',
+            'crdate',
+            'sys_language_uid',
+            'l10n_parent',
+            'l10n_diffsource',
+            'categories',
+            'file',
+            'fileinfo',
+        ] as $leaked) {
+            $this->assertArrayNotHasKey($leaked, $meta, "embedded metadata should not expose '$leaked'");
+        }
+
+        // The data fields the LLM actually cares about must remain.
+        $this->assertSame(1, $meta['uid']);
+        $this->assertSame('Test Image Title', $meta['title']);
+        $this->assertSame('Alt text for test', $meta['alternative']);
+        $this->assertSame('Description text', $meta['description']);
+        $this->assertSame(1868, $meta['width']);
+        $this->assertSame(1261, $meta['height']);
+    }
+
+    /**
      * Test that sys_file is read-only (writing should fail)
      */
     public function testSysFileIsReadOnly(): void
@@ -276,6 +462,174 @@ class FileReferenceTest extends FunctionalTestCase
             ],
         ]);
         $this->assertTrue($result->isError, 'Writing to sys_file should fail');
+    }
+
+    /**
+     * The crop value (TCA type=imageManipulation) is stored as a JSON string in
+     * the database and ReadTableTool decodes it back into an array. A round trip
+     * through update must preserve the structure — sending the value back as the
+     * same array shape that read returned must not corrupt it into the literal
+     * string "Array" (which is what a (string)$array cast yields).
+     */
+    public function testCropFieldRoundTripThroughCreateUpdateRead(): void
+    {
+        // Use fractional values so the JSON round trip can't paper over a type
+        // change from float to int.
+        $cropPayload = [
+            'default' => [
+                'cropArea' => [
+                    'x' => 0.1,
+                    'y' => 0.2,
+                    'width' => 0.8,
+                    'height' => 0.7,
+                ],
+                'selectedRatio' => 'NaN',
+                'focusArea' => [],
+            ],
+        ];
+
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Create with crop provided as an array (shape clients see when reading)
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'header' => 'Crop array round trip',
+                'CType' => 'textmedia',
+                'assets' => [
+                    [
+                        'uid_local' => 1,
+                        'title' => 'Image with crop',
+                        'crop' => $cropPayload,
+                    ],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $contentUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Read after create — crop must come back as the same array
+        $result = $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $afterCreate = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertCount(1, $afterCreate['assets']);
+        $this->assertIsArray(
+            $afterCreate['assets'][0]['crop'] ?? null,
+            'crop must be returned as an array after create, got: '
+            . var_export($afterCreate['assets'][0]['crop'] ?? null, true)
+        );
+        $this->assertEquals($cropPayload, $afterCreate['assets'][0]['crop']);
+
+        // Get the existing reference uid so update patches the same row
+        $referenceUid = (int)$afterCreate['assets'][0]['uid'];
+
+        // Update — feed crop back as an array (the shape the read returned)
+        $newCrop = $cropPayload;
+        $newCrop['default']['cropArea']['width'] = 0.42;
+
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => $contentUid,
+            'data' => [
+                'assets' => [
+                    [
+                        'uid' => $referenceUid,
+                        'title' => 'Image with crop updated',
+                        'crop' => $newCrop,
+                    ],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Read after update — crop must still be the (updated) array, not "Array"
+        $result = $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $afterUpdate = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertCount(1, $afterUpdate['assets']);
+
+        $cropAfterUpdate = $afterUpdate['assets'][0]['crop'] ?? null;
+        $this->assertNotSame(
+            'Array',
+            $cropAfterUpdate,
+            'crop got cast to the string "Array" — array value reached the DB without being JSON-encoded'
+        );
+        $this->assertIsArray(
+            $cropAfterUpdate,
+            'crop must be returned as an array after update, got: ' . var_export($cropAfterUpdate, true)
+        );
+        $this->assertEquals($newCrop, $cropAfterUpdate);
+    }
+
+    /**
+     * Updating only sibling fields on an existing reference must not corrupt the
+     * crop value already stored in the database. This is the read-modify-write
+     * scenario flagged in real usage: the LLM updates the title, leaves crop
+     * untouched, and the existing crop JSON survives.
+     */
+    public function testCropSurvivesUpdateOfSiblingFieldsOnly(): void
+    {
+        $cropPayload = [
+            'default' => [
+                'cropArea' => ['x' => 0.1, 'y' => 0.2, 'width' => 0.8, 'height' => 0.7],
+                'selectedRatio' => 'NaN',
+                'focusArea' => [],
+            ],
+        ];
+
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        // Seed the row with a crop value via create
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'header' => 'Sibling-only update',
+                'CType' => 'textmedia',
+                'assets' => [
+                    ['uid_local' => 1, 'title' => 'Initial', 'crop' => $cropPayload],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $contentUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $afterCreate = json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid])->content[0]->text,
+            true
+        )['records'][0];
+        $referenceUid = (int)$afterCreate['assets'][0]['uid'];
+
+        // Update only the title — do not send crop
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => $contentUid,
+            'data' => [
+                'assets' => [
+                    ['uid' => $referenceUid, 'title' => 'Just retitled'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $afterUpdate = json_decode(
+            $readTool->execute(['table' => 'tt_content', 'uid' => $contentUid])->content[0]->text,
+            true
+        )['records'][0];
+
+        $this->assertSame('Just retitled', $afterUpdate['assets'][0]['title']);
+        $this->assertIsArray(
+            $afterUpdate['assets'][0]['crop'] ?? null,
+            'pre-existing crop must survive an update that does not touch it'
+        );
+        $this->assertEquals($cropPayload, $afterUpdate['assets'][0]['crop']);
     }
 
     /**

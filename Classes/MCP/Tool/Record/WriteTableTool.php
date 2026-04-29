@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Event\AfterRecordWriteEvent;
+use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\CallToolResult;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -78,6 +81,10 @@ class WriteTableTool extends AbstractRecordTool
                             'Uses the same field syntax as ReadTable output.' .
                             ($hasMultipleLanguages ? ' Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs.' : '') . ' ' .
                             'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
+                            'For embedded tables (e.g. file references), the array fully replaces the existing list: ' .
+                            'children present in the previous record but missing from the new array are deleted. ' .
+                            'To keep an existing child include it as {"uid": <existing>, ...}; only the fields you set are patched. ' .
+                            'Array order drives display order. ' .
                             'For text fields in update actions, instead of providing the full text, you can provide an array of search-and-replace operations: ' .
                             '[{"search": "old text", "replace": "new text"}]. Each operation can optionally include "replaceAll": true. ' .
                             'Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true.',
@@ -229,7 +236,16 @@ class WriteTableTool extends AbstractRecordTool
             default:
                 throw new ValidationException(['Invalid action: ' . $action . '. Valid actions are: create, update, translate, delete']);
         }
-        
+
+        // Allow listeners to modify data or veto the operation
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $beforeEvent = new BeforeRecordWriteEvent($table, $action, $data, $uid, $pid);
+        $eventDispatcher->dispatch($beforeEvent);
+        if ($beforeEvent->isVetoed()) {
+            return $this->createErrorResult('Operation vetoed: ' . ($beforeEvent->getVetoReason() ?? 'No reason given'));
+        }
+        $data = $beforeEvent->getData();
+
         // Execute the action
         switch ($action) {
             case 'create':
@@ -491,7 +507,10 @@ class WriteTableTool extends AbstractRecordTool
 
         // Get the live UID for workspace transparency
         $liveUid = $this->getLiveUid($table, $parentUid);
-        
+
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'create', $liveUid, $data, $pid));
+
         // Return the result with live UID
         return $this->createJsonResult([
             'action' => 'create',
@@ -610,6 +629,9 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'update', $uid, $data, null));
+
         // Return the result with the original live UID
         return $this->createJsonResult([
             'action' => 'update',
@@ -637,6 +659,9 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Error deleting record: ' . implode(', ', $dataHandler->errorLog));
         }
         
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'delete', $uid, [], null));
+
         return $this->createJsonResult([
             'action' => 'delete',
             'table' => $table,
@@ -875,6 +900,11 @@ class WriteTableTool extends AbstractRecordTool
 
         $targetIsoCode = $this->languageService->getIsoCodeFromUid($targetLanguageUid) ?? $targetLanguageUid;
 
+        if ($newTranslationUid) {
+            $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+            $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'translate', (int)$newTranslationUid, [], null));
+        }
+
         return $this->createJsonResult([
             'action' => 'translate',
             'table' => $table,
@@ -1098,42 +1128,100 @@ class WriteTableTool extends AbstractRecordTool
         array $config,
         ?int $liveUid = null
     ): void {
-        // If we're updating, handle existing relations
         $foreignMatchFields = $config['foreign_match_fields'] ?? [];
-        if ($liveUid !== null) {
-            $this->handleExistingEmbeddedRelations($foreignTable, $foreignField, $liveUid, $records, $foreignMatchFields);
+
+        // Existing children of this parent (live uids). Empty for the create path.
+        $existingChildUids = $liveUid !== null
+            ? $this->fetchEmbeddedRelationChildUids($foreignTable, $foreignField, $liveUid, $foreignMatchFields)
+            : [];
+
+        // Reject any uid that does not currently belong to this parent. Otherwise a caller
+        // could "steal" a child by sending another parent's child uid — combined with the
+        // orphan-deletion below this would silently delete this parent's real children and
+        // mutate an unrelated record.
+        foreach ($records as $index => $recordData) {
+            if (!is_array($recordData) || !isset($recordData['uid'])) {
+                continue;
+            }
+            if (!is_numeric($recordData['uid']) || (int)$recordData['uid'] <= 0) {
+                continue;
+            }
+            $childUid = (int)$recordData['uid'];
+            if (!in_array($childUid, $existingChildUids, true)) {
+                throw new ValidationException([
+                    sprintf(
+                        'Inline relation %s.%s at index %d references uid %d which does not belong to the current parent record. Embedded relations cannot be moved between parents.',
+                        $foreignTable,
+                        $foreignField,
+                        $index,
+                        $childUid
+                    )
+                ]);
+            }
         }
-        
+
+        if ($liveUid !== null) {
+            $this->deleteOrphanedEmbeddedRelations($foreignTable, $existingChildUids, $records);
+        }
+
         foreach ($records as $index => $recordData) {
             if (!is_array($recordData)) {
                 continue;
             }
-            
-            // Create new ID for the inline record
-            $newId = 'NEW' . uniqid() . '_' . $index;
-            
+
+            // Existing record carries a numeric uid → update in place instead of inserting a new row.
+            // Without this, payloads like image: [{uid: 42, alternative: "..."}] silently created a
+            // broken sys_file_reference with uid_local=0 instead of patching the existing one.
+            $existingUid = (isset($recordData['uid']) && is_numeric($recordData['uid']) && (int)$recordData['uid'] > 0)
+                ? (int)$recordData['uid']
+                : null;
+            unset($recordData['uid']);
+
             // Don't set the foreign field here - it will be handled by RelationHandler
             // Remove it if it was accidentally included
             unset($recordData[$foreignField]);
-            $recordData['pid'] = $pid;
 
-            // Set foreign_match_fields (e.g., tablenames/fieldname for sys_file_reference)
-            if (!empty($config['foreign_match_fields'])) {
-                foreach ($config['foreign_match_fields'] as $matchField => $matchValue) {
-                    $recordData[$matchField] = $matchValue;
+            // Run the same field-level conversions we apply to top-level records
+            // (notably JSON-encoding imageManipulation values) so embedded children
+            // like sys_file_reference.crop survive the round trip.
+            $recordData = $this->convertDataForStorage($foreignTable, $recordData);
+
+            if ($existingUid === null) {
+                // New record: pid + foreign_match_fields are required for proper insertion
+                $recordData['pid'] = $pid;
+
+                // Set foreign_match_fields (e.g., tablenames/fieldname for sys_file_reference)
+                if (!empty($config['foreign_match_fields'])) {
+                    foreach ($config['foreign_match_fields'] as $matchField => $matchValue) {
+                        $recordData[$matchField] = $matchValue;
+                    }
                 }
+
+                $key = 'NEW' . uniqid() . '_' . $index;
+            } else {
+                // Update path: target the workspace version so DataHandler patches the existing
+                // reference instead of touching the live record outside the workspace overlay.
+                $key = $this->resolveToWorkspaceUid($foreignTable, $existingUid);
             }
 
-            // If we have a sorting field, set it
+            // Drive sort order from array position for both new and existing records.
+            // foreign_sortby is hidden from the schema (auto-managed), so reordering is
+            // only possible via the order in which the caller lists the children here.
             if (isset($config['foreign_sortby'])) {
                 $recordData[$config['foreign_sortby']] = ($index + 1) * 256;
+            }
+
+            if ($existingUid !== null && empty($recordData)) {
+                // Caller only sent a uid with no field changes and the table has no
+                // foreign_sortby — nothing to patch.
+                continue;
             }
 
             // Add to data map
             if (!isset($dataMap[$foreignTable])) {
                 $dataMap[$foreignTable] = [];
             }
-            $dataMap[$foreignTable][$newId] = $recordData;
+            $dataMap[$foreignTable][$key] = $recordData;
         }
     }
     
@@ -1217,16 +1305,19 @@ class WriteTableTool extends AbstractRecordTool
     }
     
     /**
-     * Handle existing embedded relations during updates
+     * Fetch the live uids of embedded children currently attached to a parent.
+     *
+     * Workspace overlays are folded onto their live uid (t3ver_oid) so the result
+     * matches the uids visible to the MCP client.
+     *
+     * @return int[]
      */
-    protected function handleExistingEmbeddedRelations(
+    protected function fetchEmbeddedRelationChildUids(
         string $foreignTable,
         string $foreignField,
         int $parentUid,
-        array $newRecords,
         array $foreignMatchFields = []
-    ): void {
-        // Get all existing child records for this parent
+    ): array {
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable($foreignTable);
 
@@ -1236,7 +1327,7 @@ class WriteTableTool extends AbstractRecordTool
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
 
         $queryBuilder
-            ->select('uid')
+            ->select('uid', 't3ver_oid')
             ->from($foreignTable)
             ->where(
                 $queryBuilder->expr()->eq($foreignField, $queryBuilder->createNamedParameter($parentUid, ParameterType::INTEGER))
@@ -1249,39 +1340,52 @@ class WriteTableTool extends AbstractRecordTool
             );
         }
 
-        $existingRecords = $queryBuilder->executeQuery()->fetchAllAssociative();
-        
-        if (!empty($existingRecords)) {
-            // Extract UIDs of new records that have UIDs (updates)
-            $keepUids = [];
-            foreach ($newRecords as $record) {
-                if (is_array($record) && isset($record['uid']) && is_numeric($record['uid'])) {
-                    $keepUids[] = (int)$record['uid'];
-                }
-            }
-            
-            // Delete records that are not in the new set
-            $deleteUids = [];
-            foreach ($existingRecords as $existingRecord) {
-                if (!in_array((int)$existingRecord['uid'], $keepUids, true)) {
-                    $deleteUids[] = (int)$existingRecord['uid'];
-                }
-            }
-            
-            if (!empty($deleteUids)) {
-                // Use DataHandler to delete records (respects workspaces)
-                $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
-                $dataHandler->BE_USER = $GLOBALS['BE_USER'];
-                
-                $cmdMap = [];
-                foreach ($deleteUids as $deleteUid) {
-                    $cmdMap[$foreignTable][$deleteUid]['delete'] = 1;
-                }
-                
-                $dataHandler->start([], $cmdMap);
-                $dataHandler->process_cmdmap();
+        $rows = $queryBuilder->executeQuery()->fetchAllAssociative();
+
+        $liveUids = [];
+        foreach ($rows as $row) {
+            $liveUids[] = (int)($row['t3ver_oid'] ?: $row['uid']);
+        }
+        return array_values(array_unique($liveUids));
+    }
+
+    /**
+     * Delete embedded children that the caller dropped from the new record list.
+     *
+     * @param int[] $existingChildUids live uids previously attached to the parent
+     * @param array $newRecords records as supplied by the caller
+     */
+    protected function deleteOrphanedEmbeddedRelations(
+        string $foreignTable,
+        array $existingChildUids,
+        array $newRecords
+    ): void {
+        if (empty($existingChildUids)) {
+            return;
+        }
+
+        $keepUids = [];
+        foreach ($newRecords as $record) {
+            if (is_array($record) && isset($record['uid']) && is_numeric($record['uid'])) {
+                $keepUids[] = (int)$record['uid'];
             }
         }
+
+        $deleteUids = array_values(array_diff($existingChildUids, $keepUids));
+        if (empty($deleteUids)) {
+            return;
+        }
+
+        $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+
+        $cmdMap = [];
+        foreach ($deleteUids as $deleteUid) {
+            $cmdMap[$foreignTable][$deleteUid]['delete'] = 1;
+        }
+
+        $dataHandler->start([], $cmdMap);
+        $dataHandler->process_cmdmap();
     }
     
     /**
@@ -1521,6 +1625,17 @@ class WriteTableTool extends AbstractRecordTool
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
             if ($fieldConfig && ($fieldConfig['config']['type'] ?? '') === 'slug' && is_string($value)) {
                 $data[$fieldName] = '/' . trim($value, '/');
+            }
+
+            // imageManipulation (e.g. sys_file_reference.crop) is stored as a JSON
+            // string. DataHandler treats the type as passthrough, so an array value
+            // gets cast to the literal string "Array" on the way to the DB. Encode
+            // here so the round trip with ReadTableTool (which json_decodes the value
+            // back into an array) is symmetric.
+            $fieldType = $fieldConfig['config']['type'] ?? '';
+            if ($fieldType === 'imageManipulation' && is_array($value)) {
+                $data[$fieldName] = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                continue;
             }
 
             // Handle FlexForm fields

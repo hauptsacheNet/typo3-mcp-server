@@ -51,6 +51,24 @@ services:
   Hn\McpServer\Server\SiteInstructionsService:
     public: true
     
+  # Event listeners
+  Hn\McpServer\EventListener\FileEnrichmentListener:
+    tags:
+      - name: event.listener
+        event: Hn\McpServer\Event\AfterSchemaLoadEvent
+        method: onSchemaLoad
+        identifier: 'mcp-server/file-enrichment-schema'
+      - name: event.listener
+        event: Hn\McpServer\Event\AfterRecordReadEvent
+        method: onRecordRead
+        identifier: 'mcp-server/file-enrichment-read'
+
+  Hn\McpServer\EventListener\SysFileMountRestrictionListener:
+    tags:
+      - name: event.listener
+        event: Hn\McpServer\Event\BeforeRecordReadEvent
+        identifier: 'mcp-server/sys-file-mount-restriction'
+
   # Explicitly configure the module controller
   Hn\McpServer\Controller\McpServerModuleController:
     public: true

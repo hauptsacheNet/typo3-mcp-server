@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use Doctrine\DBAL\ArrayParameterType;
+use Hn\McpServer\Event\AfterSchemaLoadEvent;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
-use TYPO3\CMS\Core\Database\Query\Expression\CompositeExpression;
-use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Schema\Capability\TcaSchemaCapability;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\SingletonInterface;
@@ -124,7 +124,6 @@ class TableAccessService implements SingletonInterface
         $info = [
             'accessible' => false,
             'reasons' => [],
-            'restrictions' => [],
             'workspace_capable' => false,
             'read_only' => false,
             'permissions' => [
@@ -171,17 +170,10 @@ class TableAccessService implements SingletonInterface
         // Check if table is read-only
         $info['read_only'] = $this->isTableReadOnly($table);
         if ($info['read_only']) {
-            $info['restrictions'][] = 'Table is read-only';
             $info['permissions']['write'] = false;
             $info['permissions']['delete'] = false;
         }
-        
-        // Check field restrictions
-        $fieldRestrictions = $this->getFieldRestrictions($table);
-        if (!empty($fieldRestrictions)) {
-            $info['restrictions'] = array_merge($info['restrictions'], $fieldRestrictions);
-        }
-        
+
         // If we made it here, the table is accessible
         $info['accessible'] = true;
         
@@ -245,17 +237,37 @@ class TableAccessService implements SingletonInterface
     public function getAvailableFields(string $table, string $type = ''): array
     {
         $this->validateTableAccess($table);
-        
+
         // Check if schema exists for this table
         if (!$this->tcaSchemaFactory->has($table)) {
             return [];
         }
-        
+
         $schema = $this->tcaSchemaFactory->get($table);
         $fields = [];
 
-        // If a specific type is provided and the schema supports sub-schemas
-        if (!empty($type) && $schema->hasSubSchema($type)) {
+        // Two cases bypass sub-schema filtering and use the full main schema:
+        //
+        // 1) Foreign type notation (e.g. "uid_local:type" on sys_file_reference): the
+        //    record type is derived from a related record at runtime, so there is no
+        //    local type column the LLM can choose. Each "type" maps to a different
+        //    palette (basicoverlayPalette vs imageoverlayPalette etc.), and picking
+        //    one would hide fields like `alternative` or `crop` even though they are
+        //    writable for any type.
+        //
+        // 2) Read-only tables (e.g. sys_file): showitem describes a backend form
+        //    layout, which is irrelevant when the LLM can only read. The user expects
+        //    the schema to advertise every column they can filter on (mime_type, sha1,
+        //    size, identifier, ...). sys_file's TCA only defines a showitem for type
+        //    "1" listing 3 fields, so a sub-schema view drops the rest.
+        $rawTypeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
+        $usesForeignTypeNotation = is_string($rawTypeField) && str_contains($rawTypeField, ':');
+        $isReadOnly = $this->isTableReadOnly($table);
+        if ($usesForeignTypeNotation || $isReadOnly) {
+            foreach ($schema->getFields() as $field) {
+                $fields[$field->getName()] = $field->getConfiguration();
+            }
+        } elseif (!empty($type) && $schema->hasSubSchema($type)) {
             $subSchema = $schema->getSubSchema($type);
 
             // Get fields from the sub-schema
@@ -305,8 +317,11 @@ class TableAccessService implements SingletonInterface
                 unset($fields[$fieldName]);
             }
         }
-        
-        return $fields;
+
+        // Allow extensions to add, remove, or reconfigure fields
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $event = $eventDispatcher->dispatch(new AfterSchemaLoadEvent($table, $type, $fields));
+        return $event->getFields();
     }
     
     /**
@@ -410,29 +425,6 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Get restrictions for a table
-     * 
-     * @param string $table Table name
-     * @return array List of restrictions
-     */
-    public function getTableRestrictions(string $table): array
-    {
-        $restrictions = [];
-        
-        // Check if entire table is read-only
-        if ($this->isTableReadOnly($table)) {
-            $restrictions[] = 'Table is read-only';
-        }
-        
-        // Get field-level restrictions
-        $fieldRestrictions = $this->getFieldRestrictions($table);
-        $restrictions = array_merge($restrictions, $fieldRestrictions);
-        
-        return $restrictions;
-    }
-    
-    
-    /**
      * Get the file mount paths accessible to the current user.
      * Each entry is ['storage' => int, 'path' => string] where path is the folder prefix
      * (e.g. "/user_upload/") relative to the storage root.
@@ -465,55 +457,6 @@ class TableAccessService implements SingletonInterface
             $mounts[] = ['storage' => $storageUid, 'path' => $path];
         }
         return $mounts;
-    }
-
-    /**
-     * Build a WHERE expression to restrict a sys_file query to files within the current user's
-     * accessible file mounts. Returns null when no restriction applies (admin user).
-     * Returns an always-false expression when user has no mounts at all.
-     */
-    public function buildFileMountRestriction(QueryBuilder $queryBuilder): ?CompositeExpression
-    {
-        $isAdmin = false;
-        $mounts = $this->getAccessibleFileMounts($isAdmin);
-        if ($isAdmin) {
-            return null;
-        }
-        if (empty($mounts)) {
-            // No mounts → user cannot see any files
-            return $queryBuilder->expr()->and('1 = 0');
-        }
-
-        // Group mount paths by storage for a cleaner query structure
-        $perStorage = [];
-        foreach ($mounts as $mount) {
-            $perStorage[$mount['storage']][] = $mount['path'];
-        }
-
-        $storageExpressions = [];
-        foreach ($perStorage as $storageUid => $paths) {
-            $pathExpressions = [];
-            foreach ($paths as $path) {
-                $normalized = rtrim($path, '/') . '/';
-                // Match files whose identifier begins with this mount path (including subfolders)
-                $pathExpressions[] = $queryBuilder->expr()->like(
-                    'identifier',
-                    $queryBuilder->createNamedParameter(
-                        $queryBuilder->escapeLikeWildcards($normalized) . '%'
-                    )
-                );
-            }
-
-            $storageExpressions[] = $queryBuilder->expr()->and(
-                $queryBuilder->expr()->eq(
-                    'storage',
-                    $queryBuilder->createNamedParameter($storageUid, \Doctrine\DBAL\ParameterType::INTEGER)
-                ),
-                $queryBuilder->expr()->or(...$pathExpressions)
-            );
-        }
-
-        return $queryBuilder->expr()->or(...$storageExpressions);
     }
 
     /**
@@ -578,27 +521,6 @@ class TableAccessService implements SingletonInterface
             if (!$isWorkspaceCapable && !$isAdditionalReadOnly) {
                 return true;
             }
-        }
-        
-        // Specific dangerous system tables that should never be accessed via MCP
-        $restrictedTables = [
-            'sys_log', // System log - read-only, managed by system
-            'sys_history', // Change history - read-only, managed by system
-            'sys_refindex', // Reference index - managed by system
-            'sys_registry', // System registry - internal configuration
-            'sys_lockedrecords', // Lock management - managed by system
-            'be_sessions', // Backend sessions - security risk
-            'fe_sessions', // Frontend sessions - security risk
-            'cache_treelist', // Cache tables - managed by system
-            'cache_pages', // Cache tables - managed by system
-            'cache_pagesection', // Cache tables - managed by system
-            'cache_hash', // Cache tables - managed by system
-            'sys_be_shortcuts', // User shortcuts - user-specific
-            'sys_news', // System news - admin-only
-        ];
-        
-        if (in_array($table, $restrictedTables)) {
-            return true;
         }
         
         // Check for system group tables with workspace support
@@ -697,34 +619,6 @@ class TableAccessService implements SingletonInterface
         }
         
         return $permissions;
-    }
-    
-    /**
-     * Get field restrictions for a table
-     */
-    protected function getFieldRestrictions(string $table): array
-    {
-        $restrictions = [];
-        $tca = $GLOBALS['TCA'][$table] ?? [];
-        
-        if (empty($tca['columns'])) {
-            return $restrictions;
-        }
-        
-        foreach ($tca['columns'] as $fieldName => $fieldConfig) {
-            // Check exclude fields
-            if (!empty($fieldConfig['exclude']) && !$this->getBackendUser()->check('non_exclude_fields', $table . ':' . $fieldName)) {
-                $restrictions[] = "Field '{$fieldName}' is excluded for current user";
-            }
-            
-            // Check displayCond
-            if (!empty($fieldConfig['displayCond'])) {
-                // This is simplified - displayCond evaluation is complex
-                $restrictions[] = "Field '{$fieldName}' has display conditions";
-            }
-        }
-        
-        return $restrictions;
     }
     
     /**
@@ -973,6 +867,57 @@ class TableAccessService implements SingletonInterface
         return GeneralUtility::trimExplode(',', $searchFields, true);
     }
     
+    /**
+     * Default field whitelist for inline children of hidden tables.
+     *
+     * Returned in the same shape as the user-facing `fields` parameter, so the
+     * caller can pass it straight through to the existing requestedFields filter
+     * in ReadTableTool::processRecord().
+     *
+     * The parent record already provides language/workspace/timestamp context;
+     * surfacing those fields, plus the foreign reference back to the parent and
+     * TCA columns that are virtual or DB-only, is noise for the LLM. So we
+     * advertise every available field except:
+     *  - pid (always plumbing for embedded children)
+     *  - ctrl-registered tracking fields (tstamp, crdate, languageField,
+     *    transOrigPointerField, transOrigDiffSourceField, translationSource)
+     *  - the foreign_field that links back to the parent
+     *  - TCA columns of type passthrough / category / none (virtual or
+     *    rendering-only — no useful value for the LLM)
+     *
+     * Computed read-only fields registered via AfterSchemaLoadEvent
+     * (file_name, public_url, ...) are not in TCA columns and therefore stay.
+     *
+     * The caller passes each child's own type so sub-schema-specific columns
+     * are not silently dropped on a mixed-type child set.
+     */
+    public function getEmbeddedRecordFields(string $table, string $foreignField = '', string $recordType = ''): array
+    {
+        $availableFields = $this->getAvailableFields($table, $recordType);
+
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        $exclude = ['pid'];
+
+        foreach (['tstamp', 'crdate', 'languageField', 'transOrigPointerField', 'transOrigDiffSourceField', 'translationSource'] as $ctrlKey) {
+            if (!empty($ctrl[$ctrlKey])) {
+                $exclude[] = $ctrl[$ctrlKey];
+            }
+        }
+
+        if ($foreignField !== '') {
+            $exclude[] = $foreignField;
+        }
+
+        foreach ($GLOBALS['TCA'][$table]['columns'] ?? [] as $name => $config) {
+            $type = $config['config']['type'] ?? '';
+            if (in_array($type, ['passthrough', 'category', 'none'], true)) {
+                $exclude[] = $name;
+            }
+        }
+
+        return array_values(array_diff(array_keys($availableFields), $exclude));
+    }
+
     /**
      * Get essential fields for a table (fields that should always be included)
      */
