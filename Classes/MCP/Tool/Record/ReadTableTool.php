@@ -405,6 +405,10 @@ class ReadTableTool extends AbstractRecordTool
      * 2. Caller's `fields` whitelist — optional second pass, narrows further. uid is
      *    always added.
      *
+     *    Inline children of hidden tables flow through this same whitelist with a
+     *    default computed by TableAccessService::getEmbeddedRecordFields(), which
+     *    drops plumbing/virtual TCA columns the LLM has no use for.
+     *
      * @param array $record Raw database row
      * @param string $table Table name
      * @param array $requestedFields User-provided field whitelist from the "fields" tool parameter.
@@ -831,7 +835,7 @@ class ReadTableTool extends AbstractRecordTool
         // (e.g., sys_file_reference uses tablenames/fieldname to distinguish which field owns each reference)
         $foreignSortBy = $fieldConfig['config']['foreign_sortby'] ?? '';
         $foreignMatchFields = $fieldConfig['config']['foreign_match_fields'] ?? [];
-        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy, $foreignMatchFields);
+        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy, $foreignMatchFields, $isHiddenTable);
 
         // Allow listeners to enrich or redact inline children (e.g. attach file metadata)
         if (!empty($relatedRecords)) {
@@ -859,8 +863,16 @@ class ReadTableTool extends AbstractRecordTool
             if ($uid !== null) {
                 if (isset($groupedRecords[$uid]) && !empty($groupedRecords[$uid])) {
                     if ($isHiddenTable) {
-                        // Embed full records for hidden tables (like sys_file_reference)
-                        $record[$fieldName] = $groupedRecords[$uid];
+                        // Embed full records for hidden tables (like sys_file_reference).
+                        // The foreign field that links each child back to its parent is
+                        // kept until grouping is done, then dropped — the parent is
+                        // already known by virtue of the embedding.
+                        $cleaned = [];
+                        foreach ($groupedRecords[$uid] as $child) {
+                            unset($child[$foreignField]);
+                            $cleaned[] = $child;
+                        }
+                        $record[$fieldName] = $cleaned;
                     } else {
                         // Return only UIDs for independent tables (like tt_content)
                         $record[$fieldName] = array_column($groupedRecords[$uid], 'uid');
@@ -876,9 +888,16 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
-     * Get inline related records
+     * Get inline related records.
+     *
+     * @param bool $embedAsChildren When true, the caller will embed the full records
+     *                              into the parent (hidden tables). processRecord
+     *                              applies the tighter "embedded" filter so plumbing
+     *                              and the foreign reference do not leak. The foreign
+     *                              field is re-injected here so the caller can group
+     *                              by parent UID; it is dropped at embedding time.
      */
-    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids, string $foreignSortBy = '', array $foreignMatchFields = []): array
+    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids, string $foreignSortBy = '', array $foreignMatchFields = [], bool $embedAsChildren = false): array
     {
         if (empty($parentUids)) {
             return [];
@@ -928,10 +947,24 @@ class ReadTableTool extends AbstractRecordTool
 
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
 
-        // Process records for workspace transparency
+        // Embedded children get a curated default whitelist passed through the
+        // standard requestedFields filter. The whitelist is computed per record
+        // off the row's own type so children of different sub-types in the same
+        // batch each keep their type-specific fields. The foreign field is
+        // re-injected below only so grouping by parent UID works; the caller
+        // drops it at embedding time.
+        $typeField = $embedAsChildren ? $this->tableAccessService->getTypeFieldName($table) : null;
+
         $processedRecords = [];
         foreach ($records as $record) {
-            $processed = $this->processRecord($record, $table);
+            if ($embedAsChildren) {
+                $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
+                $requestedFields = $this->tableAccessService->getEmbeddedRecordFields($table, $foreignField, $recordType);
+            } else {
+                $requestedFields = [];
+            }
+
+            $processed = $this->processRecord($record, $table, $requestedFields);
 
             // Ensure the foreign field is always included if it exists in the raw record
             if (isset($record[$foreignField]) && !isset($processed[$foreignField])) {

@@ -32,6 +32,7 @@ class FileReferenceTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_file.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_file_metadata.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_file_reference.csv');
         $this->setUpBackendUser(1);
@@ -399,6 +400,51 @@ class FileReferenceTest extends FunctionalTestCase
         // Option a: inline children always include enrichment regardless of fields.
         $this->assertArrayHasKey('public_url', $ref);
         $this->assertArrayHasKey('file_name', $ref);
+    }
+
+    /**
+     * Embedded sys_file_metadata used to leak every plumbing column the LLM has
+     * no use for (pid, tstamp, crdate, sys_language_uid, l10n_parent,
+     * l10n_diffsource, categories, file). The parent sys_file already provides
+     * that context — the embedded child should expose only the user-visible
+     * data fields plus uid.
+     */
+    public function testInlineSysFileMetadataExposesOnlyDataFields(): void
+    {
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'sys_file',
+            'uid' => 1,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $file = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertArrayHasKey('metadata', $file);
+        $this->assertCount(1, $file['metadata']);
+        $meta = $file['metadata'][0];
+
+        // Plumbing and virtual columns must be gone.
+        foreach ([
+            'pid',
+            'tstamp',
+            'crdate',
+            'sys_language_uid',
+            'l10n_parent',
+            'l10n_diffsource',
+            'categories',
+            'file',
+            'fileinfo',
+        ] as $leaked) {
+            $this->assertArrayNotHasKey($leaked, $meta, "embedded metadata should not expose '$leaked'");
+        }
+
+        // The data fields the LLM actually cares about must remain.
+        $this->assertSame(1, $meta['uid']);
+        $this->assertSame('Test Image Title', $meta['title']);
+        $this->assertSame('Alt text for test', $meta['alternative']);
+        $this->assertSame('Description text', $meta['description']);
+        $this->assertSame(1868, $meta['width']);
+        $this->assertSame(1261, $meta['height']);
     }
 
     /**

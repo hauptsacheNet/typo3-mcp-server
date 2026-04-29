@@ -827,6 +827,57 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
+     * Default field whitelist for inline children of hidden tables.
+     *
+     * Returned in the same shape as the user-facing `fields` parameter, so the
+     * caller can pass it straight through to the existing requestedFields filter
+     * in ReadTableTool::processRecord().
+     *
+     * The parent record already provides language/workspace/timestamp context;
+     * surfacing those fields, plus the foreign reference back to the parent and
+     * TCA columns that are virtual or DB-only, is noise for the LLM. So we
+     * advertise every available field except:
+     *  - pid (always plumbing for embedded children)
+     *  - ctrl-registered tracking fields (tstamp, crdate, languageField,
+     *    transOrigPointerField, transOrigDiffSourceField, translationSource)
+     *  - the foreign_field that links back to the parent
+     *  - TCA columns of type passthrough / category / none (virtual or
+     *    rendering-only — no useful value for the LLM)
+     *
+     * Computed read-only fields registered via AfterSchemaLoadEvent
+     * (file_name, public_url, ...) are not in TCA columns and therefore stay.
+     *
+     * The caller passes each child's own type so sub-schema-specific columns
+     * are not silently dropped on a mixed-type child set.
+     */
+    public function getEmbeddedRecordFields(string $table, string $foreignField = '', string $recordType = ''): array
+    {
+        $availableFields = $this->getAvailableFields($table, $recordType);
+
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        $exclude = ['pid'];
+
+        foreach (['tstamp', 'crdate', 'languageField', 'transOrigPointerField', 'transOrigDiffSourceField', 'translationSource'] as $ctrlKey) {
+            if (!empty($ctrl[$ctrlKey])) {
+                $exclude[] = $ctrl[$ctrlKey];
+            }
+        }
+
+        if ($foreignField !== '') {
+            $exclude[] = $foreignField;
+        }
+
+        foreach ($GLOBALS['TCA'][$table]['columns'] ?? [] as $name => $config) {
+            $type = $config['config']['type'] ?? '';
+            if (in_array($type, ['passthrough', 'category', 'none'], true)) {
+                $exclude[] = $name;
+            }
+        }
+
+        return array_values(array_diff(array_keys($availableFields), $exclude));
+    }
+
+    /**
      * Get essential fields for a table (fields that should always be included)
      */
     public function getEssentialFields(string $table): array
