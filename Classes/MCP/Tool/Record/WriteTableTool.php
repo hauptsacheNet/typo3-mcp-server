@@ -647,26 +647,92 @@ class WriteTableTool extends AbstractRecordTool
     {
         // Resolve the live UID to workspace UID
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
-        
+
         // Delete the record using DataHandler
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $dataHandler->BE_USER = $GLOBALS['BE_USER'];
         $dataHandler->start([], [$table => [$workspaceUid => ['delete' => 1]]]);
         $dataHandler->process_cmdmap();
-        
-        // Check for errors
-        if ($dataHandler->errorLog) {
-            return $this->createErrorResult('Error deleting record: ' . implode(', ', $dataHandler->errorLog));
+
+        $errorLog = $dataHandler->errorLog ?? [];
+        $recordRemoved = $this->isRecordEffectivelyDeleted($table, $uid);
+
+        // Hard failure: nothing was removed AND DataHandler complained. The
+        // caller must learn that the operation had no effect.
+        if (!empty($errorLog) && !$recordRemoved) {
+            return $this->createErrorResult('Error deleting record: ' . implode(', ', $errorLog));
         }
-        
+
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
         $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'delete', $uid, [], null));
 
-        return $this->createJsonResult([
+        // Either DataHandler ran cleanly OR it logged something but the
+        // primary record is now gone in this workspace (typically a cascade
+        // hiccup on already-versioned children). Surface those secondary
+        // complaints as warnings rather than masking a successful delete as
+        // a transactional failure that scripted callers will roll back.
+        $payload = [
             'action' => 'delete',
             'table' => $table,
             'uid' => $uid, // Return the live UID that was passed in
-        ]);
+        ];
+        if (!empty($errorLog)) {
+            $payload['warnings'] = array_values($errorLog);
+        }
+        return $this->createJsonResult($payload);
+    }
+
+    /**
+     * Determine whether the requested delete actually took effect for the
+     * given live UID, in the current workspace context.
+     *
+     * - In the live workspace the row must be physically gone or carry a
+     *   `deleted=1` flag.
+     * - In a workspace, a delete placeholder (t3ver_state=2) for the live
+     *   uid is the canonical signal. We also treat a missing/hard-deleted
+     *   live record as "gone" for tables that opt out of versioning.
+     */
+    protected function isRecordEffectivelyDeleted(string $table, int $liveUid): bool
+    {
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable($table);
+
+        $hasDeletedFlag = !empty($GLOBALS['TCA'][$table]['ctrl']['delete'] ?? null);
+        $supportsWorkspace = !empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS'] ?? false);
+
+        if ($workspaceId > 0 && $supportsWorkspace) {
+            $placeholder = $connection->createQueryBuilder()
+                ->select('uid')
+                ->from($table)
+                ->where(
+                    't3ver_oid = :liveUid',
+                    't3ver_wsid = :wsid',
+                    't3ver_state = 2'
+                )
+                ->setParameter('liveUid', $liveUid)
+                ->setParameter('wsid', $workspaceId)
+                ->executeQuery()
+                ->fetchAssociative();
+            if ($placeholder !== false) {
+                return true;
+            }
+        }
+
+        $columns = $hasDeletedFlag ? ['deleted'] : ['uid'];
+        $row = $connection->createQueryBuilder()
+            ->select(...$columns)
+            ->from($table)
+            ->where('uid = :uid')
+            ->setParameter('uid', $liveUid)
+            ->executeQuery()
+            ->fetchAssociative();
+        if ($row === false) {
+            return true;
+        }
+        if ($hasDeletedFlag && (int)($row['deleted'] ?? 0) === 1) {
+            return true;
+        }
+        return false;
     }
     
     /**
