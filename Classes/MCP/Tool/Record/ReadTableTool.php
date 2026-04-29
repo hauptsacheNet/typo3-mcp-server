@@ -1129,7 +1129,17 @@ class ReadTableTool extends AbstractRecordTool
 
         $overlaid = [];
         foreach ($records as $row) {
-            BackendUtility::workspaceOL($table, $row, $workspaceId);
+            $original = $row;
+            try {
+                BackendUtility::workspaceOL($table, $row, $workspaceId);
+            } catch (\Throwable $e) {
+                // Defensive: a corrupt workspace version (e.g. binary garbage
+                // in a string field on a strict driver) must not turn the
+                // whole read into a hard error response. Log and keep the
+                // live row.
+                $this->logException($e, sprintf('applying workspace overlay on %s', $table));
+                $row = $original;
+            }
             if (!is_array($row)) {
                 continue;
             }
