@@ -402,26 +402,20 @@ class ReadTableTool extends AbstractRecordTool
      *    where without this clamp every TYPO3 plumbing column (t3ver_*, l10n_*) would
      *    leak into the response.
      *
-     *    For inline children of hidden tables (sys_file_metadata, sys_file_reference)
-     *    the filter is tighter: essentials are dropped (the parent provides context),
-     *    the foreign reference back to the parent is dropped, and TCA columns of
-     *    type passthrough / category / none are dropped as virtual or rendering-only.
-     *
      * 2. Caller's `fields` whitelist — optional second pass, narrows further. uid is
-     *    always added. Skipped for embedded children (the LLM cannot whitelist them).
+     *    always added.
+     *
+     *    Inline children of hidden tables flow through this same whitelist with a
+     *    default computed by TableAccessService::getEmbeddedRecordFields(), which
+     *    drops plumbing/virtual TCA columns the LLM has no use for.
      *
      * @param array $record Raw database row
      * @param string $table Table name
      * @param array $requestedFields User-provided field whitelist from the "fields" tool parameter.
      *                               Empty = no additional filtering (default behavior).
-     * @param string|null $embeddedForeignField When set, the record is being processed as
-     *                                          an embedded child of a hidden table; the
-     *                                          tighter filter applies and this is the
-     *                                          inline foreign_field name to drop.
      */
-    protected function processRecord(array $record, string $table, array $requestedFields = [], ?string $embeddedForeignField = null): array
+    protected function processRecord(array $record, string $table, array $requestedFields = []): array
     {
-        $isEmbedded = $embeddedForeignField !== null;
         $processedRecord = [];
 
         // For workspace transparency, replace workspace UID with live UID
@@ -434,29 +428,19 @@ class ReadTableTool extends AbstractRecordTool
             // No change needed
         }
 
-        // Ensure uid is always in the requested fields when a field list is specified.
-        // Embedded children ignore the requested field list (the caller cannot reach
-        // through inline relations — uid is always emitted regardless).
-        if (!$isEmbedded && !empty($requestedFields) && !in_array('uid', $requestedFields)) {
+        // Ensure uid is always in the requested fields when a field list is specified
+        if (!empty($requestedFields) && !in_array('uid', $requestedFields)) {
             $requestedFields[] = 'uid';
         }
 
-        if ($isEmbedded) {
-            // Inline children: only TCA-advertised fields, minus plumbing/virtual columns.
-            // Essentials are NOT merged in — the parent provides language/timestamp context.
-            $availableFields = $this->tableAccessService->getAvailableFields($table, '');
-            $excluded = $this->tableAccessService->getEmbeddedRecordExclusions($table, $embeddedForeignField);
-            $allowedFields = array_diff(array_keys($availableFields), $excluded);
-            $allowedFields[] = 'uid';
-        } else {
-            // Top-level reads: schema fields + essential ctrl fields (uid, pid, timestamps,
-            // etc.) since they are valid to read but are typically absent from TCA showitem.
-            $essentialFields = $this->tableAccessService->getEssentialFields($table);
-            $typeField = $this->tableAccessService->getTypeFieldName($table);
-            $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
-            $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
-            $allowedFields = array_unique(array_merge(array_keys($availableFields), $essentialFields));
-        }
+        // Build the set of fields the schema lets through. Always include essential
+        // ctrl fields (uid, pid, timestamps, etc.) since they are valid to read but
+        // are typically absent from TCA showitem definitions.
+        $essentialFields = $this->tableAccessService->getEssentialFields($table);
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
+        $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        $allowedFields = array_unique(array_merge(array_keys($availableFields), $essentialFields));
 
         // Process each field
         foreach ($record as $field => $value) {
@@ -487,9 +471,8 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
 
-            // Skip fields not in the requested field list (top-level reads only;
-            // embedded children always emit their full filtered set).
-            if (!$isEmbedded && !empty($requestedFields) && !in_array($field, $requestedFields)) {
+            // Skip fields not in the requested field list
+            if (!empty($requestedFields) && !in_array($field, $requestedFields)) {
                 continue;
             }
 
@@ -964,12 +947,17 @@ class ReadTableTool extends AbstractRecordTool
 
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
 
-        // Process records for workspace transparency
+        // Embedded children get a curated default whitelist passed through the
+        // standard requestedFields filter. The caller still drops the foreign
+        // field at embedding time — it is re-injected here only so grouping by
+        // parent UID works.
+        $requestedFields = $embedAsChildren
+            ? $this->tableAccessService->getEmbeddedRecordFields($table, $foreignField)
+            : [];
+
         $processedRecords = [];
         foreach ($records as $record) {
-            $processed = $embedAsChildren
-                ? $this->processRecord($record, $table, [], $foreignField)
-                : $this->processRecord($record, $table);
+            $processed = $this->processRecord($record, $table, $requestedFields);
 
             // Ensure the foreign field is always included if it exists in the raw record
             if (isset($record[$foreignField]) && !isset($processed[$foreignField])) {

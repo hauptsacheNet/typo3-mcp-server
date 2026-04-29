@@ -827,14 +827,16 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Fields to drop from inline children of hidden tables.
+     * Default field whitelist for inline children of hidden tables.
      *
-     * When a hidden table (e.g. sys_file_metadata) is embedded in a parent record,
-     * the parent already provides language/workspace/timestamp context. Surfacing
-     * those fields again, plus the foreign reference back to the parent and TCA
-     * columns that are virtual or DB-only, is just noise for the LLM.
+     * Returned in the same shape as the user-facing `fields` parameter, so the
+     * caller can pass it straight through to the existing requestedFields filter
+     * in ReadTableTool::processRecord().
      *
-     * Excluded:
+     * The parent record already provides language/workspace/timestamp context;
+     * surfacing those fields, plus the foreign reference back to the parent and
+     * TCA columns that are virtual or DB-only, is noise for the LLM. So we
+     * advertise every available field except:
      *  - pid (always plumbing for embedded children)
      *  - ctrl-registered tracking fields (tstamp, crdate, languageField,
      *    transOrigPointerField, transOrigDiffSourceField, translationSource)
@@ -845,8 +847,10 @@ class TableAccessService implements SingletonInterface
      * Computed read-only fields registered via AfterSchemaLoadEvent
      * (file_name, public_url, ...) are not in TCA columns and therefore stay.
      */
-    public function getEmbeddedRecordExclusions(string $table, string $foreignField = ''): array
+    public function getEmbeddedRecordFields(string $table, string $foreignField = ''): array
     {
+        $availableFields = $this->getAvailableFields($table, '');
+
         $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
         $exclude = ['pid'];
 
@@ -867,7 +871,7 @@ class TableAccessService implements SingletonInterface
             }
         }
 
-        return array_values(array_unique($exclude));
+        return array_values(array_diff(array_keys($availableFields), $exclude));
     }
 
     /**
