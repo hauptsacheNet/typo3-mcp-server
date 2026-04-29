@@ -18,6 +18,7 @@ use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use Hn\McpServer\Service\LanguageService;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -357,6 +358,12 @@ class ReadTableTool extends AbstractRecordTool
         } catch (\Doctrine\DBAL\Exception $e) {
             throw new DatabaseException('select', $table, $e);
         }
+
+        // Apply workspace overlay so callers see the workspace-effective row,
+        // not the underlying live record. WorkspaceRestriction strips workspace
+        // versions out of the result set; BackendUtility::workspaceOL() looks
+        // them up and folds their fields onto the live row in place.
+        $records = $this->applyWorkspaceOverlay($table, $records);
 
         // Allow listeners to enrich or redact rows on raw data so they see all source
         // columns (uid_local, etc.) regardless of the caller's `fields` filter. The
@@ -927,6 +934,7 @@ class ReadTableTool extends AbstractRecordTool
         $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select'));
 
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
+        $records = $this->applyWorkspaceOverlay($table, $records);
 
         // Process records for workspace transparency
         $processedRecords = [];
@@ -1098,6 +1106,39 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
+     * Apply workspace overlay so result rows reflect the workspace-effective state.
+     *
+     * WorkspaceRestriction returns the live record (or a move pointer); the actual
+     * workspace edit lives in a sibling row that the restriction filters out.
+     * BackendUtility::workspaceOL() resolves that sibling and merges its fields
+     * onto the row in place, mirroring how TYPO3's backend list module shows
+     * workspace edits. Rows with a delete placeholder are dropped from the result.
+     */
+    protected function applyWorkspaceOverlay(string $table, array $records): array
+    {
+        if (empty($records)) {
+            return $records;
+        }
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        if ($workspaceId <= 0) {
+            return $records;
+        }
+        if (empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS'] ?? false)) {
+            return $records;
+        }
+
+        $overlaid = [];
+        foreach ($records as $row) {
+            BackendUtility::workspaceOL($table, $row, $workspaceId);
+            if (!is_array($row)) {
+                continue;
+            }
+            $overlaid[] = $row;
+        }
+        return $overlaid;
+    }
+
+    /**
      * Load parent records for translations
      */
     protected function loadParentRecords(string $table, array $parentUids): array
@@ -1127,6 +1168,8 @@ class ReadTableTool extends AbstractRecordTool
             )
             ->executeQuery()
             ->fetchAllAssociative();
+
+        $records = $this->applyWorkspaceOverlay($table, $records);
 
         // Process and index by UID
         $indexedRecords = [];
