@@ -148,8 +148,18 @@ class UploadFileTool extends AbstractRecordTool
 
         $fileUid = $file->getUid();
 
+        $warnings = [];
         if (isset($params['metadata']) && is_array($params['metadata']) && $params['metadata'] !== []) {
-            $this->writeFileMetadata($fileUid, $params['metadata']);
+            $dropped = $this->writeFileMetadata($fileUid, $params['metadata']);
+            if ($dropped !== []) {
+                $warnings[] = sprintf(
+                    'sys_file_metadata write returned no errors but the following fields were not persisted: %s. ' .
+                    'Likely cause: the active backend user lacks workspace write permission on sys_file_metadata. ' .
+                    'Reference-level overrides set on the sys_file_reference (e.g. "alternative" inside the embedded image array) ' .
+                    'are still authoritative for rendering, so this only affects the metadata default used when no reference-level value exists.',
+                    implode(', ', array_keys($dropped))
+                );
+            }
         }
 
         $result = [
@@ -168,6 +178,10 @@ class UploadFileTool extends AbstractRecordTool
                 $fileUid
             ),
         ];
+
+        if ($warnings !== []) {
+            $result['warnings'] = $warnings;
+        }
 
         return new CallToolResult([new TextContent(json_encode($result, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))]);
     }
@@ -328,8 +342,12 @@ class UploadFileTool extends AbstractRecordTool
      * sys_file_metadata is workspace-capable (versioningWS=true), so this
      * goes through DataHandler and lands in the active workspace — same as
      * any other WriteTable call.
+     *
+     * Returns the field=>value pairs that were silently dropped (DataHandler
+     * succeeded without errorLog entries but the values did not land in the
+     * effective row). An empty array means the write fully succeeded.
      */
-    private function writeFileMetadata(int $fileUid, array $metadata): void
+    private function writeFileMetadata(int $fileUid, array $metadata): array
     {
         $allowed = [];
         foreach (['alternative', 'title', 'description'] as $field) {
@@ -338,7 +356,7 @@ class UploadFileTool extends AbstractRecordTool
             }
         }
         if ($allowed === []) {
-            return;
+            return [];
         }
 
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
@@ -372,5 +390,50 @@ class UploadFileTool extends AbstractRecordTool
         if (!empty($dataHandler->errorLog)) {
             throw new \RuntimeException('sys_file_metadata write failed: ' . implode('; ', $dataHandler->errorLog));
         }
+
+        return $this->detectSilentlyDroppedMetadata($fileUid, $allowed);
+    }
+
+    /**
+     * Re-read sys_file_metadata after the DataHandler write to catch silent
+     * drops: DataHandler can return without errorLog entries while skipping
+     * the actual write, typically when the active backend user lacks
+     * workspace write permission on sys_file_metadata or a hook strips the
+     * field array. Without this check the caller assumes the metadata was
+     * applied even though the row remains unchanged.
+     *
+     * Picks the workspace overlay first (highest t3ver_wsid) and falls back
+     * to the live row, mirroring how rendering resolves the effective
+     * metadata.
+     */
+    private function detectSilentlyDroppedMetadata(int $fileUid, array $expected): array
+    {
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('sys_file_metadata');
+        $qb = $connection->createQueryBuilder();
+        $qb->getRestrictions()->removeAll();
+        $row = $qb
+            ->select('alternative', 'title', 'description')
+            ->from('sys_file_metadata')
+            ->where(
+                $qb->expr()->eq('file', $qb->createNamedParameter($fileUid, \Doctrine\DBAL\ParameterType::INTEGER))
+            )
+            ->orderBy('t3ver_wsid', 'DESC')
+            ->setMaxResults(1)
+            ->executeQuery()
+            ->fetchAssociative();
+
+        if (!is_array($row)) {
+            return $expected;
+        }
+
+        $dropped = [];
+        foreach ($expected as $field => $value) {
+            $actual = $row[$field] ?? null;
+            if ((string) ($actual ?? '') !== $value) {
+                $dropped[$field] = $value;
+            }
+        }
+        return $dropped;
     }
 }

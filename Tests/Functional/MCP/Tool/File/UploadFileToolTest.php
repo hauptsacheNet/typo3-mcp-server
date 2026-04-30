@@ -7,6 +7,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool\File;
 use Hn\McpServer\MCP\Tool\File\UploadFileTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\Tests\Functional\MCP\Tool\File\Fixtures\MetadataDropDatamapHook;
 use TYPO3\CMS\Core\Core\Environment;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -152,6 +153,78 @@ class UploadFileToolTest extends FunctionalTestCase
         $this->assertSame('Alt text from upload', $row['alternative']);
         $this->assertSame('Upload title', $row['title']);
         $this->assertSame('Long caption', $row['description']);
+    }
+
+    public function testMetadataSilentDropIsSurfacedAsWarning(): void
+    {
+        // Register a DataHandler hook that strips fields from sys_file_metadata
+        // writes, simulating the production case where the BE user lacks
+        // workspace write permission and DataHandler succeeds without
+        // recording an error. Without the post-write verification the upload
+        // would return success and the caller would believe the alt-text was
+        // persisted.
+        $hookKey = self::class . '::dropMetadataFields';
+        $GLOBALS['TYPO3_CONF_VARS']['SC_OPTIONS']['t3lib/class.t3lib_tcemain.php']['processDatamapClass'][$hookKey] = MetadataDropDatamapHook::class;
+
+        try {
+            $tool = GeneralUtility::makeInstance(UploadFileTool::class);
+            $result = $tool->execute([
+                'filename' => 'silent-drop.png',
+                'data' => self::TINY_PNG_BASE64,
+                'metadata' => [
+                    'alternative' => 'expected alt',
+                    'title' => 'expected title',
+                ],
+            ]);
+
+            $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+            $payload = json_decode($result->content[0]->text, true);
+            $this->assertArrayHasKey(
+                'warnings',
+                $payload,
+                'Upload must surface a warning when sys_file_metadata write was silently dropped'
+            );
+            $this->assertCount(1, $payload['warnings']);
+            $warning = $payload['warnings'][0];
+            $this->assertStringContainsString('alternative', $warning);
+            $this->assertStringContainsString('title', $warning);
+            $this->assertStringContainsString('not persisted', $warning);
+
+            // The actual sys_file_metadata row must remain empty — proves the
+            // verification reflected reality and was not a false positive.
+            $row = $this->fetchMetadataRow($payload['uid']);
+            $this->assertNotNull($row);
+            $this->assertNull($row['alternative'] ?? null);
+            $this->assertNull($row['title'] ?? null);
+        } finally {
+            unset($GLOBALS['TYPO3_CONF_VARS']['SC_OPTIONS']['t3lib/class.t3lib_tcemain.php']['processDatamapClass'][$hookKey]);
+        }
+    }
+
+    public function testSuccessfulMetadataWriteReturnsNoWarnings(): void
+    {
+        // Companion to testMetadataSilentDropIsSurfacedAsWarning: verify that
+        // a normal successful metadata write does NOT surface a warning. Guards
+        // against a regression where the post-write check false-positives
+        // (e.g. comparing nullable field with non-equal types).
+        $tool = GeneralUtility::makeInstance(UploadFileTool::class);
+        $result = $tool->execute([
+            'filename' => 'no-warning.png',
+            'data' => self::TINY_PNG_BASE64,
+            'metadata' => [
+                'alternative' => 'real alt',
+                'title' => 'real title',
+                'description' => 'real description',
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $payload = json_decode($result->content[0]->text, true);
+        $this->assertArrayNotHasKey(
+            'warnings',
+            $payload,
+            'Successful metadata write must not include a warnings field'
+        );
     }
 
     public function testMissingDataAndUrlIsRejected(): void
