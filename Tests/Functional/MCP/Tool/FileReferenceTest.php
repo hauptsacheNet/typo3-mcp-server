@@ -403,13 +403,13 @@ class FileReferenceTest extends FunctionalTestCase
     }
 
     /**
-     * Embedded sys_file_metadata used to leak every plumbing column the LLM has
-     * no use for (pid, tstamp, crdate, sys_language_uid, l10n_parent,
-     * l10n_diffsource, categories, file). The parent sys_file already provides
-     * that context — the embedded child should expose only the user-visible
-     * data fields plus uid.
+     * sys_file_metadata is exposed as a standalone table (configured via
+     * `additionalStandaloneTables`), so reading sys_file no longer embeds the
+     * full metadata records. The inline `metadata` field collapses to a list
+     * of UIDs — enough for the LLM to discover that metadata exists and to
+     * fetch/edit it through the sys_file_metadata table directly.
      */
-    public function testInlineSysFileMetadataExposesOnlyDataFields(): void
+    public function testSysFileMetadataIsNotEmbeddedAsStandaloneTable(): void
     {
         $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
         $result = $readTool->execute([
@@ -420,31 +420,7 @@ class FileReferenceTest extends FunctionalTestCase
 
         $file = json_decode($result->content[0]->text, true)['records'][0];
         $this->assertArrayHasKey('metadata', $file);
-        $this->assertCount(1, $file['metadata']);
-        $meta = $file['metadata'][0];
-
-        // Plumbing and virtual columns must be gone.
-        foreach ([
-            'pid',
-            'tstamp',
-            'crdate',
-            'sys_language_uid',
-            'l10n_parent',
-            'l10n_diffsource',
-            'categories',
-            'file',
-            'fileinfo',
-        ] as $leaked) {
-            $this->assertArrayNotHasKey($leaked, $meta, "embedded metadata should not expose '$leaked'");
-        }
-
-        // The data fields the LLM actually cares about must remain.
-        $this->assertSame(1, $meta['uid']);
-        $this->assertSame('Test Image Title', $meta['title']);
-        $this->assertSame('Alt text for test', $meta['alternative']);
-        $this->assertSame('Description text', $meta['description']);
-        $this->assertSame(1868, $meta['width']);
-        $this->assertSame(1261, $meta['height']);
+        $this->assertSame([1], $file['metadata'], 'metadata field should be a list of uids, not embedded objects');
     }
 
     /**

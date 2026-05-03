@@ -25,9 +25,39 @@ $result = $readTool->execute([
 
 ### 2. Embedded/Dependent Inline Relations
 - Tables that only exist as children (e.g., `sys_file_reference`, `tx_news_domain_model_link`)
-- Have `hideTable = true` in TCA
+- Have `hideTable = true` in TCA **AND** are not listed in the `additionalStandaloneTables` extension setting
 - Displayed as full embedded records in read results
 - Should be created together with parent record
+
+### 3. Standalone Exposure of `hideTable` Children
+
+Some `hideTable=true` tables have inline structure that's too complex to be safely
+edited through the parent — for example translations independent of the parent's
+language, or rows whose visibility depends on permissions of a different table.
+For these, embedding makes the parent's update path either lossy (drops
+translations the LLM didn't echo back) or unsafe (replaces rows the LLM never
+intended to touch).
+
+The extension setting `additionalStandaloneTables` opts a `hideTable` table out
+of embedding. Such tables stay hidden in the TYPO3 backend list module (TCA is
+not modified), but the MCP tools treat them as ordinary independent tables:
+
+- `ListTables` shows them
+- `ReadTable` / `WriteTable` allow direct CRUD
+- The parent's inline field collapses to a list of child UIDs, just like for
+  any independent relation
+
+`sys_file_metadata` is on this list by default. It has `hideTable=true` plus
+its own `languageField`, while its parent `sys_file` is read-only and not
+language-aware — embedding made translations invisible and edits dangerous.
+Exposing it standalone gives the LLM normal `update` and `translate` semantics
+on title/alternative/description, while the read path on `sys_file` still
+yields `metadata: [<uid>, ...]` as a discovery hint.
+
+Mount restrictions on `sys_file` propagate transitively to
+`sys_file_metadata` via a subquery in `SysFileMetadataRestrictionListener` —
+non-admin users only see metadata for files they could read on `sys_file`.
+The same subquery filters orphaned metadata pointing at non-existent files.
 
 Example:
 ```php

@@ -104,7 +104,7 @@ abstract class AbstractRecordTool extends AbstractTool
     protected function getExtensionFromTable(string $table): string
     {
         // Core tables
-        if (in_array($table, ['pages', 'tt_content', 'sys_category', 'sys_file', 'sys_file_reference'])) {
+        if (in_array($table, ['pages', 'tt_content', 'sys_category', 'sys_file', 'sys_file_reference', 'sys_file_metadata'])) {
             return 'core';
         }
         

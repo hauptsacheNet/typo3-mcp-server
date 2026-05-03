@@ -834,9 +834,9 @@ class ReadTableTool extends AbstractRecordTool
             return;
         }
 
-        // Check if foreign table is hidden (dependent records that should be embedded)
-        $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-        $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+        // Check if foreign table is treated as embedded inline child
+        // (TCA hideTable=true, unless overridden via additionalStandaloneTables)
+        $isHiddenTable = $this->tableAccessService->isEmbeddedChildTable($foreignTable);
 
         // Get all related records, filtering by foreign_match_fields if present
         // (e.g., sys_file_reference uses tablenames/fieldname to distinguish which field owns each reference)
