@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+    <title>MCP – Bridge between two nodes</title>
+    <circle cx="3" cy="8" r="2.25" fill="currentColor"/>
+    <circle cx="13" cy="8" r="2.25" fill="currentColor"/>
+    <path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" d="M5.5 8h5"/>
+    <path fill="currentColor" d="M5.6 6.6 7.4 8 5.6 9.4z"/>
+    <path fill="currentColor" d="M10.4 6.6 8.6 8l1.8 1.4z"/>
+</svg>

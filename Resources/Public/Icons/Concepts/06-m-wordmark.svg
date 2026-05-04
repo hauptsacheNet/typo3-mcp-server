@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+    <title>MCP – M wordmark with nodes</title>
+    <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M2.5 13V4l5.5 6 5.5-6v9"/>
+    <circle cx="2.5"  cy="3.5"  r="1.5" fill="currentColor"/>
+    <circle cx="13.5" cy="3.5"  r="1.5" fill="currentColor"/>
+    <circle cx="8"    cy="10"   r="1.5" fill="currentColor"/>
+</svg>

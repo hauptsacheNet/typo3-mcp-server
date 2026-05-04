@@ -78,7 +78,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                     <div class="tab-content mt-3" id="mcpSetupTabsContent">
                         
                         <!-- Remote MCP Setup Tab -->
-                        <div class="tab-pane fade show active" id="remote-setup" role="tabpanel" aria-labelledby="remote-setup-tab">
+                        <div class="tab-pane show active" id="remote-setup" role="tabpanel" aria-labelledby="remote-setup-tab">
                             <p class="text-muted mb-3">
                                 Connect MCP clients to this TYPO3 instance over the internet using OAuth authentication. This is the recommended method for most use cases.
                             </p>
@@ -152,7 +152,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                             <div class="tab-content" id="remoteClientTabsContent">
 
                                 <!-- Claude Desktop Instructions -->
-                                <div class="tab-pane fade show active" id="claude-desktop" role="tabpanel" aria-labelledby="claude-desktop-pill">
+                                <div class="tab-pane show active" id="claude-desktop" role="tabpanel" aria-labelledby="claude-desktop-pill">
                                     <h5>🚀 Claude Desktop Integration</h5>
                                     <p>To connect Claude Desktop to this TYPO3 instance:</p>
                                     <ol>
@@ -165,7 +165,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 </div>
 
                                 <!-- n8n Integration -->
-                                <div class="tab-pane fade" id="n8n" role="tabpanel" aria-labelledby="n8n-pill">
+                                <div class="tab-pane" id="n8n" role="tabpanel" aria-labelledby="n8n-pill">
                                     <h5>🔄 n8n Integration</h5>
 
                                     <p>To configure your n8n MCP Client node:</p>
@@ -180,7 +180,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 </div>
 
                                 <!-- manus Integration -->
-                                <div class="tab-pane fade" id="manus" role="tabpanel" aria-labelledby="manus-pill">
+                                <div class="tab-pane" id="manus" role="tabpanel" aria-labelledby="manus-pill">
                                     <h5>🤖 manus Integration</h5>
 
                                     <p>To configure your manus MCP connection:</p>
@@ -196,7 +196,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 </div>
 
                                 <!-- MCP Inspector -->
-                                <div class="tab-pane fade" id="mcp-inspector" role="tabpanel" aria-labelledby="mcp-inspector-pill">
+                                <div class="tab-pane" id="mcp-inspector" role="tabpanel" aria-labelledby="mcp-inspector-pill">
                                     <h5>🔍 MCP Inspector</h5>
                                     <p>Debug and test tools using the official MCP Inspector CLI:</p>
 
@@ -226,7 +226,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                 </div>
 
                                 <!-- Other MCP Clients Instructions -->
-                                <div class="tab-pane fade" id="other-clients" role="tabpanel" aria-labelledby="other-clients-pill">
+                                <div class="tab-pane" id="other-clients" role="tabpanel" aria-labelledby="other-clients-pill">
                                     <h5>🔧 Generic MCP Client Setup</h5>
                                     <p>For MCP clients that support OAuth and remote connections:</p>
                                     <ol>
@@ -242,7 +242,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                         </div>
 
                         <!-- Local Setup (mcp-remote) Tab -->
-                        <div class="tab-pane fade" id="local-mcp-remote" role="tabpanel" aria-labelledby="local-mcp-remote-tab">
+                        <div class="tab-pane" id="local-mcp-remote" role="tabpanel" aria-labelledby="local-mcp-remote-tab">
                             <p class="text-muted mb-3">
                                 For MCP clients that don't support remote connections natively. The mcp-remote package acts as a local bridge, connecting to this TYPO3 instance on behalf of your MCP client.
                             </p>
@@ -273,7 +273,7 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                         </div>
 
                         <!-- Local Setup (TYPO3 CLI) Tab -->
-                        <div class="tab-pane fade" id="local-cli" role="tabpanel" aria-labelledby="local-cli-tab">
+                        <div class="tab-pane" id="local-cli" role="tabpanel" aria-labelledby="local-cli-tab">
                             <p class="text-muted mb-3">
                                 For local development where your MCP client has direct shell access to this TYPO3 installation.
                             </p>
