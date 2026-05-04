@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\SearchTool;
 use Hn\McpServer\MCP\ToolRegistry;
+use Hn\McpServer\Tests\Functional\Traits\PluginContentTrait;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -13,11 +14,13 @@ use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 class SearchToolTest extends FunctionalTestCase
 {
+    use PluginContentTrait;
+
     protected array $coreExtensionsToLoad = [
         'workspaces',
         'frontend',
     ];
-    
+
     protected array $testExtensionsToLoad = [
         'mcp_server',
     ];
@@ -25,14 +28,23 @@ class SearchToolTest extends FunctionalTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        
+
         // Import all necessary fixtures
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category_record_mm.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
-        
+
+        // Plugin row whose shape depends on the running TYPO3 version
+        // (CType=list+list_type on v13, CType=plugin on v14).
+        $this->insertPluginContentElement(
+            uid: 105,
+            pid: 6,
+            pluginIdentifier: 'news_pi1',
+            extra: ['header' => 'Contact Form', 'bodytext' => 'Get in touch']
+        );
+
         // Set up backend user for DataHandler and TableAccessService
         $this->setUpBackendUser(1);
     }

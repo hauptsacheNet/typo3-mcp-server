@@ -14,9 +14,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php-version: ['8.2', '8.3', '8.4', '8.5']
+        include:
+          - { typo3: '13.4', php: '8.2' }
+          - { typo3: '13.4', php: '8.3' }
+          - { typo3: '13.4', php: '8.4' }
+          - { typo3: '13.4', php: '8.5' }
+          - { typo3: '14.3', php: '8.2' }
+          - { typo3: '14.3', php: '8.3' }
+          - { typo3: '14.3', php: '8.4' }
+          - { typo3: '14.3', php: '8.5' }
 
-    name: PHP ${{ matrix.php-version }}
+    name: TYPO3 ${{ matrix.typo3 }} / PHP ${{ matrix.php }}
 
     steps:
       - name: Check out repository
@@ -25,12 +33,21 @@ jobs:
       - name: Set up PHP
         uses: shivammathur/setup-php@accd6127cb78bee3e8082180cb391013d204ef9f # v2
         with:
-          php-version: ${{ matrix.php-version }}
+          php-version: ${{ matrix.php }}
           extensions: sqlite3, pdo_sqlite, intl
           coverage: none
 
+      - name: Pin TYPO3 version
+        run: |
+          composer require --no-update --no-interaction --no-progress \
+            "typo3/cms-core:^${{ matrix.typo3 }}" \
+            "typo3/cms-backend:^${{ matrix.typo3 }}" \
+            "typo3/cms-workspaces:^${{ matrix.typo3 }}"
+          composer require --no-update --no-interaction --no-progress --dev \
+            "typo3/cms-install:^${{ matrix.typo3 }}"
+
       - name: Install Composer dependencies
-        run: composer install --no-interaction --prefer-dist
+        run: composer update --no-interaction --prefer-dist
 
       - name: Run functional test suite
         run: composer test
