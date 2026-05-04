@@ -61,8 +61,11 @@ class ReadTableTool extends AbstractRecordTool
                 'description' => 'Filter by page ID (recommended for content tables). Omit for root-level tables like sys_file that store records at pid=0.',
             ],
             'uid' => [
-                'type' => 'integer',
-                'description' => 'Filter by record UID (use pid filter instead to read multiple records of a page)',
+                'oneOf' => [
+                    ['type' => 'integer'],
+                    ['type' => 'array', 'items' => ['type' => 'integer']],
+                ],
+                'description' => 'Filter by record UID. Pass a single integer for one record, or an array of integers to fetch several at once — useful when reading inline-relation hints like "metadata: [1, 5]". Use the pid filter to read all records of a page.',
             ],
             'where' => [
                 'type' => 'string',
@@ -126,7 +129,20 @@ class ReadTableTool extends AbstractRecordTool
         // Execute main logic
             // Extract and validate parameters
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
-        $uid = isset($params['uid']) ? (int)$params['uid'] : null;
+        // Normalize uid to int[]|null. Accept legacy single-int and the new
+        // array form so callers can read multiple records in one go (e.g.
+        // following a `metadata: [1, 5]` inline hint). When the caller did
+        // pass a uid filter but every value is non-positive, we keep the
+        // intent (filter applied) and let the query produce zero rows — the
+        // legacy single-int behaviour for `uid: -1`.
+        $uids = null;
+        if (isset($params['uid']) && $params['uid'] !== '' && $params['uid'] !== []) {
+            $rawValues = is_array($params['uid']) ? $params['uid'] : [$params['uid']];
+            $uids = array_values(array_filter(
+                array_map('intval', $rawValues),
+                fn($n) => $n > 0
+            ));
+        }
         $condition = $params['where'] ?? '';
         $limit = isset($params['limit']) ? (int)$params['limit'] : 20;
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
@@ -163,7 +179,7 @@ class ReadTableTool extends AbstractRecordTool
         $result = $this->getRecords(
             $table,
             $pid,
-            $uid,
+            $uids,
             $condition,
             $limit,
             $offset,
@@ -189,7 +205,7 @@ class ReadTableTool extends AbstractRecordTool
     protected function getRecords(
         string $table,
         ?int $pid,
-        ?int $uid,
+        ?array $uids,
         string $condition,
         int $limit,
         int $offset,
@@ -232,27 +248,39 @@ class ReadTableTool extends AbstractRecordTool
             }
         }
 
-        // Filter by uid if specified
-        if ($uid !== null) {
-            // For workspace transparency, we need to handle both cases:
-            // 1. The UID is a workspace UID (for new records)
-            // 2. The UID is a live UID (for existing records with workspace versions)
-
-            $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-            if ($currentWorkspace > 0) {
-                // In workspace context, check both live and workspace UIDs
-                // The WorkspaceDeletePlaceholderRestriction will handle delete placeholders automatically
-                $queryBuilder->andWhere(
-                    $queryBuilder->expr()->or(
-                        $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
-                        $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                    )
-                );
+        // Filter by uid(s) if specified. Single int and array are normalised
+        // to a list — IN(...) handles both cases identically.
+        if ($uids !== null) {
+            if ($uids === []) {
+                // The caller passed a uid filter, but every value was
+                // non-positive after sanitisation. Match nothing.
+                $queryBuilder->andWhere('1 = 0');
             } else {
-                // In live workspace, just filter by UID
-                $queryBuilder->andWhere(
-                    $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                );
+                $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+                if ($currentWorkspace > 0) {
+                    // In workspace context, match either the live uid or the
+                    // overlay's t3ver_oid. WorkspaceDeletePlaceholderRestriction
+                    // handles delete placeholders.
+                    $queryBuilder->andWhere(
+                        $queryBuilder->expr()->or(
+                            $queryBuilder->expr()->in(
+                                'uid',
+                                $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                            ),
+                            $queryBuilder->expr()->in(
+                                't3ver_oid',
+                                $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                            )
+                        )
+                    );
+                } else {
+                    $queryBuilder->andWhere(
+                        $queryBuilder->expr()->in(
+                            'uid',
+                            $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                        )
+                    );
+                }
             }
         }
 
@@ -317,23 +345,32 @@ class ReadTableTool extends AbstractRecordTool
             }
         }
 
-        if ($uid !== null) {
-            // Apply the same UID filtering logic for count query
-            $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-            if ($currentWorkspace > 0) {
-                // In workspace context, check both live and workspace UIDs
-                // The WorkspaceDeletePlaceholderRestriction will handle delete placeholders automatically
-                $countQueryBuilder->andWhere(
-                    $countQueryBuilder->expr()->or(
-                        $countQueryBuilder->expr()->eq('uid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
-                        $countQueryBuilder->expr()->eq('t3ver_oid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                    )
-                );
+        if ($uids !== null) {
+            if ($uids === []) {
+                $countQueryBuilder->andWhere('1 = 0');
             } else {
-                // In live workspace, just filter by UID
-                $countQueryBuilder->andWhere(
-                    $countQueryBuilder->expr()->eq('uid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                );
+                $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+                if ($currentWorkspace > 0) {
+                    $countQueryBuilder->andWhere(
+                        $countQueryBuilder->expr()->or(
+                            $countQueryBuilder->expr()->in(
+                                'uid',
+                                $countQueryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                            ),
+                            $countQueryBuilder->expr()->in(
+                                't3ver_oid',
+                                $countQueryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                            )
+                        )
+                    );
+                } else {
+                    $countQueryBuilder->andWhere(
+                        $countQueryBuilder->expr()->in(
+                            'uid',
+                            $countQueryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                        )
+                    );
+                }
             }
         }
 

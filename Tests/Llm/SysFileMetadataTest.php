@@ -34,10 +34,17 @@ class SysFileMetadataTest extends LlmTestCase
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/sys_file_metadata.csv');
 
         // The shared fixture only seeds metadata for sys_file uid=1 (test.jpg).
-        // Add a row for person.jpg (sys_file uid=3) so the LLM has a clearer
-        // target — both the prompt and the assertion can name a single file
-        // unambiguously, and we can verify the *other* metadata row stays
-        // untouched.
+        // We need additional rows so each scenario can target an unambiguous
+        // file: person.jpg (uid=3) for the alt-text/translation tests,
+        // logo.png (uid=4) and team-photo.jpg (uid=5) without alt text for
+        // the bulk-find-untagged test.
+        $this->insertMetadata(3, 'Person Photo', 'Original alt for person');
+        $this->insertMetadata(4, 'Company Logo', '');
+        $this->insertMetadata(5, 'Team Group Photo', '');
+    }
+
+    private function insertMetadata(int $fileUid, string $title, string $alternative, string $description = ''): int
+    {
         $conn = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('sys_file_metadata');
         $conn->insert('sys_file_metadata', [
@@ -47,11 +54,12 @@ class SysFileMetadataTest extends LlmTestCase
             'sys_language_uid' => 0,
             'l10n_parent' => 0,
             'l10n_diffsource' => '',
-            'title' => 'Person Photo',
-            'alternative' => 'Original alt for person',
-            'description' => '',
-            'file' => 3,
+            'title' => $title,
+            'alternative' => $alternative,
+            'description' => $description,
+            'file' => $fileUid,
         ]);
+        return (int)$conn->lastInsertId();
     }
 
     #[DataProvider('modelProvider')]
@@ -117,6 +125,193 @@ class SysFileMetadataTest extends LlmTestCase
         $this->assertSame('Alt text for test', (string)$testJpgMeta['alternative'],
             'Untouched file metadata (test.jpg) was modified — the LLM hit the wrong row. '
             . $writeArgsDump . "\n" . $this->getFailureContext($currentResponse));
+    }
+
+    #[DataProvider('modelProvider')]
+    #[TestDox('[$modelKey] Prompt "Translate metadata of person.jpg to German" → action=translate creates a sys_language_uid=1 row pointing at the default-language record')]
+    public function testLlmTranslatesMetadataToGerman(string $modelKey): void
+    {
+        $this->setModel($modelKey);
+
+        $prompt = 'Add a German translation for the metadata of the file "person.jpg". '
+            . 'The German title should be "Personenfoto" and the alternative text should be "Foto vom Teamleiter".';
+
+        $response = $this->executeUntilToolFound(
+            $this->callLlm($prompt),
+            'WriteTable',
+            12
+        );
+
+        $writeCalls = $response->getToolCallsByName('WriteTable');
+        $this->assertNotEmpty($writeCalls,
+            'Expected a WriteTable call. ' . $this->getFailureContext($response));
+
+        // Drive the conversation forward so the workspace overlay is written.
+        $currentResponse = $response;
+        for ($attempt = 0; $attempt < 6 && $currentResponse->hasToolCalls(); $attempt++) {
+            $currentResponse = $this->executeAndContinue($currentResponse);
+        }
+
+        $writeArgsDump = "\nWriteTable arguments seen: " . json_encode(
+            array_map(fn($c) => $c['arguments'] ?? [], $writeCalls),
+            JSON_PRETTY_PRINT
+        );
+
+        // Look for a German translation row pointing at the original
+        // metadata record for person.jpg. We accept either action=translate
+        // (the canonical path) or a direct create with l10n_parent set —
+        // both produce the same end state.
+        $deRow = $this->loadGermanTranslationForFile(3);
+        $this->assertNotNull($deRow,
+            'Expected a German translation row for person.jpg metadata. '
+            . $writeArgsDump . "\n" . $this->getFailureContext($currentResponse));
+        $this->assertSame('Personenfoto', (string)$deRow['title'],
+            'German title not stored on the translation row. '
+            . $writeArgsDump . "\n" . $this->getFailureContext($currentResponse));
+        $this->assertSame('Foto vom Teamleiter', (string)$deRow['alternative'],
+            'German alt text not stored on the translation row. '
+            . $writeArgsDump . "\n" . $this->getFailureContext($currentResponse));
+    }
+
+    #[DataProvider('modelProvider')]
+    #[TestDox('[$modelKey] Prompt "Find images without alt text and fix them" → discovers untagged metadata rows and updates each')]
+    public function testLlmFillsMissingAltTextOnUntaggedImages(string $modelKey): void
+    {
+        $this->setModel($modelKey);
+
+        $prompt = 'Some images on this site have no alternative text yet. '
+            . 'Find every image whose alternative text is empty and add a sensible alt text '
+            . 'based on the title that is already stored. Keep titles unchanged.';
+
+        $response = $this->executeUntilToolFound(
+            $this->callLlm($prompt),
+            'WriteTable',
+            18
+        );
+
+        $this->assertNotEmpty($response->getToolCallsByName('WriteTable'),
+            'Expected at least one WriteTable call. ' . $this->getFailureContext($response));
+
+        // The LLM may need several rounds: read to find untagged rows, then
+        // update each. Allow generous turn budget.
+        $currentResponse = $response;
+        for ($attempt = 0; $attempt < 10 && $currentResponse->hasToolCalls(); $attempt++) {
+            $currentResponse = $this->executeAndContinue($currentResponse);
+        }
+
+        $logoMeta = $this->loadMetadataForFile(4);
+        $teamMeta = $this->loadMetadataForFile(5);
+
+        $this->assertNotNull($logoMeta, 'logo.png metadata row should still exist.');
+        $this->assertNotNull($teamMeta, 'team-photo.jpg metadata row should still exist.');
+
+        $this->assertNotSame('', (string)$logoMeta['alternative'],
+            'logo.png alt text should have been filled. '
+            . $this->getFailureContext($currentResponse));
+        $this->assertNotSame('', (string)$teamMeta['alternative'],
+            'team-photo.jpg alt text should have been filled. '
+            . $this->getFailureContext($currentResponse));
+
+        // Pre-populated rows must not be flattened or overwritten.
+        $personMeta = $this->loadMetadataForFile(3);
+        $this->assertSame('Original alt for person', (string)$personMeta['alternative'],
+            'person.jpg already had alt text and must not have been touched. '
+            . $this->getFailureContext($currentResponse));
+
+        // Title field on the previously-untagged rows must survive — the
+        // prompt only asks for alt text changes.
+        $this->assertSame('Company Logo', (string)$logoMeta['title']);
+        $this->assertSame('Team Group Photo', (string)$teamMeta['title']);
+    }
+
+    #[DataProvider('modelProvider')]
+    #[TestDox('[$modelKey] Prompt "What metadata is stored for person.jpg?" → reads sys_file, follows the metadata uid hint into sys_file_metadata')]
+    public function testLlmFollowsMetadataUidHintFromSysFile(string $modelKey): void
+    {
+        $this->setModel($modelKey);
+
+        $prompt = 'Read the file "person.jpg" from sys_file and tell me what metadata is stored for it.';
+
+        // Collect tool calls across every iteration so we can assert on the
+        // full sequence, not just the first or last response.
+        $currentResponse = $this->callLlm($prompt);
+        $allReadCalls = [];
+        for ($iter = 0; $iter < 8 && $currentResponse->hasToolCalls(); $iter++) {
+            foreach ($currentResponse->getToolCallsByName('ReadTable') as $call) {
+                $allReadCalls[] = $call;
+            }
+            $currentResponse = $this->executeAndContinue($currentResponse);
+        }
+        // Catch any ReadTable calls in the final response too.
+        foreach ($currentResponse->getToolCallsByName('ReadTable') as $call) {
+            $allReadCalls[] = $call;
+        }
+
+        $tablesRead = array_values(array_unique(array_filter(array_map(
+            fn($call) => $call['arguments']['table'] ?? '',
+            $allReadCalls
+        ))));
+
+        $this->assertNotEmpty($allReadCalls,
+            'Expected at least one ReadTable call. ' . $this->getFailureContext($currentResponse));
+
+        // The whole point of leaving `metadata: [<uid>]` on sys_file is that
+        // the LLM follows the hint into sys_file_metadata.
+        $this->assertContains('sys_file_metadata', $tablesRead,
+            'Expected the LLM to read sys_file_metadata after seeing the metadata uid hint on sys_file. '
+            . 'Tables read: ' . implode(', ', $tablesRead) . "\n"
+            . $this->getFailureContext($currentResponse));
+
+        // The model's final answer should mention the metadata it discovered.
+        $finalText = $currentResponse->getContent();
+        $this->assertMatchesRegularExpression(
+            '/Person Photo|Original alt for person/i',
+            $finalText,
+            'LLM should have surfaced the discovered metadata in its answer. '
+            . $this->getFailureContext($currentResponse)
+        );
+    }
+
+    /**
+     * Load the German (sys_language_uid=1) metadata row for a sys_file uid,
+     * folding in any workspace overlay. Returns null if no translation row
+     * exists yet.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function loadGermanTranslationForFile(int $fileUid): ?array
+    {
+        $qb = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('sys_file_metadata');
+        $qb->getRestrictions()->removeAll();
+
+        $rows = $qb->select('uid', 't3ver_oid', 't3ver_state', 'sys_language_uid', 'deleted', 'alternative', 'title', 'l10n_parent', 'file')
+            ->from('sys_file_metadata')
+            ->where(
+                $qb->expr()->eq('file', $qb->createNamedParameter($fileUid, \Doctrine\DBAL\ParameterType::INTEGER)),
+                $qb->expr()->eq('sys_language_uid', $qb->createNamedParameter(1, \Doctrine\DBAL\ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        $byLiveUid = [];
+        foreach ($rows as $row) {
+            if ((int)$row['t3ver_state'] === 2) {
+                continue;
+            }
+            $deletedValue = $row['deleted'] ?? $row['"deleted"'] ?? 0;
+            if ((int)$deletedValue === 1) {
+                continue;
+            }
+            $liveUid = (int)($row['t3ver_oid'] ?: $row['uid']);
+            if ((int)$row['t3ver_oid'] > 0) {
+                $byLiveUid[$liveUid] = $row;
+            } elseif (!isset($byLiveUid[$liveUid])) {
+                $byLiveUid[$liveUid] = $row;
+            }
+        }
+
+        return $byLiveUid ? array_values($byLiveUid)[0] : null;
     }
 
     /**
