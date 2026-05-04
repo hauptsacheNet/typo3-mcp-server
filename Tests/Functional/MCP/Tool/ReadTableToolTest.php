@@ -587,4 +587,87 @@ class ReadTableToolTest extends AbstractFunctionalTest
         // Non-requested fields should still be excluded
         $this->assertArrayNotHasKey('colPos', $record);
     }
+
+    /**
+     * Reading several records in a single call by passing an array of UIDs.
+     * This is the natural follow-up after seeing an inline-relation hint
+     * like `metadata: [1, 5]` on a parent record.
+     */
+    public function testReadMultipleRecordsByUidArray(): void
+    {
+        $result = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => [100, 101],
+            'includeRelations' => false,
+        ]);
+
+        $this->assertSuccessfulToolResult($result);
+        $data = $this->extractJsonFromResult($result);
+
+        $this->assertCount(2, $data['records']);
+        $uids = array_column($data['records'], 'uid');
+        $this->assertContains(100, $uids);
+        $this->assertContains(101, $uids);
+    }
+
+    /**
+     * Single-int form keeps working alongside the array form.
+     */
+    public function testUidArrayWithSingleEntryEqualsLegacyInt(): void
+    {
+        $resultArray = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => [100],
+            'includeRelations' => false,
+        ]);
+        $resultInt = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+            'includeRelations' => false,
+        ]);
+
+        $this->assertEquals(
+            $this->extractJsonFromResult($resultArray)['records'],
+            $this->extractJsonFromResult($resultInt)['records']
+        );
+    }
+
+    /**
+     * Mixed valid and invalid UIDs: invalid ones (<= 0) drop out, the rest
+     * still match.
+     */
+    public function testUidArrayDropsNonPositiveEntries(): void
+    {
+        $result = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => [100, -1, 0, 101],
+            'includeRelations' => false,
+        ]);
+
+        $this->assertSuccessfulToolResult($result);
+        $uids = array_column(
+            $this->extractJsonFromResult($result)['records'],
+            'uid'
+        );
+        sort($uids);
+        $this->assertSame([100, 101], $uids);
+    }
+
+    /**
+     * A uid filter that sanitises to an empty list must still apply (return
+     * zero rows), preserving the legacy `uid: -1 → empty result` semantics.
+     */
+    public function testUidArrayWithOnlyInvalidEntriesReturnsEmpty(): void
+    {
+        $result = $this->tool->execute([
+            'table' => 'tt_content',
+            'uid' => [-1, 0],
+            'includeRelations' => false,
+        ]);
+
+        $this->assertSuccessfulToolResult($result);
+        $data = $this->extractJsonFromResult($result);
+        $this->assertSame(0, $data['total']);
+        $this->assertEmpty($data['records']);
+    }
 }

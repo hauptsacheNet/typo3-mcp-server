@@ -69,6 +69,12 @@ services:
         event: Hn\McpServer\Event\BeforeRecordReadEvent
         identifier: 'mcp-server/sys-file-mount-restriction'
 
+  Hn\McpServer\EventListener\SysFileMetadataRestrictionListener:
+    tags:
+      - name: event.listener
+        event: Hn\McpServer\Event\BeforeRecordReadEvent
+        identifier: 'mcp-server/sys-file-metadata-restriction'
+
   # Explicitly configure the module controller
   Hn\McpServer\Controller\McpServerModuleController:
     public: true

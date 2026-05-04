@@ -24,7 +24,7 @@ final class SysFileMountRestrictionListener
         }
 
         $queryBuilder = $event->getQueryBuilder();
-        $restriction = $this->buildFileMountRestriction($queryBuilder);
+        $restriction = self::buildSysFileMountRestriction($queryBuilder);
         if ($restriction !== null) {
             $queryBuilder->andWhere($restriction);
         }
@@ -35,8 +35,13 @@ final class SysFileMountRestrictionListener
      * the current user's accessible file mounts. Returns null when no
      * restriction applies (admin user). Returns an always-false expression
      * when the user has no mounts at all.
+     *
+     * Static so dependent listeners (e.g. sys_file_metadata) can reuse the
+     * exact same mount logic inside a subquery — parameters are registered
+     * on the passed-in QueryBuilder, so embedding the resulting expression
+     * via getSQL() in a wrapping query keeps them bound correctly.
      */
-    private function buildFileMountRestriction(QueryBuilder $queryBuilder): ?CompositeExpression
+    public static function buildSysFileMountRestriction(QueryBuilder $queryBuilder): ?CompositeExpression
     {
         $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
         $isAdmin = false;

@@ -473,9 +473,8 @@ class WriteTableTool extends AbstractRecordTool
                     }
                     
                     // Check if this is an embedded table
-                    $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-                    $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
-                    
+                    $isHiddenTable = $this->tableAccessService->isEmbeddedChildTable($foreignTable);
+
                     if ($isHiddenTable) {
                         // Collect the UIDs of created child records
                         $childUids = [];
@@ -589,9 +588,8 @@ class WriteTableTool extends AbstractRecordTool
                     }
                     
                     // Check if this is an embedded table
-                    $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-                    $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
-                    
+                    $isHiddenTable = $this->tableAccessService->isEmbeddedChildTable($foreignTable);
+
                     if ($isHiddenTable) {
                         // Collect the UIDs of created child records
                         $childUids = [];
@@ -1101,10 +1099,9 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
             
-            // Check if foreign table is hidden (embedded records)
-            $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-            $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
-            
+            // Check if foreign table is treated as embedded inline child
+            $isHiddenTable = $this->tableAccessService->isEmbeddedChildTable($foreignTable);
+
             if ($isHiddenTable) {
                 // Process embedded inline relations (e.g., tx_news_domain_model_link)
                 $this->processEmbeddedInlineRelations($dataMap, $foreignTable, $foreignField, $parentUid, $pid, $value, $config, $liveUid);
@@ -1404,10 +1401,9 @@ class WriteTableTool extends AbstractRecordTool
             return 'Invalid inline relation configuration: missing foreign_table';
         }
         
-        // Check if foreign table is hidden (embedded records)
-        $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-        $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
-        
+        // Check if foreign table is treated as embedded inline child
+        $isHiddenTable = $this->tableAccessService->isEmbeddedChildTable($foreignTable);
+
         // Validate each item
         foreach ($value as $index => $item) {
             if ($isHiddenTable) {

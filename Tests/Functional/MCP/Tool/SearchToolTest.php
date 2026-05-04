@@ -652,4 +652,90 @@ class SearchToolTest extends FunctionalTestCase
         $this->assertStringContainsString('Web Development', $content);
         $this->assertStringContainsString('[UID: 4] Web Development', $content);
     }
+
+    /**
+     * sys_file_metadata is configured as standalone via additionalStandaloneTables,
+     * so when a primary table (sys_file) lists it as `type=inline foreign_table=...`,
+     * it must be excluded from the inline-related-search path. Otherwise hits in
+     * sys_file_metadata would be searched twice and falsely attributed back to
+     * the parent sys_file record.
+     *
+     * Forces searchFields onto sys_file_metadata for the duration of the test
+     * so the path is actually exercised — without searchFields, the table is
+     * filtered out earlier (a separate core-level issue tracked outside MCP).
+     */
+    public function testInlineRelatedHiddenTablesSkipsStandaloneTables(): void
+    {
+        $originalSearchFields = $GLOBALS['TCA']['sys_file_metadata']['ctrl']['searchFields'] ?? null;
+        $GLOBALS['TCA']['sys_file_metadata']['ctrl']['searchFields'] = 'title,alternative,description';
+        try {
+            $tool = new SearchTool();
+
+            // Reach into the protected discovery method. We could exercise this
+            // through the public search path too, but isolating the helper makes
+            // the assertion unambiguous: the primary-vs-inline classification is
+            // exactly what we care about.
+            $reflected = new \ReflectionMethod($tool, 'getInlineRelatedHiddenTables');
+            $reflected->setAccessible(true);
+            $inlineTables = $reflected->invoke($tool, ['sys_file']);
+
+            $inlineNames = array_column($inlineTables, 'table');
+            $this->assertNotContains(
+                'sys_file_metadata',
+                $inlineNames,
+                'sys_file_metadata is exposed standalone and must not be discovered ' .
+                'via the inline-related path. Got: ' . implode(',', $inlineNames)
+            );
+        } finally {
+            if ($originalSearchFields === null) {
+                unset($GLOBALS['TCA']['sys_file_metadata']['ctrl']['searchFields']);
+            } else {
+                $GLOBALS['TCA']['sys_file_metadata']['ctrl']['searchFields'] = $originalSearchFields;
+            }
+        }
+    }
+
+    /**
+     * Counter-test: when sys_file_metadata is NOT in additionalStandaloneTables
+     * (i.e. it remains a hideTable inline child), the inline-related path
+     * must still pick it up. Otherwise our fix would have over-blocked the
+     * embedded path entirely.
+     */
+    public function testInlineRelatedHiddenTablesIncludesNonStandaloneHideTable(): void
+    {
+        $originalSearchFields = $GLOBALS['TCA']['sys_file_metadata']['ctrl']['searchFields'] ?? null;
+        $GLOBALS['TCA']['sys_file_metadata']['ctrl']['searchFields'] = 'title,alternative,description';
+
+        // Reach into the singleton TableAccessService and override its
+        // standalone-tables cache so the test exercises the "no standalone
+        // override" world without touching extension configuration.
+        $tableAccessService = GeneralUtility::makeInstance(\Hn\McpServer\Service\TableAccessService::class);
+        $standaloneProperty = new \ReflectionProperty($tableAccessService, 'additionalStandaloneTables');
+        $standaloneProperty->setAccessible(true);
+        $originalStandalone = $standaloneProperty->getValue($tableAccessService);
+        $standaloneProperty->setValue($tableAccessService, []);
+
+        try {
+            $tool = new SearchTool();
+            $reflected = new \ReflectionMethod($tool, 'getInlineRelatedHiddenTables');
+            $reflected->setAccessible(true);
+            $inlineTables = $reflected->invoke($tool, ['sys_file']);
+
+            $inlineNames = array_column($inlineTables, 'table');
+            $this->assertContains(
+                'sys_file_metadata',
+                $inlineNames,
+                'Without the standalone opt-out, sys_file_metadata should still ' .
+                'be discovered via sys_file.metadata inline relation. Got: ' .
+                implode(',', $inlineNames)
+            );
+        } finally {
+            $standaloneProperty->setValue($tableAccessService, $originalStandalone);
+            if ($originalSearchFields === null) {
+                unset($GLOBALS['TCA']['sys_file_metadata']['ctrl']['searchFields']);
+            } else {
+                $GLOBALS['TCA']['sys_file_metadata']['ctrl']['searchFields'] = $originalSearchFields;
+            }
+        }
+    }
 }

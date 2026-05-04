@@ -25,6 +25,7 @@ class TableAccessService implements SingletonInterface
     protected WorkspaceContextService $workspaceContextService;
     protected TcaSchemaFactory $tcaSchemaFactory;
     protected ?array $additionalReadOnlyTables = null;
+    protected ?array $additionalStandaloneTables = null;
 
     public function __construct()
     {
@@ -48,6 +49,44 @@ class TableAccessService implements SingletonInterface
             $this->additionalReadOnlyTables = GeneralUtility::trimExplode(',', (string)$config, true);
         }
         return $this->additionalReadOnlyTables;
+    }
+
+    /**
+     * Get the list of hideTable tables that should be exposed as standalone
+     * tables instead of being embedded into their parent's inline relation.
+     * Configured via extension settings (additionalStandaloneTables).
+     */
+    public function getAdditionalStandaloneTables(): array
+    {
+        if ($this->additionalStandaloneTables === null) {
+            try {
+                $config = GeneralUtility::makeInstance(ExtensionConfiguration::class)
+                    ->get('mcp_server', 'additionalStandaloneTables');
+            } catch (\Exception) {
+                $config = 'sys_file_metadata';
+            }
+            $this->additionalStandaloneTables = GeneralUtility::trimExplode(',', (string)$config, true);
+        }
+        return $this->additionalStandaloneTables;
+    }
+
+    /**
+     * Whether records of this table are embedded into their parent's inline
+     * relation by the read/write tools.
+     *
+     * Default: TCA `hideTable=true`. Tables listed in `additionalStandaloneTables`
+     * opt out of embedding even if their TCA marks them hidden — useful for
+     * inline structures whose translation/mount/orphan handling is too
+     * complex to be safely edited through the parent (e.g. sys_file_metadata).
+     */
+    public function isEmbeddedChildTable(string $table): bool
+    {
+        $tca = $GLOBALS['TCA'][$table] ?? [];
+        $hideTable = ($tca['ctrl']['hideTable'] ?? false) === true;
+        if (!$hideTable) {
+            return false;
+        }
+        return !in_array($table, $this->getAdditionalStandaloneTables(), true);
     }
     
     /**

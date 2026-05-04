@@ -147,8 +147,8 @@ class TcaFormattingUtility
                     break;
                 }
 
-                $foreignTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-                $isHiddenTable = ($foreignTCA['ctrl']['hideTable'] ?? false) === true;
+                $isHiddenTable = GeneralUtility::makeInstance(TableAccessService::class)
+                    ->isEmbeddedChildTable($foreignTable);
 
                 if ($isHiddenTable) {
                     // Embedded relation: LLM writes array of record objects
