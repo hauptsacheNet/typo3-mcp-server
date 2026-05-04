@@ -61,8 +61,7 @@ class SysFileMetadataTest extends LlmTestCase
         $this->setModel($modelKey);
 
         $newAlt = 'Our team lead photo';
-        $prompt = 'Set the alternative text of the file "person.jpg" to "' . $newAlt . '". '
-            . 'Do not touch any other file metadata.';
+        $prompt = 'Set the alternative text of the file "person.jpg" to "' . $newAlt . '".';
 
         $response = $this->executeUntilToolFound(
             $this->callLlm($prompt),
