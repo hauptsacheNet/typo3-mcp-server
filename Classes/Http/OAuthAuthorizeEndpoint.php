@@ -157,18 +157,30 @@ class OAuthAuthorizeEndpoint
         $queryParams = $request->getQueryParams();
         $postParams = $request->getParsedBody() ?: [];
 
+        $clientId = $queryParams['client_id'] ?? $postParams['client_id'] ?? '';
         $clientName = $postParams['client_name'] ?? $this->resolveClientName($request);
         $redirectUri = $queryParams['redirect_uri'] ?? '';
         $pkceChallenge = $queryParams['code_challenge'] ?? '';
         $challengeMethod = $queryParams['code_challenge_method'] ?? 'S256';
         $state = $postParams['state'] ?? $queryParams['state'] ?? '';
 
+        $oauthService = GeneralUtility::makeInstance(OAuthService::class);
+
+        // Re-validate the client and redirect_uri so an attacker cannot skip the consent
+        // form's checks by POSTing directly to this endpoint.
+        $client = $oauthService->getClient((string)$clientId);
+        if ($client === null) {
+            return $this->createErrorResponse('invalid_client', 'Unknown client_id');
+        }
+        if ($redirectUri !== '' && !$oauthService->isRedirectUriAllowed($client, $redirectUri)) {
+            return $this->createErrorResponse('invalid_request', 'redirect_uri is not registered for this client');
+        }
+
         // Only S256 is supported for PKCE
         if (!empty($pkceChallenge) && $challengeMethod !== 'S256') {
             return $this->createErrorResponse('invalid_request', 'Only S256 code_challenge_method is supported');
         }
 
-        $oauthService = GeneralUtility::makeInstance(OAuthService::class);
         $code = $oauthService->createAuthorizationCode(
             $beUserId,
             $clientName,
@@ -215,18 +227,24 @@ class OAuthAuthorizeEndpoint
     private function showConsentForm(ServerRequestInterface $request): ResponseInterface
     {
         $queryParams = $request->getQueryParams();
-        
+
         $clientId = $queryParams['client_id'] ?? '';
-        $clientName = $this->resolveClientName($request);
         $redirectUri = $queryParams['redirect_uri'] ?? '';
         $codeChallenge = $queryParams['code_challenge'] ?? '';
         $challengeMethod = $queryParams['code_challenge_method'] ?? 'S256';
         $state = $queryParams['state'] ?? '';
 
-        // Validate required parameters
-        if (empty($clientId) || $clientId !== 'typo3-mcp-server') {
-            return $this->createErrorResponse('invalid_client', 'Invalid client_id');
+        // Validate the client against the registered clients table
+        $oauthService = GeneralUtility::makeInstance(OAuthService::class);
+        $client = $oauthService->getClient((string)$clientId);
+        if ($client === null) {
+            return $this->createErrorResponse('invalid_client', 'Unknown client_id');
         }
+        if ($redirectUri !== '' && !$oauthService->isRedirectUriAllowed($client, $redirectUri)) {
+            return $this->createErrorResponse('invalid_request', 'redirect_uri is not registered for this client');
+        }
+
+        $clientName = $this->resolveClientName($request);
 
         $beUser = $GLOBALS['BE_USER'];
         $username = $beUser->user['username'] ?? 'Unknown';
