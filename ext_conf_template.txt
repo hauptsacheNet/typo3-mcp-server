@@ -1,2 +1,5 @@
 # cat=mcp/tables; type=string; label=Additional read-only tables: Comma-separated list of non-workspace-capable tables to expose as read-only via MCP tools. These tables become available in ReadTable but cannot be written. Example: tx_blog_domain_model_author,tx_myext_domain_model_setting
 additionalReadOnlyTables = sys_file
+
+# cat=mcp/tables; type=string; label=Additional standalone tables: Comma-separated list of tables marked as hideTable=true in TCA that should still be exposed as independent tables instead of being embedded into their parent's inline relation. Use this for hideTable tables whose inline structure is too complex (translations, mounts, ...) to be safely edited through the parent. Example: sys_file_metadata,tx_myext_complex_child
+additionalStandaloneTables = sys_file_metadata

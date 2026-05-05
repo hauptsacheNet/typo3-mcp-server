@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Llm;
 
+use Hn\McpServer\Tests\Functional\Traits\PluginContentTrait;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\TestDox;
 
@@ -14,6 +15,8 @@ use PHPUnit\Framework\Attributes\TestDox;
  */
 class NewsTest extends LlmTestCase
 {
+    use PluginContentTrait;
+
     protected array $testExtensionsToLoad = [
         'mcp_server',
         'news',
@@ -26,8 +29,20 @@ class NewsTest extends LlmTestCase
         // Import test data with pages, news storage, and categories
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_pages.csv');
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_categories.csv');
-        $this->importCSVDataSet(__DIR__ . '/Fixtures/news_plugin.csv');
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_records.csv');
+
+        // Plugin row inserted programmatically because the tt_content shape
+        // differs between TYPO3 13 (CType=list+list_type) and TYPO3 14
+        // (CType=plugin).
+        $this->insertPluginContentElement(
+            uid: 100,
+            pid: 12,
+            pluginIdentifier: 'news_pi1',
+            extra: [
+                'header' => 'Recent Updates',
+                'pi_flexform' => '<?xml version="1.0" encoding="utf-8" standalone="yes" ?><T3FlexForms><data><sheet index="sDEF"><language index="lDEF"><field index="settings.startingpoint"><value index="vDEF">30</value></field></language></sheet></data></T3FlexForms>',
+            ]
+        );
     }
 
     #[DataProvider('modelProvider')]

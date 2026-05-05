@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use Doctrine\DBAL\ArrayParameterType;
-use Hn\McpServer\Event\ModifyAvailableFieldsEvent;
+use Hn\McpServer\Event\AfterSchemaLoadEvent;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
+use TYPO3\CMS\Core\Schema\Capability\TcaSchemaCapability;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -25,11 +26,22 @@ class TableAccessService implements SingletonInterface
     protected WorkspaceContextService $workspaceContextService;
     protected TcaSchemaFactory $tcaSchemaFactory;
     protected ?array $additionalReadOnlyTables = null;
+    protected ?array $additionalStandaloneTables = null;
 
     public function __construct()
     {
         $this->workspaceContextService = GeneralUtility::makeInstance(WorkspaceContextService::class);
         $this->tcaSchemaFactory = GeneralUtility::makeInstance(TcaSchemaFactory::class);
+    }
+
+    /**
+     * Whether the running TYPO3 still distinguishes plugin content elements
+     * via the `list_type` subtype field (TYPO3 13). TYPO3 14 removed plugin
+     * subtypes; plugins now register with their own CType directly.
+     */
+    public static function hasPluginSubtypes(): bool
+    {
+        return isset($GLOBALS['TCA']['tt_content']['columns']['list_type']);
     }
 
     /**
@@ -48,6 +60,44 @@ class TableAccessService implements SingletonInterface
             $this->additionalReadOnlyTables = GeneralUtility::trimExplode(',', (string)$config, true);
         }
         return $this->additionalReadOnlyTables;
+    }
+
+    /**
+     * Get the list of hideTable tables that should be exposed as standalone
+     * tables instead of being embedded into their parent's inline relation.
+     * Configured via extension settings (additionalStandaloneTables).
+     */
+    public function getAdditionalStandaloneTables(): array
+    {
+        if ($this->additionalStandaloneTables === null) {
+            try {
+                $config = GeneralUtility::makeInstance(ExtensionConfiguration::class)
+                    ->get('mcp_server', 'additionalStandaloneTables');
+            } catch (\Exception) {
+                $config = 'sys_file_metadata';
+            }
+            $this->additionalStandaloneTables = GeneralUtility::trimExplode(',', (string)$config, true);
+        }
+        return $this->additionalStandaloneTables;
+    }
+
+    /**
+     * Whether records of this table are embedded into their parent's inline
+     * relation by the read/write tools.
+     *
+     * Default: TCA `hideTable=true`. Tables listed in `additionalStandaloneTables`
+     * opt out of embedding even if their TCA marks them hidden — useful for
+     * inline structures whose translation/mount/orphan handling is too
+     * complex to be safely edited through the parent (e.g. sys_file_metadata).
+     */
+    public function isEmbeddedChildTable(string $table): bool
+    {
+        $tca = $GLOBALS['TCA'][$table] ?? [];
+        $hideTable = ($tca['ctrl']['hideTable'] ?? false) === true;
+        if (!$hideTable) {
+            return false;
+        }
+        return !in_array($table, $this->getAdditionalStandaloneTables(), true);
     }
     
     /**
@@ -136,7 +186,8 @@ class TableAccessService implements SingletonInterface
         
         // Check workspace capability. Workspace-capable tables are the default set.
         // Non-workspace tables are only accessible if explicitly configured as additional read-only tables.
-        $info['workspace_capable'] = BackendUtility::isTableWorkspaceEnabled($table);
+        $info['workspace_capable'] = $this->tcaSchemaFactory->has($table)
+            && $this->tcaSchemaFactory->get($table)->hasCapability(TcaSchemaCapability::Workspace);
         $isAdditionalReadOnly = in_array($table, $this->getAdditionalReadOnlyTables(), true);
         if (!$info['workspace_capable'] && !$isAdditionalReadOnly) {
             $info['reasons'][] = 'Table is not workspace-capable';
@@ -225,23 +276,39 @@ class TableAccessService implements SingletonInterface
     public function getAvailableFields(string $table, string $type = ''): array
     {
         $this->validateTableAccess($table);
-        
+
         // Check if schema exists for this table
         if (!$this->tcaSchemaFactory->has($table)) {
             return [];
         }
-        
+
         $schema = $this->tcaSchemaFactory->get($table);
         $fields = [];
-        $subtypeField = null;
-        
-        // If a specific type is provided and the schema supports sub-schemas
-        if (!empty($type) && $schema->hasSubSchema($type)) {
+
+        // Two cases bypass sub-schema filtering and use the full main schema:
+        //
+        // 1) Foreign type notation (e.g. "uid_local:type" on sys_file_reference): the
+        //    record type is derived from a related record at runtime, so there is no
+        //    local type column the LLM can choose. Each "type" maps to a different
+        //    palette (basicoverlayPalette vs imageoverlayPalette etc.), and picking
+        //    one would hide fields like `alternative` or `crop` even though they are
+        //    writable for any type.
+        //
+        // 2) Read-only tables (e.g. sys_file): showitem describes a backend form
+        //    layout, which is irrelevant when the LLM can only read. The user expects
+        //    the schema to advertise every column they can filter on (mime_type, sha1,
+        //    size, identifier, ...). sys_file's TCA only defines a showitem for type
+        //    "1" listing 3 fields, so a sub-schema view drops the rest.
+        $rawTypeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
+        $usesForeignTypeNotation = is_string($rawTypeField) && str_contains($rawTypeField, ':');
+        $isReadOnly = $this->isTableReadOnly($table);
+        if ($usesForeignTypeNotation || $isReadOnly) {
+            foreach ($schema->getFields() as $field) {
+                $fields[$field->getName()] = $field->getConfiguration();
+            }
+        } elseif (!empty($type) && $schema->hasSubSchema($type)) {
             $subSchema = $schema->getSubSchema($type);
-            
-            // Check if this type uses subtypes (e.g., plugins using list_type)
-            $subtypeField = $subSchema->getSubTypeDivisorField();
-            
+
             // Get fields from the sub-schema
             foreach ($subSchema->getFields() as $field) {
                 $fieldName = $field->getName();
@@ -277,13 +344,12 @@ class TableAccessService implements SingletonInterface
             }
         }
         
-        // Handle subtypes pattern: If a type uses subtypes and has FlexForm configurations,
-        // ensure FlexForm fields are included even if not explicitly in showitem
-        if ($subtypeField !== null) {
-            $subtypeFieldName = $subtypeField->getName();
-            $this->addSubtypeFields($table, $type, $subtypeFieldName, $fields);
-        }
-        
+        // Plugins in TYPO3 14 use CType directly and may have FlexForm data
+        // structures keyed by their CType. Ensure the FlexForm field is
+        // exposed even if it is not listed explicitly in the sub-schema's
+        // showitem definition.
+        $this->addFlexFormFieldsForType($table, $type, $fields);
+
         // Apply field-level access restrictions
         foreach ($fields as $fieldName => $fieldConfig) {
             if (!$this->canAccessField($table, $fieldName, $type)) {
@@ -293,68 +359,93 @@ class TableAccessService implements SingletonInterface
 
         // Allow extensions to add, remove, or reconfigure fields
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
-        $event = $eventDispatcher->dispatch(new ModifyAvailableFieldsEvent($table, $type, $fields));
+        $event = $eventDispatcher->dispatch(new AfterSchemaLoadEvent($table, $type, $fields));
         return $event->getFields();
     }
     
     /**
-     * Add fields that should be available based on subtype configuration
-     * This handles the deprecated subtypes system and FlexForm fields
-     * 
-     * @param string $table Table name
-     * @param string $type Record type
-     * @param string $subtypeField The subtype field name (e.g., 'list_type')
-     * @param array &$fields Reference to fields array to modify
+     * Include FlexForm fields that have a DataStructure configured for the given
+     * record type, even when they are not explicitly listed in the type's
+     * showitem definition.
      */
-    protected function addSubtypeFields(string $table, string $type, string $subtypeField, array &$fields): void
+    protected function addFlexFormFieldsForType(string $table, string $type, array &$fields): void
     {
         $tca = $GLOBALS['TCA'][$table] ?? [];
-        
-        // Check if there are FlexForm fields configured
-        $flexFormFields = [];
+
         foreach ($tca['columns'] ?? [] as $fieldName => $fieldConfig) {
-            if (($fieldConfig['config']['type'] ?? '') === 'flex') {
-                $flexFormFields[] = $fieldName;
+            if (($fieldConfig['config']['type'] ?? '') !== 'flex') {
+                continue;
             }
-        }
-        
-        // For each FlexForm field, check if there are DataStructures configured that use the subtype pattern
-        foreach ($flexFormFields as $flexFormField) {
-            $dsConfig = $tca['columns'][$flexFormField]['config']['ds'] ?? [];
-            
-            if (!empty($dsConfig)) {
-                // Check if any DS key uses the subtype pattern (e.g., "*,list_type_value")
-                $hasSubtypeDS = false;
-                foreach (array_keys($dsConfig) as $dsKey) {
-                    // Common patterns: "*,plugin_key" or "type,plugin_key" or just "plugin_key"
-                    if (strpos($dsKey, ',') !== false || isset($tca['columns'][$subtypeField]['config']['items'])) {
-                        $hasSubtypeDS = true;
-                        break;
+
+            if (isset($fields[$fieldName])) {
+                continue;
+            }
+
+            // TYPO3 14 commonly attaches a per-type DataStructure via
+            // `types.{type}.columnsOverrides.{field}.config.ds` rather than
+            // through the central `columns.{field}.config.ds` map. When a
+            // type-scoped override exists, the field belongs to this type by
+            // definition — surface it directly.
+            if (!empty($type)
+                && !empty($tca['types'][$type]['columnsOverrides'][$fieldName]['config']['ds'])
+            ) {
+                $fields[$fieldName] = $fieldConfig;
+                continue;
+            }
+
+            $dsConfig = $fieldConfig['config']['ds'] ?? [];
+            if (empty($dsConfig)) {
+                continue;
+            }
+
+            // Expose the field when a DataStructure is configured. With a
+            // record type in hand, prefer matching it against DS identifiers
+            // so we only surface FlexForms relevant to the current record
+            // type. A `ds` value can legitimately be a string (single DS) or
+            // an array keyed by identifier.
+            $shouldInclude = empty($type);
+            if (!$shouldInclude) {
+                if (is_array($dsConfig)) {
+                    // TYPO3 13: the plugin container type ("list") has DS
+                    // entries keyed by `*,<list_type>` for every plugin. None
+                    // of those keys equal "list" directly, so surface the
+                    // field whenever the type uses subtypes (e.g. CType=list).
+                    if (self::hasPluginSubtypes()
+                        && !empty($tca['types'][$type]['subtype_value_field'])
+                    ) {
+                        $shouldInclude = true;
                     }
-                }
-                
-                // If there are subtype-based DataStructures, include the FlexForm field
-                if ($hasSubtypeDS && !isset($fields[$flexFormField])) {
-                    // Add the FlexForm field configuration if it's not already present
-                    $fields[$flexFormField] = $tca['columns'][$flexFormField] ?? [];
-                }
-            }
-        }
-        
-        // Handle traditional subtypes_addlist (deprecated but still supported)
-        $subtypesAddlist = $tca['types'][$type]['subtypes_addlist'] ?? [];
-        if (!empty($subtypesAddlist) && is_array($subtypesAddlist)) {
-            // This would require knowing the actual subtype value, which we don't have here
-            // For general schema purposes, we could include all possible fields from all subtypes
-            foreach ($subtypesAddlist as $subtypeValue => $addFields) {
-                if (!empty($addFields)) {
-                    $addFieldsList = GeneralUtility::trimExplode(',', $addFields, true);
-                    foreach ($addFieldsList as $fieldName) {
-                        if (isset($tca['columns'][$fieldName]) && !isset($fields[$fieldName])) {
-                            $fields[$fieldName] = $tca['columns'][$fieldName];
+                    if (!$shouldInclude) {
+                        // DS keys follow well-defined TCA conventions:
+                        //   - `<type>` (v14 direct) or `default`
+                        //   - `*,<type>` / `<type>,*` (wildcard pointer-field)
+                        //   - `<type>,list` (legacy v13 form for plugins
+                        //     registered directly as their own CType while
+                        //     ds_pointerField=`list_type,CType`)
+                        // Anything else is not a match — substring tests
+                        // would over-match unrelated plugin keys.
+                        $candidates = [
+                            $type,
+                            'default',
+                            '*,' . $type,
+                            $type . ',*',
+                            $type . ',list',
+                        ];
+                        foreach ($candidates as $candidate) {
+                            if (isset($dsConfig[$candidate])) {
+                                $shouldInclude = true;
+                                break;
+                            }
                         }
                     }
+                } else {
+                    // Single DS applies to every record type.
+                    $shouldInclude = true;
                 }
+            }
+
+            if ($shouldInclude) {
+                $fields[$fieldName] = $fieldConfig;
             }
         }
     }
@@ -628,7 +719,8 @@ class TableAccessService implements SingletonInterface
     {
         $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
         
-        // Extract only relevant control fields
+        // Extract only relevant control fields. `searchFields` is read on
+        // TYPO3 13; v14 dropped it in favour of per-field `searchable` config.
         $relevantFields = [
             'title', 'label', 'label_alt', 'label_alt_force',
             'descriptionColumn', 'type', 'languageField',
@@ -792,20 +884,79 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Get the search fields for a table
+     * Get the search fields for a table.
+     *
+     * TYPO3 14 replaced `ctrl.searchFields` with the per-field `searchable`
+     * flag, evaluated by the SearchableSchemaFieldsCollector. On TYPO3 13 the
+     * collector is not available, so we fall back to the legacy ctrl entry.
      */
     public function getSearchFields(string $table): array
     {
-        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
-        $searchFields = $ctrl['searchFields'] ?? '';
-        
+        if (class_exists(\TYPO3\CMS\Core\Schema\SearchableSchemaFieldsCollector::class)) {
+            $collector = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Schema\SearchableSchemaFieldsCollector::class);
+            if (method_exists($collector, 'getFieldNames')) {
+                return $collector->getFieldNames($table);
+            }
+        }
+
+        $searchFields = $GLOBALS['TCA'][$table]['ctrl']['searchFields'] ?? '';
         if (empty($searchFields)) {
             return [];
         }
-        
         return GeneralUtility::trimExplode(',', $searchFields, true);
     }
     
+    /**
+     * Default field whitelist for inline children of hidden tables.
+     *
+     * Returned in the same shape as the user-facing `fields` parameter, so the
+     * caller can pass it straight through to the existing requestedFields filter
+     * in ReadTableTool::processRecord().
+     *
+     * The parent record already provides language/workspace/timestamp context;
+     * surfacing those fields, plus the foreign reference back to the parent and
+     * TCA columns that are virtual or DB-only, is noise for the LLM. So we
+     * advertise every available field except:
+     *  - pid (always plumbing for embedded children)
+     *  - ctrl-registered tracking fields (tstamp, crdate, languageField,
+     *    transOrigPointerField, transOrigDiffSourceField, translationSource)
+     *  - the foreign_field that links back to the parent
+     *  - TCA columns of type passthrough / category / none (virtual or
+     *    rendering-only — no useful value for the LLM)
+     *
+     * Computed read-only fields registered via AfterSchemaLoadEvent
+     * (file_name, public_url, ...) are not in TCA columns and therefore stay.
+     *
+     * The caller passes each child's own type so sub-schema-specific columns
+     * are not silently dropped on a mixed-type child set.
+     */
+    public function getEmbeddedRecordFields(string $table, string $foreignField = '', string $recordType = ''): array
+    {
+        $availableFields = $this->getAvailableFields($table, $recordType);
+
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        $exclude = ['pid'];
+
+        foreach (['tstamp', 'crdate', 'languageField', 'transOrigPointerField', 'transOrigDiffSourceField', 'translationSource'] as $ctrlKey) {
+            if (!empty($ctrl[$ctrlKey])) {
+                $exclude[] = $ctrl[$ctrlKey];
+            }
+        }
+
+        if ($foreignField !== '') {
+            $exclude[] = $foreignField;
+        }
+
+        foreach ($GLOBALS['TCA'][$table]['columns'] ?? [] as $name => $config) {
+            $type = $config['config']['type'] ?? '';
+            if (in_array($type, ['passthrough', 'category', 'none'], true)) {
+                $exclude[] = $name;
+            }
+        }
+
+        return array_values(array_diff(array_keys($availableFields), $exclude));
+    }
+
     /**
      * Get essential fields for a table (fields that should always be included)
      */
@@ -1033,8 +1184,12 @@ class TableAccessService implements SingletonInterface
             }
             
             if ($itemValue !== '') {
+                // Cast both to string. TCA items can legitimately have numeric
+                // labels (e.g. sys_file_metadata.ranking on TYPO3 13 lists
+                // integer 1..5 as both value and label); translateLabel() and
+                // string concatenation downstream are type-strict.
                 $result['values'][] = (string)$itemValue;
-                $result['labels'][$itemValue] = $itemLabel;
+                $result['labels'][(string)$itemValue] = (string)$itemLabel;
             }
         }
         
@@ -1160,8 +1315,16 @@ class TableAccessService implements SingletonInterface
                 }
             }
             
-            $translated = $GLOBALS['LANG']->sL($label);
-            
+            try {
+                $translated = $GLOBALS['LANG']->sL($label);
+            } catch (\TYPO3\CMS\Core\Package\Exception\UnknownPackagePathException) {
+                // The label references an extension that is not currently
+                // loaded (e.g. stale TCA pointing at EXT:foo/... where foo is
+                // not active in this request). Fall through to the fallback
+                // logic below by treating the lookup as empty.
+                $translated = '';
+            }
+
             // If translation failed, try to extract a meaningful fallback
             if (empty($translated)) {
                 // Extract the last part of the LLL path as fallback

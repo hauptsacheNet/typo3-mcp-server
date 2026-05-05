@@ -18,6 +18,7 @@ use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use Hn\McpServer\Service\LanguageService;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Service\FlexFormService;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -60,8 +61,11 @@ class ReadTableTool extends AbstractRecordTool
                 'description' => 'Filter by page ID (recommended for content tables). Omit for root-level tables like sys_file that store records at pid=0.',
             ],
             'uid' => [
-                'type' => 'integer',
-                'description' => 'Filter by record UID (use pid filter instead to read multiple records of a page)',
+                'oneOf' => [
+                    ['type' => 'integer'],
+                    ['type' => 'array', 'items' => ['type' => 'integer']],
+                ],
+                'description' => 'Filter by record UID. Pass a single integer for one record, or an array of integers to fetch several at once — useful when reading inline-relation hints like "metadata: [1, 5]". Use the pid filter to read all records of a page.',
             ],
             'where' => [
                 'type' => 'string',
@@ -125,7 +129,20 @@ class ReadTableTool extends AbstractRecordTool
         // Execute main logic
             // Extract and validate parameters
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
-        $uid = isset($params['uid']) ? (int)$params['uid'] : null;
+        // Normalize uid to int[]|null. Accept legacy single-int and the new
+        // array form so callers can read multiple records in one go (e.g.
+        // following a `metadata: [1, 5]` inline hint). When the caller did
+        // pass a uid filter but every value is non-positive, we keep the
+        // intent (filter applied) and let the query produce zero rows — the
+        // legacy single-int behaviour for `uid: -1`.
+        $uids = null;
+        if (isset($params['uid']) && $params['uid'] !== '' && $params['uid'] !== []) {
+            $rawValues = is_array($params['uid']) ? $params['uid'] : [$params['uid']];
+            $uids = array_values(array_filter(
+                array_map('intval', $rawValues),
+                fn($n) => $n > 0
+            ));
+        }
         $condition = $params['where'] ?? '';
         $limit = isset($params['limit']) ? (int)$params['limit'] : 20;
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
@@ -162,7 +179,7 @@ class ReadTableTool extends AbstractRecordTool
         $result = $this->getRecords(
             $table,
             $pid,
-            $uid,
+            $uids,
             $condition,
             $limit,
             $offset,
@@ -188,7 +205,7 @@ class ReadTableTool extends AbstractRecordTool
     protected function getRecords(
         string $table,
         ?int $pid,
-        ?int $uid,
+        ?array $uids,
         string $condition,
         int $limit,
         int $offset,
@@ -231,27 +248,39 @@ class ReadTableTool extends AbstractRecordTool
             }
         }
 
-        // Filter by uid if specified
-        if ($uid !== null) {
-            // For workspace transparency, we need to handle both cases:
-            // 1. The UID is a workspace UID (for new records)
-            // 2. The UID is a live UID (for existing records with workspace versions)
-
-            $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-            if ($currentWorkspace > 0) {
-                // In workspace context, check both live and workspace UIDs
-                // The WorkspaceDeletePlaceholderRestriction will handle delete placeholders automatically
-                $queryBuilder->andWhere(
-                    $queryBuilder->expr()->or(
-                        $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
-                        $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                    )
-                );
+        // Filter by uid(s) if specified. Single int and array are normalised
+        // to a list — IN(...) handles both cases identically.
+        if ($uids !== null) {
+            if ($uids === []) {
+                // The caller passed a uid filter, but every value was
+                // non-positive after sanitisation. Match nothing.
+                $queryBuilder->andWhere('1 = 0');
             } else {
-                // In live workspace, just filter by UID
-                $queryBuilder->andWhere(
-                    $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                );
+                $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+                if ($currentWorkspace > 0) {
+                    // In workspace context, match either the live uid or the
+                    // overlay's t3ver_oid. WorkspaceDeletePlaceholderRestriction
+                    // handles delete placeholders.
+                    $queryBuilder->andWhere(
+                        $queryBuilder->expr()->or(
+                            $queryBuilder->expr()->in(
+                                'uid',
+                                $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                            ),
+                            $queryBuilder->expr()->in(
+                                't3ver_oid',
+                                $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                            )
+                        )
+                    );
+                } else {
+                    $queryBuilder->andWhere(
+                        $queryBuilder->expr()->in(
+                            'uid',
+                            $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                        )
+                    );
+                }
             }
         }
 
@@ -316,23 +345,32 @@ class ReadTableTool extends AbstractRecordTool
             }
         }
 
-        if ($uid !== null) {
-            // Apply the same UID filtering logic for count query
-            $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-            if ($currentWorkspace > 0) {
-                // In workspace context, check both live and workspace UIDs
-                // The WorkspaceDeletePlaceholderRestriction will handle delete placeholders automatically
-                $countQueryBuilder->andWhere(
-                    $countQueryBuilder->expr()->or(
-                        $countQueryBuilder->expr()->eq('uid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
-                        $countQueryBuilder->expr()->eq('t3ver_oid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                    )
-                );
+        if ($uids !== null) {
+            if ($uids === []) {
+                $countQueryBuilder->andWhere('1 = 0');
             } else {
-                // In live workspace, just filter by UID
-                $countQueryBuilder->andWhere(
-                    $countQueryBuilder->expr()->eq('uid', $countQueryBuilder->createNamedParameter($uid, ParameterType::INTEGER))
-                );
+                $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+                if ($currentWorkspace > 0) {
+                    $countQueryBuilder->andWhere(
+                        $countQueryBuilder->expr()->or(
+                            $countQueryBuilder->expr()->in(
+                                'uid',
+                                $countQueryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                            ),
+                            $countQueryBuilder->expr()->in(
+                                't3ver_oid',
+                                $countQueryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                            )
+                        )
+                    );
+                } else {
+                    $countQueryBuilder->andWhere(
+                        $countQueryBuilder->expr()->in(
+                            'uid',
+                            $countQueryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
+                        )
+                    );
+                }
             }
         }
 
@@ -342,8 +380,8 @@ class ReadTableTool extends AbstractRecordTool
 
         // Allow listeners to add restrictions (e.g. file mounts, tenant scopes)
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
-        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $countQueryBuilder, 'count'));
-        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select'));
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $countQueryBuilder, 'count', BeforeRecordReadEvent::SOURCE_READ));
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select', BeforeRecordReadEvent::SOURCE_READ));
 
         try {
             $totalCount = $countQueryBuilder->executeQuery()->fetchOne();
@@ -358,8 +396,19 @@ class ReadTableTool extends AbstractRecordTool
             throw new DatabaseException('select', $table, $e);
         }
 
-        // Allow listeners to enrich or redact rows before post-processing
-        $afterEvent = new AfterRecordReadEvent($table, $records, 'top');
+        // Apply workspace overlay so callers see the workspace-effective row,
+        // not the underlying live record. WorkspaceRestriction strips workspace
+        // versions out of the result set; BackendUtility::workspaceOL() looks
+        // them up and folds their fields onto the live row in place.
+        $records = $this->applyWorkspaceOverlay($table, $records);
+
+        // Allow listeners to enrich or redact rows on raw data so they see all source
+        // columns (uid_local, etc.) regardless of the caller's `fields` filter. The
+        // requested-fields list is passed through so listeners can short-circuit
+        // expensive work the caller did not ask for. processRecord then applies the
+        // schema and `fields` filters; computed (mcp.computed) fields only survive
+        // when the caller explicitly listed them.
+        $afterEvent = new AfterRecordReadEvent($table, $records, 'top', $requestedFields);
         $eventDispatcher->dispatch($afterEvent);
         $records = $afterEvent->getRecords();
 
@@ -385,15 +434,24 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Process a raw database record into a filtered, converted result.
      *
-     * Applies two layers of field filtering:
-     * 1. TCA type filtering — fields not in the record type's showitem definition are excluded.
-     *    Essential fields (uid, pid, type, label, timestamps, hidden, sorting) are merged into
-     *    the type-specific set so they always pass this check — TCA showitem doesn't declare them
-     *    because they're ctrl fields not shown in backend forms, but they're valid to read.
-     *    canAccessField() is also enforced here since getFieldNamesForType() already strips
-     *    inaccessible fields (file fields, inline to restricted tables, TSconfig-disabled, etc.).
-     * 2. Requested fields — optional user-provided whitelist that narrows the result further.
-     *    When provided, uid is always added. When empty, all fields from step 1 are returned.
+     * Field selection works in two layers:
+     *
+     * 1. Schema filter — only fields advertised by TableAccessService::getAvailableFields()
+     *    survive (TCA columns the user can access, plus essential ctrl fields, plus any
+     *    extra fields a listener registered via AfterSchemaLoadEvent — e.g. computed
+     *    read-only fields like public_url). When a record has a writable type field,
+     *    sub-schema rules narrow the set further. When the type cannot be derived from
+     *    the row (no type field, foreign type notation), the table's main schema fields
+     *    apply — important for embedded children of tables like sys_file_reference,
+     *    where without this clamp every TYPO3 plumbing column (t3ver_*, l10n_*) would
+     *    leak into the response.
+     *
+     * 2. Caller's `fields` whitelist — optional second pass, narrows further. uid is
+     *    always added.
+     *
+     *    Inline children of hidden tables flow through this same whitelist with a
+     *    default computed by TableAccessService::getEmbeddedRecordFields(), which
+     *    drops plumbing/virtual TCA columns the LLM has no use for.
      *
      * @param array $record Raw database row
      * @param string $table Table name
@@ -419,48 +477,50 @@ class ReadTableTool extends AbstractRecordTool
             $requestedFields[] = 'uid';
         }
 
-        // Get type-specific fields if a type field exists.
-        // Essential fields (uid, pid, timestamps, etc.) are merged in because TCA showitem
-        // doesn't declare ctrl fields, but they are valid to read.
+        // Build the set of fields the schema lets through. Always include essential
+        // ctrl fields (uid, pid, timestamps, etc.) since they are valid to read but
+        // are typically absent from TCA showitem definitions.
         $essentialFields = $this->tableAccessService->getEssentialFields($table);
         $typeField = $this->tableAccessService->getTypeFieldName($table);
-        $typeSpecificFields = [];
-        $hasValidTypeConfig = false;
-
-        if ($typeField && isset($record[$typeField])) {
-            $recordType = (string)$record[$typeField];
-            $typeSpecificFields = $this->tableAccessService->getFieldNamesForType($table, $recordType);
-            $hasValidTypeConfig = !empty($typeSpecificFields);
-
-            if ($hasValidTypeConfig) {
-                $typeSpecificFields = array_unique(array_merge($typeSpecificFields, $essentialFields));
-            }
-        }
+        $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        $allowedFields = array_unique(array_merge(array_keys($availableFields), $essentialFields));
 
         // Process each field
         foreach ($record as $field => $value) {
-            // Special handling for pi_flexform in list content elements
-            if ($field === 'pi_flexform' && $table === 'tt_content' &&
-                isset($record['CType']) && $record['CType'] === 'list' &&
-                !empty($record['list_type'])) {
-                // Check if there's a FlexForm DS configured for this plugin
+            // Special handling for pi_flexform on plugin content elements.
+            // TYPO3 13 plugins use CType=list with a list_type subtype; TYPO3 14
+            // plugins register their own CType directly.
+            if ($field === 'pi_flexform' && $table === 'tt_content' && !empty($record['CType'])) {
                 $flexFormDs = $GLOBALS['TCA']['tt_content']['columns']['pi_flexform']['config']['ds'] ?? [];
-                $listType = $record['list_type'];
+                $cType = $record['CType'];
+                $listType = $record['list_type'] ?? '';
 
-                // Check various DS key patterns
-                $hasFlexFormConfig = isset($flexFormDs[$listType . ',list']) ||
-                                    isset($flexFormDs['*,' . $listType]) ||
-                                    isset($flexFormDs[$listType]);
+                $hasFlexFormConfig = isset($flexFormDs[$cType]) || isset($flexFormDs['*,' . $cType]);
+                if (!$hasFlexFormConfig && $cType === 'list' && $listType !== '') {
+                    $hasFlexFormConfig = isset($flexFormDs[$listType])
+                        || isset($flexFormDs['*,' . $listType])
+                        || isset($flexFormDs[$listType . ',list']);
+                }
 
                 if ($hasFlexFormConfig) {
-                    // Include pi_flexform for this plugin
+                    // The bypass exists so plugin pi_flexform survives the
+                    // type-filter (line below). But an explicit field
+                    // whitelist must still be respected — otherwise a caller
+                    // asking for {"fields":["uid","header"]} unexpectedly gets
+                    // a (potentially large) FlexForm payload back.
+                    if (!empty($requestedFields) && !in_array($field, $requestedFields, true)) {
+                        continue;
+                    }
                     $processedRecord[$field] = $this->convertFieldValue($table, $field, $value);
                     continue;
                 }
             }
 
-            // Skip fields not relevant to this record type (only if we have a valid type configuration)
-            if ($hasValidTypeConfig && !in_array($field, $typeSpecificFields)) {
+            // Schema filter: drop fields not advertised by getAvailableFields(). Computed
+            // fields registered via AfterSchemaLoadEvent are advertised and pass through
+            // the same as any TCA column — they are part of the default response.
+            if (!in_array($field, $allowedFields, true)) {
                 continue;
             }
 
@@ -537,7 +597,9 @@ class ReadTableTool extends AbstractRecordTool
         // Convert FlexForm XML to JSON
         if ($this->tableAccessService->isFlexFormField($table, $field) && is_string($value) && !empty($value) && strpos($value, '<?xml') === 0) {
             try {
-                // Use TYPO3's FlexFormService to convert XML to array
+                // Use TYPO3's FlexFormService to convert XML to array. The
+                // class is aliased to FlexFormTools in TYPO3 14 (#107945) but
+                // the method signature is identical.
                 $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
                 $flexFormArray = $flexFormService->convertFlexFormContentToArray($value);
 
@@ -820,15 +882,15 @@ class ReadTableTool extends AbstractRecordTool
             return;
         }
 
-        // Check if foreign table is hidden (dependent records that should be embedded)
-        $foreignTableTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
-        $isHiddenTable = ($foreignTableTCA['ctrl']['hideTable'] ?? false) === true;
+        // Check if foreign table is treated as embedded inline child
+        // (TCA hideTable=true, unless overridden via additionalStandaloneTables)
+        $isHiddenTable = $this->tableAccessService->isEmbeddedChildTable($foreignTable);
 
         // Get all related records, filtering by foreign_match_fields if present
         // (e.g., sys_file_reference uses tablenames/fieldname to distinguish which field owns each reference)
         $foreignSortBy = $fieldConfig['config']['foreign_sortby'] ?? '';
         $foreignMatchFields = $fieldConfig['config']['foreign_match_fields'] ?? [];
-        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy, $foreignMatchFields);
+        $relatedRecords = $this->getInlineRelatedRecords($foreignTable, $foreignField, $recordUids, $foreignSortBy, $foreignMatchFields, $isHiddenTable);
 
         // Allow listeners to enrich or redact inline children (e.g. attach file metadata)
         if (!empty($relatedRecords)) {
@@ -856,8 +918,16 @@ class ReadTableTool extends AbstractRecordTool
             if ($uid !== null) {
                 if (isset($groupedRecords[$uid]) && !empty($groupedRecords[$uid])) {
                     if ($isHiddenTable) {
-                        // Embed full records for hidden tables (like sys_file_reference)
-                        $record[$fieldName] = $groupedRecords[$uid];
+                        // Embed full records for hidden tables (like sys_file_reference).
+                        // The foreign field that links each child back to its parent is
+                        // kept until grouping is done, then dropped — the parent is
+                        // already known by virtue of the embedding.
+                        $cleaned = [];
+                        foreach ($groupedRecords[$uid] as $child) {
+                            unset($child[$foreignField]);
+                            $cleaned[] = $child;
+                        }
+                        $record[$fieldName] = $cleaned;
                     } else {
                         // Return only UIDs for independent tables (like tt_content)
                         $record[$fieldName] = array_column($groupedRecords[$uid], 'uid');
@@ -873,9 +943,16 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
-     * Get inline related records
+     * Get inline related records.
+     *
+     * @param bool $embedAsChildren When true, the caller will embed the full records
+     *                              into the parent (hidden tables). processRecord
+     *                              applies the tighter "embedded" filter so plumbing
+     *                              and the foreign reference do not leak. The foreign
+     *                              field is re-injected here so the caller can group
+     *                              by parent UID; it is dropped at embedding time.
      */
-    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids, string $foreignSortBy = '', array $foreignMatchFields = []): array
+    protected function getInlineRelatedRecords(string $table, string $foreignField, array $parentUids, string $foreignSortBy = '', array $foreignMatchFields = [], bool $embedAsChildren = false): array
     {
         if (empty($parentUids)) {
             return [];
@@ -921,14 +998,29 @@ class ReadTableTool extends AbstractRecordTool
 
         // Allow listeners to add restrictions to inline-child lookups too
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
-        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select'));
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select', BeforeRecordReadEvent::SOURCE_READ_INLINE));
 
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
+        $records = $this->applyWorkspaceOverlay($table, $records);
 
-        // Process records for workspace transparency
+        // Embedded children get a curated default whitelist passed through the
+        // standard requestedFields filter. The whitelist is computed per record
+        // off the row's own type so children of different sub-types in the same
+        // batch each keep their type-specific fields. The foreign field is
+        // re-injected below only so grouping by parent UID works; the caller
+        // drops it at embedding time.
+        $typeField = $embedAsChildren ? $this->tableAccessService->getTypeFieldName($table) : null;
+
         $processedRecords = [];
         foreach ($records as $record) {
-            $processed = $this->processRecord($record, $table);
+            if ($embedAsChildren) {
+                $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
+                $requestedFields = $this->tableAccessService->getEmbeddedRecordFields($table, $foreignField, $recordType);
+            } else {
+                $requestedFields = [];
+            }
+
+            $processed = $this->processRecord($record, $table, $requestedFields);
 
             // Ensure the foreign field is always included if it exists in the raw record
             if (isset($record[$foreignField]) && !isset($processed[$foreignField])) {
@@ -1095,6 +1187,49 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
+     * Apply workspace overlay so result rows reflect the workspace-effective state.
+     *
+     * WorkspaceRestriction returns the live record (or a move pointer); the actual
+     * workspace edit lives in a sibling row that the restriction filters out.
+     * BackendUtility::workspaceOL() resolves that sibling and merges its fields
+     * onto the row in place, mirroring how TYPO3's backend list module shows
+     * workspace edits. Rows with a delete placeholder are dropped from the result.
+     */
+    protected function applyWorkspaceOverlay(string $table, array $records): array
+    {
+        if (empty($records)) {
+            return $records;
+        }
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        if ($workspaceId <= 0) {
+            return $records;
+        }
+        if (empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS'] ?? false)) {
+            return $records;
+        }
+
+        $overlaid = [];
+        foreach ($records as $row) {
+            $original = $row;
+            try {
+                BackendUtility::workspaceOL($table, $row, $workspaceId);
+            } catch (\Throwable $e) {
+                // Defensive: a corrupt workspace version (e.g. binary garbage
+                // in a string field on a strict driver) must not turn the
+                // whole read into a hard error response. Log and keep the
+                // live row.
+                $this->logException($e, sprintf('applying workspace overlay on %s', $table));
+                $row = $original;
+            }
+            if (!is_array($row)) {
+                continue;
+            }
+            $overlaid[] = $row;
+        }
+        return $overlaid;
+    }
+
+    /**
      * Load parent records for translations
      */
     protected function loadParentRecords(string $table, array $parentUids): array
@@ -1124,6 +1259,8 @@ class ReadTableTool extends AbstractRecordTool
             )
             ->executeQuery()
             ->fetchAllAssociative();
+
+        $records = $this->applyWorkspaceOverlay($table, $records);
 
         // Process and index by UID
         $indexedRecords = [];
