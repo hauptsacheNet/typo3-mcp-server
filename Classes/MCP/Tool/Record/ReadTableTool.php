@@ -343,8 +343,8 @@ class ReadTableTool extends AbstractRecordTool
 
         // Allow listeners to add restrictions (e.g. file mounts, tenant scopes)
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
-        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $countQueryBuilder, 'count'));
-        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select'));
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $countQueryBuilder, 'count', BeforeRecordReadEvent::SOURCE_READ));
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select', BeforeRecordReadEvent::SOURCE_READ));
 
         try {
             $totalCount = $countQueryBuilder->executeQuery()->fetchOne();
@@ -950,7 +950,7 @@ class ReadTableTool extends AbstractRecordTool
 
         // Allow listeners to add restrictions to inline-child lookups too
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
-        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select'));
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select', BeforeRecordReadEvent::SOURCE_READ_INLINE));
 
         $records = $queryBuilder->executeQuery()->fetchAllAssociative();
         $records = $this->applyWorkspaceOverlay($table, $records);
