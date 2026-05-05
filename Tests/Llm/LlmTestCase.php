@@ -498,17 +498,42 @@ abstract class LlmTestCase extends FunctionalTestCase
                 $this->toolErrorCount++;
             }
 
+            $this->logToolCall($toolCall, $content, $isError);
+
             return [
                 'content' => $content,
                 'isError' => $isError
             ];
         } catch (\Exception $e) {
             $this->toolErrorCount++;
+            $this->logToolCall($toolCall, 'Error: ' . $e->getMessage(), true);
             return [
                 'error' => $e->getMessage(),
                 'content' => "Error: " . $e->getMessage()
             ];
         }
+    }
+
+    private function logToolCall(array $toolCall, string $content, bool $isError): void
+    {
+        $logFile = getenv('LLM_TOOL_LOG_FILE');
+        if (!$logFile) {
+            return;
+        }
+        $dir = dirname($logFile);
+        if (!is_dir($dir) && !@mkdir($dir, 0777, true) && !is_dir($dir)) {
+            return;
+        }
+        $entry = [
+            'class' => static::class,
+            'test' => $this->name(),
+            'model' => $this->dataName() !== null ? (string)$this->dataName() : '',
+            'tool' => $toolCall['name'] ?? '',
+            'arguments' => $toolCall['arguments'] ?? [],
+            'isError' => $isError,
+            'content' => mb_substr($content, 0, 500),
+        ];
+        @file_put_contents($logFile, json_encode($entry) . "\n", FILE_APPEND | LOCK_EX);
     }
 
     /**
