@@ -1184,8 +1184,12 @@ class TableAccessService implements SingletonInterface
             }
             
             if ($itemValue !== '') {
+                // Cast both to string. TCA items can legitimately have numeric
+                // labels (e.g. sys_file_metadata.ranking on TYPO3 13 lists
+                // integer 1..5 as both value and label); translateLabel() and
+                // string concatenation downstream are type-strict.
                 $result['values'][] = (string)$itemValue;
-                $result['labels'][$itemValue] = $itemLabel;
+                $result['labels'][(string)$itemValue] = (string)$itemLabel;
             }
         }
         
