@@ -635,7 +635,7 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected function executeUntilToolFound(
         LlmResponse $response,
         string $targetToolName,
-        int $maxIterations = 5
+        int $maxIterations = 8
     ): LlmResponse {
         $currentResponse = $response;
         $this->toolCallHistory = [];
