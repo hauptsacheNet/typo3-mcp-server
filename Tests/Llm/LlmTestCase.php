@@ -64,6 +64,12 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected int $toolCallCount = 0;
     protected int $toolErrorCount = 0;
 
+    /** Diagnostics for the most recent executeUntilToolFound call. */
+    protected ?string $lastTargetTool = null;
+    protected int $lastIterationsBudget = 0;
+    protected int $lastIterationsUsed = 0;
+    protected bool $lastIterationsExhausted = false;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -253,6 +259,17 @@ abstract class LlmTestCase extends FunctionalTestCase
     {
         $context = "[Model: {$this->llmModel}]\n";
         $context .= "Prompt: {$this->lastPrompt}\n";
+        if ($this->lastIterationsExhausted) {
+            $context .= sprintf(
+                "⚠ executeUntilToolFound exhausted iteration budget (%d/%d) "
+                . "while waiting for tool '%s'. The model kept calling other tools "
+                . "instead of '%s' — increase the budget or check the prompt.\n",
+                $this->lastIterationsUsed,
+                $this->lastIterationsBudget,
+                $this->lastTargetTool,
+                $this->lastTargetTool
+            );
+        }
         if ($response !== null) {
             $textResponse = $response->getContent();
             if (!empty($textResponse)) {
@@ -292,9 +309,12 @@ abstract class LlmTestCase extends FunctionalTestCase
                                     $this->assertArrayHasKey($nestedKey, $extractedData,
                                         "Expected data field '$nestedKey' not found in tool call '$toolName'.\n" .
                                         $this->getFailureContext($response));
-                                    $this->assertEquals($nestedValue, $extractedData[$nestedKey],
+                                    $this->assertDataFieldEquals(
+                                        $nestedValue,
+                                        $extractedData[$nestedKey],
                                         "Data field '$nestedKey' value mismatch in tool call '$toolName'.\n" .
-                                        $this->getFailureContext($response));
+                                        $this->getFailureContext($response)
+                                    );
                                 }
                             }
                             continue;
@@ -395,6 +415,26 @@ abstract class LlmTestCase extends FunctionalTestCase
         }
         
         return $debug;
+    }
+
+    /**
+     * Compare an expected data field value against the actual value the LLM
+     * produced. String values are compared case-insensitively after trimming —
+     * models at temperature=0 sometimes still differ on capitalization or
+     * whitespace ("Test Page" vs "test page"). Non-string values fall back to
+     * loose equality so existing int/array assertions keep working.
+     */
+    protected function assertDataFieldEquals(mixed $expected, mixed $actual, string $message): void
+    {
+        if (is_string($expected) && is_string($actual)) {
+            $this->assertSame(
+                mb_strtolower(trim($expected)),
+                mb_strtolower(trim($actual)),
+                $message . " (compared case-insensitively after trim — expected '$expected', got '$actual')"
+            );
+            return;
+        }
+        $this->assertEquals($expected, $actual, $message);
     }
 
     /**
@@ -599,7 +639,12 @@ abstract class LlmTestCase extends FunctionalTestCase
     ): LlmResponse {
         $currentResponse = $response;
         $this->toolCallHistory = [];
+        $this->lastTargetTool = $targetToolName;
+        $this->lastIterationsBudget = $maxIterations;
+        $this->lastIterationsUsed = 0;
+        $this->lastIterationsExhausted = false;
 
+        $i = 0;
         for ($i = 0; $i < $maxIterations && $currentResponse->hasToolCalls(); $i++) {
             foreach ($currentResponse->getToolCalls() as $toolCall) {
                 $this->toolCallHistory[] = $toolCall['name'];
@@ -627,11 +672,18 @@ abstract class LlmTestCase extends FunctionalTestCase
                         continue;
                     }
                 }
+                $this->lastIterationsUsed = $i + 1;
                 return $currentResponse;
             }
 
             $currentResponse = $this->executeAndContinue($currentResponse);
         }
+
+        $this->lastIterationsUsed = $i;
+        // Exhausted only if we ran the full budget without finding the target.
+        // Exiting because the model stopped emitting tool calls is normal completion.
+        $this->lastIterationsExhausted = $i >= $maxIterations
+            && empty($currentResponse->getToolCallsByName($targetToolName));
 
         return $currentResponse;
     }

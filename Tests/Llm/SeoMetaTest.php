@@ -53,21 +53,23 @@ class SeoMetaTest extends LlmTestCase
         if (count($writeCalls) === 0) {
             $finalContent = $response->getContent();
 
-            if (!empty($finalContent)) {
-                if (preg_match('/already|have|description|complete|found|none|all/i', $finalContent)) {
-                    return;
-                }
+            // Acceptable only when the model explicitly explains that no pages
+            // need a meta description. Anything else is a real failure — e.g.
+            // the model giving up silently or hitting the iteration budget.
+            $explainsNoUpdateNeeded = $finalContent !== ''
+                && preg_match(
+                    '/(already\s+have|all\s+pages\s+have|every\s+page\s+has|no\s+pages?\s+(without|missing)|nothing\s+to\s+(do|update))/i',
+                    $finalContent
+                );
 
-                if (preg_match('/error|apologize|sorry|try|again/i', $finalContent)) {
-                    return;
-                }
-
-                return;
-            }
+            $this->assertTrue(
+                (bool)$explainsNoUpdateNeeded,
+                "Expected at least one WriteTable call to add meta descriptions, "
+                . "or a clear explanation that no pages need updates.\n"
+                . $this->getFailureContext($response)
+            );
+            return;
         }
-
-        $this->assertGreaterThan(0, count($writeCalls),
-            "Expected at least one WriteTable call to add meta descriptions, or explanation why none needed");
 
         $writeCall = $writeCalls[0]['arguments'];
         $data = $this->extractWriteData($writeCall);

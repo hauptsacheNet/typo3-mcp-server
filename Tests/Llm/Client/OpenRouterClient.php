@@ -248,26 +248,61 @@ class OpenRouterClient implements LlmClientInterface
 
     /**
      * Parse OpenAI-format response into LlmResponse
+     *
+     * Surfaces two failure modes that previously masqueraded as "the model
+     * just didn't call the tool right":
+     *   - finish_reason=length: response truncated by max_tokens. For
+     *     reasoning models (gpt-5*, o-series), reasoning tokens count
+     *     toward max_tokens on most providers, so the model can run out
+     *     of budget mid-tool-call.
+     *   - tool_calls with malformed JSON arguments: previously silently
+     *     coerced to []; now raises so the test sees a clear cause.
      */
     private function parseResponse(array $responseData): LlmResponse
     {
         $choice = $responseData['choices'][0] ?? [];
         $message = $choice['message'] ?? [];
+        $finishReason = $choice['finish_reason'] ?? null;
+
+        if ($finishReason === 'length') {
+            $usage = $responseData['usage'] ?? [];
+            throw new \RuntimeException(
+                'OpenRouter response truncated by max_tokens (finish_reason=length). '
+                . 'Reasoning tokens count toward max_tokens on most providers, '
+                . 'so the model likely never finished its tool call. '
+                . 'Usage: ' . json_encode($usage)
+            );
+        }
 
         $content = $message['content'] ?? '';
         $toolCalls = [];
 
-        foreach ($message['tool_calls'] ?? [] as $toolCall) {
+        foreach ($message['tool_calls'] ?? [] as $idx => $toolCall) {
             if (($toolCall['type'] ?? '') === 'function') {
+                $name = $toolCall['function']['name'] ?? '';
                 $arguments = $toolCall['function']['arguments'] ?? '{}';
 
-                // Parse JSON arguments string
                 if (is_string($arguments)) {
-                    $arguments = json_decode($arguments, true) ?? [];
+                    $trimmed = trim($arguments);
+                    if ($trimmed === '' || $trimmed === 'null') {
+                        $arguments = [];
+                    } else {
+                        $decoded = json_decode($arguments, true);
+                        if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+                            throw new \RuntimeException(
+                                'OpenRouter returned tool call #' . $idx . ' (' . $name . ') '
+                                . 'with malformed JSON arguments (' . json_last_error_msg() . '). '
+                                . 'This usually means the response was truncated mid-arguments. '
+                                . 'Raw args (first 500 chars): '
+                                . mb_substr($arguments, 0, 500)
+                            );
+                        }
+                        $arguments = is_array($decoded) ? $decoded : [];
+                    }
                 }
 
                 $toolCalls[] = [
-                    'name' => $toolCall['function']['name'],
+                    'name' => $name,
                     'arguments' => $arguments,
                 ];
             }
