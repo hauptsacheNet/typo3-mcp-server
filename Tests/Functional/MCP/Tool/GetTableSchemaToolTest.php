@@ -329,6 +329,53 @@ class GetTableSchemaToolTest extends FunctionalTestCase
     }
 
     /**
+     * Select TCA items with numeric (int) labels must not break schema
+     * formatting. Reproduces a real-world third-party `ranking` field on
+     * sys_file_metadata (TYPO3 13) that lists items with integer labels
+     * 0..5. Before the fix, parseSelectItems handed the int label straight
+     * to the type-strict TableAccessService::translateLabel(string $label),
+     * raising a TypeError — schema introspection (which an LLM client
+     * typically calls first) then failed entirely.
+     */
+    public function testSelectItemsWithIntegerLabelsDoNotBreakFormatting(): void
+    {
+        $service = GeneralUtility::makeInstance(\Hn\McpServer\Service\TableAccessService::class);
+        $parsed = $service->parseSelectItems([
+            ['label' => 0, 'value' => 0],
+            ['label' => 1, 'value' => 1],
+            ['label' => 5, 'value' => 5],
+        ]);
+
+        // Labels must be strings so downstream type-strict consumers
+        // (translateLabel, string concatenation) do not raise.
+        foreach ($parsed['labels'] as $label) {
+            $this->assertIsString($label);
+        }
+
+        // The select formatter feeds these labels through translateLabel and
+        // concatenates them — exercise the full path that would have thrown.
+        $config = [
+            'type' => 'select',
+            'renderType' => 'selectSingle',
+            'items' => [
+                ['label' => 0, 'value' => 0],
+                ['label' => 1, 'value' => 1],
+                ['label' => 5, 'value' => 5],
+            ],
+        ];
+        $rendered = '';
+        \Hn\McpServer\Utility\TcaFormattingUtility::addFieldDetailsInline(
+            $rendered,
+            $config,
+            'ranking',
+            'sys_file_metadata'
+        );
+        // Label 0 is dropped by the truthy `if ($label)` filter; 1 and 5 remain.
+        $this->assertStringContainsString('1 (1)', $rendered);
+        $this->assertStringContainsString('5 (5)', $rendered);
+    }
+
+    /**
      * Set up backend user with workspace
      */
     protected function setUpBackendUserWithWorkspace(int $uid): void
