@@ -41,10 +41,9 @@ abstract class LlmTestCase extends FunctionalTestCase
         // PR #59 for reliability; 'medium' keeps tool-use coherent without the
         // extra reasoning-token tax. Re-tighten if majority-pass starts failing.
         'gpt-5.4-mini' => ['reasoning' => ['effort' => 'medium']],
-        // Claude Haiku 4.5 supports extended thinking; 'enabled: false' tells
-        // OpenRouter not to opt us into it for tool-use tests where we don't
-        // need the extra reasoning budget.
-        'haiku-4.5' => ['reasoning' => ['enabled' => false]],
+        // TEMP: enable Claude Haiku 4.5 extended thinking explicitly to compare
+        // against `enabled: false` baseline — revert before merging.
+        'haiku-4.5' => ['reasoning' => ['enabled' => true]],
     ];
 
     protected array $coreExtensionsToLoad = [
