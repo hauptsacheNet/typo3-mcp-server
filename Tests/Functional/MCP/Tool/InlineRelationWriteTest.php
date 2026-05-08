@@ -77,7 +77,6 @@ class InlineRelationWriteTest extends FunctionalTestCase
                     'bodytext' => "Content for element $i",
                     'CType' => 'text',
                     'tx_news_related_news' => $newsUid,  // Foreign field
-                    'sorting' => $i * 256,
                 ],
             ]);
             $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
@@ -335,12 +334,14 @@ class InlineRelationWriteTest extends FunctionalTestCase
         ]);
         $newsUid = json_decode($result->content[0]->text, true)['uid'];
         
-        // Create content elements in reverse order because DataHandler assigns
-        // lower sorting values to newer records when using default 'bottom' position
+        // The sorting field itself is managed by DataHandler (ctrl.sortby) and
+        // is not writable via WriteTableTool. Create in forward order so the
+        // default 'bottom' position yields First, Second, Third when read back
+        // sorted ascending.
         $contentData = [
-            ['header' => 'Third', 'sorting' => 300],
-            ['header' => 'Second', 'sorting' => 200],
-            ['header' => 'First', 'sorting' => 100],
+            ['header' => 'First'],
+            ['header' => 'Second'],
+            ['header' => 'Third'],
         ];
         
         $createdUids = [];

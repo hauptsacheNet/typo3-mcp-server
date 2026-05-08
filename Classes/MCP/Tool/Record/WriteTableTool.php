@@ -931,6 +931,16 @@ class WriteTableTool extends AbstractRecordTool
             return "Field 'pid' can only be set during record creation";
         }
 
+        // Reject fields without a TCA columns entry. DataHandler silently drops
+        // such fields on update/create (control-only fields like 'sorting' live in
+        // TCA ctrl.sortby, not columns; typos have no entry at all), so returning
+        // success without writing them would be a lying response.
+        foreach (array_keys($data) as $fieldName) {
+            if (!$this->tableAccessService->getFieldConfig($table, $fieldName)) {
+                return "Field '{$fieldName}' does not exist in table '{$table}' and cannot be written";
+            }
+        }
+
         // Build merged record context for dynamic select item resolution (itemsProcFunc, TSconfig)
         if ($action === 'update' && $uid) {
             $existingRecord = BackendUtility::getRecord($table, $uid) ?? [];

@@ -272,6 +272,75 @@ class WriteTableToolErrorTest extends FunctionalTestCase
     }
     
     /**
+     * Test that unknown field names are rejected instead of being silently
+     * dropped. DataHandler ignores fields without a TCA columns entry, which
+     * would otherwise produce a lying success response.
+     */
+    public function testUnknownFieldIsRejected(): void
+    {
+        // Completely made-up field name with no TCA entry at all.
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => [
+                'totally_invalid_field' => 'foo',
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Unknown fields should be rejected');
+        $this->assertStringContainsString("Field 'totally_invalid_field'", $result->content[0]->text);
+        $this->assertStringContainsString('does not exist', $result->content[0]->text);
+    }
+
+    /**
+     * Test that the control-only 'sorting' field is rejected. It lives in
+     * TCA ctrl.sortby (not columns) and is managed via moveRecord, so a
+     * plain update silently drops it. Position changes must go through the
+     * 'position' parameter on create / a future dedicated move action.
+     */
+    public function testSortingFieldIsRejected(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => [
+                'sorting' => 256,
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'sorting field should be rejected');
+        $this->assertStringContainsString("Field 'sorting'", $result->content[0]->text);
+    }
+
+    /**
+     * Test that unknown fields are rejected even when valid fields are also
+     * present. Without this, the valid fields would persist and the invalid
+     * one would silently vanish — the exact trust-breaking case we hit on
+     * production (sorting + space_before_class).
+     */
+    public function testUnknownFieldRejectedAlongsideValidFields(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => [
+                'header' => 'New Header',
+                'bogus_field_name' => 'should-fail',
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Mixed valid+invalid fields should be rejected');
+        $this->assertStringContainsString("Field 'bogus_field_name'", $result->content[0]->text);
+
+        // Verify the valid field was NOT written either — validation failed before write.
+        $record = BackendUtility::getRecord('tt_content', 100, 'header');
+        $this->assertNotSame('New Header', $record['header'] ?? null, 'No partial write should have happened');
+    }
+
+    /**
      * Test that file fields are not supported
      */
     public function testFileFieldsRequireArrayData(): void

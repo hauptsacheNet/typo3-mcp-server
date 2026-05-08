@@ -76,7 +76,6 @@ class NewsContentElementsTest extends FunctionalTestCase
                     'bodytext' => "This is content element $i for the news",
                     'CType' => 'text',
                     'tx_news_related_news' => $newsUid,
-                    'sorting' => $i * 256,
                 ],
             ]);
             $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
