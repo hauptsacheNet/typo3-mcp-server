@@ -90,6 +90,29 @@ class WriteTableUpdatePidTest extends AbstractFunctionalTest
         $this->assertOrderOnPage($sourcePage, []);
     }
 
+    public function testUpdatePidWithPositionBottomMovesEvenWhenTargetPageIsEmpty(): void
+    {
+        // Regression: position=bottom resolved to "no last record" on the target
+        // page → null destination → silent no-op, with the record stuck on its
+        // original page even though pid was set.
+        $sourcePage = $this->createPage('Empty-Target Source', '/et-src');
+        $emptyTarget = $this->createPage('Empty-Target', '/et-tgt');
+
+        $sourceUids = $this->createOrderedContent($sourcePage, ['Mover']);
+
+        $result = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $sourceUids['Mover'],
+            'data' => ['pid' => $emptyTarget],
+            'position' => 'bottom',
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $this->assertOrderOnPage($sourcePage, []);
+        $this->assertOrderOnPage($emptyTarget, ['Mover']);
+    }
+
     public function testUpdatePidWithPositionAfterPlacesAfterReference(): void
     {
         $sourcePage = $this->createPage('After Source', '/after-src');

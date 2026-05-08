@@ -266,6 +266,12 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Operation vetoed: ' . ($beforeEvent->getVetoReason() ?? 'No reason given'));
         }
         $data = $beforeEvent->getData();
+        // Listeners may have rerouted the target page by editing data.pid —
+        // re-extract so the create path honours their change. (For update,
+        // updateRecord pulls pid from data itself, so it's already covered.)
+        if (is_array($data) && array_key_exists('pid', $data)) {
+            $pid = (int)$data['pid'];
+        }
 
         // Execute the action
         switch ($action) {
@@ -776,7 +782,10 @@ class WriteTableTool extends AbstractRecordTool
         if ($position === 'bottom') {
             $sortingField = $this->tableAccessService->getSortingFieldName($table);
             if ($sortingField === null) {
-                return null;
+                // Without a sortby field there's no meaningful "bottom" within
+                // the same page; only return the target pid when we're actually
+                // moving across pages, so the cross-page move still happens.
+                return $targetPid !== null ? $pid : null;
             }
             $qb = GeneralUtility::makeInstance(ConnectionPool::class)
                 ->getQueryBuilderForTable($table);
@@ -800,7 +809,11 @@ class WriteTableTool extends AbstractRecordTool
             if ($lastRecord) {
                 return -(int)$lastRecord['uid'];
             }
-            return null;
+            // Empty target page. For a same-page reorder there's nothing to do;
+            // for a cross-page move we still need to issue the move, so return
+            // the target pid (DataHandler treats positive = top of that page,
+            // which is also the bottom on an empty page).
+            return $targetPid !== null ? $pid : null;
         }
 
         if ($position === 'top') {
