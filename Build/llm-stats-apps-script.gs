@@ -72,7 +72,7 @@ function doGet(e) {
   const lastRow = sheet.getRange(sheet.getLastRow(), 1, 1, headers.length).getValues()[0];
   const total = Number(lastRow[headers.indexOf('total')] || 0);
 
-  if (e.parameter && e.parameter.model) {
+  if (e && e.parameter && e.parameter.model) {
     const model = e.parameter.model;
     const idx = headers.indexOf(model);
     if (idx === -1 || lastRow[idx] === '') {
