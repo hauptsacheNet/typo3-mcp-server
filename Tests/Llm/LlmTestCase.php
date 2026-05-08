@@ -41,8 +41,11 @@ abstract class LlmTestCase extends FunctionalTestCase
         // PR #59 for reliability; 'medium' keeps tool-use coherent without the
         // extra reasoning-token tax. Re-tighten if majority-pass starts failing.
         'gpt-5.4-mini' => ['reasoning' => ['effort' => 'medium']],
-        // TEMP: enable Claude Haiku 4.5 extended thinking explicitly to compare
-        // against `enabled: false` baseline — revert before merging.
+        // Claude Haiku 4.5 extended thinking explicitly enabled. Empirically
+        // measured (haiku-only filter, 32 tests): with reasoning OFF we get
+        // 3 hard failures retried 3× each (~9 retry rounds), with reasoning ON
+        // we get 0 failures, 1 retry, and ~10% lower avg test time. The extra
+        // reasoning tokens are cheaper than the avoided retry round-trips.
         'haiku-4.5' => ['reasoning' => ['enabled' => true]],
     ];
 
