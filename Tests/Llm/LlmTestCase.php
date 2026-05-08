@@ -59,10 +59,22 @@ abstract class LlmTestCase extends FunctionalTestCase
     /** @var string The provider being used */
     protected string $llmProvider = '';
 
-    /** Counters tracked per test attempt and written to .Build/llm-stats. */
+    /** Per-attempt counters; reset in setUp() and folded into the totals in tearDown(). */
     protected int $llmCallCount = 0;
     protected int $toolCallCount = 0;
     protected int $toolErrorCount = 0;
+
+    /**
+     * Cumulative counters across all attempts (incl. silent retries) for the
+     * same test+model. Live across the retry loop so the stats artifact
+     * reflects the real wall-clock cost, not just the final passing attempt.
+     */
+    protected int $totalLlmCallCount = 0;
+    protected int $totalToolCallCount = 0;
+    protected int $totalToolErrorCount = 0;
+
+    /** 1 = passed first try, 2/3 = retries. Surfaced in the stats artifact. */
+    protected int $attemptCount = 0;
 
     protected function setUp(): void
     {
@@ -86,6 +98,10 @@ abstract class LlmTestCase extends FunctionalTestCase
 
     protected function tearDown(): void
     {
+        $this->totalLlmCallCount += $this->llmCallCount;
+        $this->totalToolCallCount += $this->toolCallCount;
+        $this->totalToolErrorCount += $this->toolErrorCount;
+
         $this->writeTestStats();
         parent::tearDown();
     }
@@ -102,9 +118,10 @@ abstract class LlmTestCase extends FunctionalTestCase
             'class' => static::class,
             'test' => $this->name(),
             'model' => $model,
-            'llm_calls' => $this->llmCallCount,
-            'tool_calls' => $this->toolCallCount,
-            'tool_errors' => $this->toolErrorCount,
+            'attempts' => max(1, $this->attemptCount),
+            'llm_calls' => $this->totalLlmCallCount,
+            'tool_calls' => $this->totalToolCallCount,
+            'tool_errors' => $this->totalToolErrorCount,
         ]));
     }
 
@@ -119,6 +136,7 @@ abstract class LlmTestCase extends FunctionalTestCase
         $lastException = null;
 
         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            $this->attemptCount = $attempt;
             try {
                 return parent::runTest();
             } catch (\PHPUnit\Framework\SkippedWithMessageException | \PHPUnit\Framework\IncompleteTestError $e) {
@@ -126,16 +144,44 @@ abstract class LlmTestCase extends FunctionalTestCase
             } catch (\PHPUnit\Framework\AssertionFailedError $e) {
                 $lastException = $e;
                 if ($attempt < $maxRetries) {
+                    $this->logAttemptFailure($attempt, $maxRetries, $e, retrying: true);
                     try {
                         $this->tearDown();
                     } catch (\Throwable) {
                     }
                     $this->setUp();
+                } else {
+                    $this->logAttemptFailure($attempt, $maxRetries, $e, retrying: false);
                 }
             }
         }
 
         throw $lastException;
+    }
+
+    /**
+     * Print one greppable line per failed attempt so silent retries become
+     * visible in CI logs. Without this, a test that flakes on attempt 1 and
+     * passes on attempt 2 reports as a clean pass — masking both the runtime
+     * cost and the underlying flakiness.
+     */
+    private function logAttemptFailure(int $attempt, int $maxRetries, \Throwable $e, bool $retrying): void
+    {
+        $modelKey = array_search($this->llmModel, static::MODELS, true);
+        $modelLabel = $modelKey !== false ? (string)$modelKey : $this->llmModel;
+        $shortClass = preg_replace('/^.*\\\\/', '', static::class);
+        $message = preg_replace('/\s+/', ' ', mb_substr($e->getMessage(), 0, 240));
+        $tag = $retrying ? 'LLM-RETRY' : 'LLM-FAIL';
+        fwrite(STDERR, sprintf(
+            "\n[%s %d/%d] %s::%s#%s — %s\n",
+            $tag,
+            $attempt,
+            $maxRetries,
+            $shortClass,
+            $this->name(),
+            $modelLabel,
+            $message
+        ));
     }
 
     /**

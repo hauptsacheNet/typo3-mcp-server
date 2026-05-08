@@ -108,8 +108,12 @@ function formatStats(?array $stats): string
     $calls = (int)($stats['llm_calls'] ?? 0);
     $toolCalls = (int)($stats['tool_calls'] ?? 0);
     $errors = (int)($stats['tool_errors'] ?? 0);
+    $attempts = (int)($stats['attempts'] ?? 1);
     $errColor = $errors > 0 ? "\033[31m" : "\033[2m";
-    return " \033[2m[" . $calls . " calls, " . $toolCalls . " tools, "
+    $attemptPrefix = $attempts > 1
+        ? "\033[33m{$attempts} attempts\033[0;2m, "
+        : '';
+    return " \033[2m[" . $attemptPrefix . $calls . " calls, " . $toolCalls . " tools, "
         . $errColor . $errors . " err\033[2m]\033[0m";
 }
 
