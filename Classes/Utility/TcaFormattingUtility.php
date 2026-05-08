@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Utility;
 
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
@@ -24,8 +25,9 @@ class TcaFormattingUtility
      * @param array $config The field configuration
      * @param string $fieldName Optional field name for special handling
      * @param string $table Optional table name for authMode filtering
+     * @param int|null $pid Optional page id for TSconfig context (filters select items via FormDataCompiler)
      */
-    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = ''): void
+    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = '', ?int $pid = null): void
     {
         // Get the field type
         $type = $config['type'] ?? '';
@@ -85,11 +87,13 @@ class TcaFormattingUtility
                     $result .= " [MM table: " . $config['MM'] . "]";
                 }
 
-                // Resolve select options using FormDataCompiler (handles static items, foreign_table, itemsProcFunc, TSconfig)
+                // Resolve select options using FormDataCompiler (handles static items, foreign_table, itemsProcFunc, TSconfig).
+                // Pass the pid context so TSconfig defined on real pages (rootline) is applied — vanillaUid=0 misses it.
                 $resolved = null;
                 if (!empty($table) && !empty($fieldName)) {
                     $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
-                    $resolved = $resolver->resolveSelectItems($table, $fieldName);
+                    $resolverPid = GeneralUtility::makeInstance(TableAccessService::class)->resolveTSconfigPid($pid);
+                    $resolved = $resolver->resolveSelectItems($table, $fieldName, ['pid' => $resolverPid]);
                 }
 
                 if ($resolved !== null && !empty($resolved['values'])) {
@@ -98,6 +102,10 @@ class TcaFormattingUtility
                     $beUser = $GLOBALS['BE_USER'] ?? null;
                     $isAdmin = $beUser && $beUser->isAdmin();
 
+                    // tt_content.CType also honours TCEMAIN.disableCTypes, which
+                    // FormDataCompiler doesn't apply.
+                    $disabledCTypes = self::getDisabledCTypes($table, $fieldName, $resolverPid ?? 0);
+
                     $options = [];
                     foreach ($resolved['values'] as $value) {
                         // Filter by authMode for non-admin users
@@ -105,6 +113,10 @@ class TcaFormattingUtility
                             if (!$beUser->checkAuthMode($table, $fieldName, $value)) {
                                 continue;
                             }
+                        }
+
+                        if (in_array((string)$value, $disabledCTypes, true)) {
+                            continue;
                         }
 
                         $label = $resolved['labels'][$value] ?? '';
@@ -125,6 +137,7 @@ class TcaFormattingUtility
                     $hasAuthMode = !empty($config['authMode']);
                     $beUser = $GLOBALS['BE_USER'] ?? null;
                     $isAdmin = $beUser && $beUser->isAdmin();
+                    $disabledCTypes = self::getDisabledCTypes($table, $fieldName, $tableAccessService->resolveTSconfigPid($pid));
 
                     $options = [];
                     foreach ($parsed['values'] as $value) {
@@ -135,6 +148,9 @@ class TcaFormattingUtility
                             if (!$beUser->checkAuthMode($table, $fieldName, $value)) {
                                 continue;
                             }
+                        }
+                        if (in_array((string)$value, $disabledCTypes, true)) {
+                            continue;
                         }
                         $label = $parsed['labels'][$value] ?? '';
                         if ($label) {
@@ -220,6 +236,24 @@ class TcaFormattingUtility
         if (isset($config['default']) && $type !== 'check') {
             $result .= " [Default: " . $config['default'] . "]";
         }
+    }
+
+    /**
+     * Resolve TCEMAIN.table.tt_content.disableCTypes for tt_content.CType.
+     * FormDataCompiler doesn't apply this — it's read by the New Content Element
+     * Wizard — so callers must filter manually to match what TYPO3 would show.
+     */
+    protected static function getDisabledCTypes(string $table, string $fieldName, int $pid): array
+    {
+        if ($table !== 'tt_content' || $fieldName !== 'CType') {
+            return [];
+        }
+        $TSconfig = BackendUtility::getPagesTSconfig($pid);
+        $disableCTypes = $TSconfig['TCEMAIN.']['table.']['tt_content.']['disableCTypes'] ?? '';
+        if (empty($disableCTypes)) {
+            return [];
+        }
+        return GeneralUtility::trimExplode(',', $disableCTypes, true);
     }
 
     /**
