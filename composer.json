@@ -21,6 +21,7 @@
         "typo3/testing-framework": "^8.2 || ^9.2",
         "typo3/cms-install": "^13.4 || ^14.3",
         "georgringer/news": "^14.0",
+        "b13/container": "^3.2",
         "brianium/paratest": "^7.4"
     },
     "autoload": {

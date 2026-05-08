@@ -1,0 +1,19 @@
+{
+    "name": "hn/typo3-mcp-server-test-container",
+    "type": "typo3-cms-extension",
+    "description": "MCP Server test fixture: registers a 50/50 split container via b13/container.",
+    "version": "1.0.0",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "typo3/cms-core": "^13.4 || ^14.3",
+        "b13/container": "^3.2"
+    },
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "test_container",
+            "Package": {
+                "providesPackages": {}
+            }
+        }
+    }
+}
