@@ -36,7 +36,15 @@ abstract class LlmTestCase extends FunctionalTestCase
     ];
 
     protected const MODEL_OPTIONS = [
-        'gpt-5.4-mini' => ['reasoning' => ['effort' => 'high']],
+        // 'medium' instead of 'high': gpt-5.4-mini and haiku-4.5 dominate the
+        // OpenRouter spend (~$5 + ~$4 per full suite run). 'high' was added in
+        // PR #59 for reliability; 'medium' keeps tool-use coherent without the
+        // extra reasoning-token tax. Re-tighten if majority-pass starts failing.
+        'gpt-5.4-mini' => ['reasoning' => ['effort' => 'medium']],
+        // Claude Haiku 4.5 supports extended thinking; 'enabled: false' tells
+        // OpenRouter not to opt us into it for tool-use tests where we don't
+        // need the extra reasoning budget.
+        'haiku-4.5' => ['reasoning' => ['enabled' => false]],
     ];
 
     protected array $coreExtensionsToLoad = [
