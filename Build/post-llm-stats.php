@@ -2,12 +2,13 @@
 <?php
 
 /**
- * Post LLM test results to a Google Sheet via an Apps Script web app.
+ * Aggregate LLM test results into a one-row-per-run benchmark record and
+ * post it to a Google Sheet via an Apps Script web app.
  *
- * Reads .Build/llm-results.xml plus per-test stats from .Build/llm-stats/,
- * builds a flat list of { run × test × model } records, and POSTs them as
- * JSON. The Apps Script (see Build/llm-stats-apps-script.gs) appends rows
- * and recomputes a per-model summary used by the README badge endpoint.
+ * The sheet schema is: timestamp, branch, commit, run_url, total, <one
+ * column per model with that model's pass count>. Model columns are added
+ * dynamically as new models appear. Per-test detail is intentionally not
+ * stored — drill into the GitHub Actions run for that.
  *
  * Required env vars:
  *   LLM_STATS_SHEET_URL    Apps Script web app deployment URL (.../exec)
@@ -45,31 +46,36 @@ if ($xml === false) {
     exit(2);
 }
 
-$records = [];
+$tests        = []; // baseName => true if executed in at least one model
+$modelPasses  = []; // model => int (PASS count)
+
 if ($xml->getName() === 'testsuite') {
-    collectFromSuite($xml, $records);
+    collectFromSuite($xml, $tests, $modelPasses);
 } else {
     foreach ($xml->testsuite as $suite) {
-        collectFromSuite($suite, $records);
+        collectFromSuite($suite, $tests, $modelPasses);
     }
 }
 
-if ($records === []) {
-    fwrite(STDERR, "No test cases found in JUnit XML — nothing to post.\n");
+$total = count(array_filter($tests));
+if ($total === 0) {
+    fwrite(STDERR, "No executed tests found in JUnit XML — nothing to post.\n");
     exit(0);
 }
 
+ksort($modelPasses);
+
 $payload = [
     'timestamp' => gmdate('c'),
-    'commit'    => getenv('GITHUB_SHA') ?: '',
     'branch'    => getenv('GITHUB_REF_NAME') ?: '',
+    'commit'    => getenv('GITHUB_SHA') ?: '',
     'run_url'   => getenv('GITHUB_RUN_URL') ?: '',
-    'records'   => $records,
+    'total'     => $total,
+    'models'    => $modelPasses,
 ];
 
 if ($dryRun) {
     echo json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
-    fwrite(STDERR, sprintf("[dry-run] %d records would be posted.\n", count($records)));
     exit(0);
 }
 
@@ -81,8 +87,8 @@ if (!$url || !$token) {
 }
 
 // Apps Script web apps can't read request headers, so the token rides in
-// the JSON body. Apps Script also follows a 302 from /exec → googleusercontent
-// for the actual response, hence FOLLOWLOCATION.
+// the JSON body. /exec returns 302 to googleusercontent for the response,
+// hence FOLLOWLOCATION.
 $payload['_token'] = $token;
 
 $ch = curl_init($url);
@@ -110,13 +116,13 @@ if ($status < 200 || $status >= 300) {
     exit(1);
 }
 
-echo "Published " . count($records) . " records to Google Sheet (HTTP $status).\n";
+echo "Published run with $total tests across " . count($modelPasses) . " models (HTTP $status).\n";
 exit(0);
 
-function collectFromSuite(SimpleXMLElement $suite, array &$records): void
+function collectFromSuite(SimpleXMLElement $suite, array &$tests, array &$modelPasses): void
 {
     foreach ($suite->testsuite as $child) {
-        collectFromSuite($child, $records);
+        collectFromSuite($child, $tests, $modelPasses);
     }
     foreach ($suite->testcase as $testcase) {
         $name  = (string)$testcase['name'];
@@ -134,31 +140,13 @@ function collectFromSuite(SimpleXMLElement $suite, array &$records): void
 
         $failed  = isset($testcase->failure) || isset($testcase->error);
         $skipped = isset($testcase->skipped);
-        $status  = $failed ? 'FAIL' : ($skipped ? 'SKIP' : 'PASS');
 
-        $stats = loadTestStats($class, $baseName, $model);
+        $key = $class . '::' . $baseName;
+        $tests[$key] = ($tests[$key] ?? false) || !$skipped;
 
-        $records[] = [
-            'class'       => $class,
-            'test'        => $baseName,
-            'model'       => $model,
-            'status'      => $status,
-            'duration'    => (float)($testcase['time'] ?? 0),
-            'llm_calls'   => $stats['llm_calls']   ?? null,
-            'tool_calls'  => $stats['tool_calls']  ?? null,
-            'tool_errors' => $stats['tool_errors'] ?? null,
-        ];
+        $modelPasses[$model] = $modelPasses[$model] ?? 0;
+        if (!$failed && !$skipped) {
+            $modelPasses[$model]++;
+        }
     }
-}
-
-function loadTestStats(string $class, string $baseName, string $model): ?array
-{
-    $statsDir = __DIR__ . '/../.Build/llm-stats';
-    $modelKey = $model === 'unknown' ? '' : $model;
-    $file     = $statsDir . '/' . sha1($class . '::' . $baseName . '::' . $modelKey) . '.json';
-    if (!file_exists($file)) {
-        return null;
-    }
-    $data = json_decode((string)file_get_contents($file), true);
-    return is_array($data) ? $data : null;
 }

@@ -1,242 +1,149 @@
 /**
- * Google Apps Script — LLM stats ingest + shields.io endpoint.
+ * Google Apps Script — LLM benchmark ingest + shields.io endpoint.
  *
- * This file is the source of truth, committed for transparency.
- * To deploy:
+ * Schema: one row per CI run.
+ *   timestamp | branch | commit | run_url | total | <model_1> | <model_2> | ...
  *
- *   1. Create a Google Sheet titled "TYPO3 MCP Server — LLM Stats".
- *      Add tabs named "Runs" and "Summary".
- *   2. Extensions → Apps Script → paste the contents of this file.
- *   3. Project Settings → Script Properties → add INGEST_TOKEN with a
- *      random secret (e.g. `openssl rand -hex 24`).
- *   4. Deploy → New deployment → Web app:
- *        - Execute as: Me
- *        - Who has access: Anyone
- *      Copy the deployment URL ending in /exec.
- *   5. Sheet → Share → "Anyone with the link: Viewer" so README links work.
- *   6. Add GitHub Actions secrets:
- *        - LLM_STATS_SHEET_URL   = the /exec URL
- *        - LLM_STATS_SHEET_TOKEN = the same token as INGEST_TOKEN
+ * Model columns are added on demand: when a payload references a model
+ * not yet in the header row, a new column is appended. Each model column
+ * holds that model's PASS count for the run; `total` is the number of
+ * distinct test methods executed (skipped-by-all are excluded).
  *
- * Endpoints exposed by doGet:
- *   ?model=<key>          → shields.io endpoint JSON (latest pass-rate)
- *   ?format=table         → markdown table of all model summaries
- *   (no params)           → JSON map of model → { passed, total, percent }
+ * Deployment:
+ *   1. Create a Google Sheet titled "TYPO3 MCP Server — LLM Benchmark".
+ *   2. Extensions → Apps Script → paste this file.
+ *   3. Project Settings → Script Properties → INGEST_TOKEN = <random secret>.
+ *   4. Deploy → New deployment → Web app, "Execute as: Me",
+ *      "Who has access: Anyone". Copy the /exec URL.
+ *   5. Sheet → Share → "Anyone with the link: Viewer".
+ *   6. GitHub Actions secrets:
+ *        LLM_STATS_SHEET_URL   = the /exec URL
+ *        LLM_STATS_SHEET_TOKEN = INGEST_TOKEN value
  */
 
-const RUNS_SHEET_NAME = 'Runs';
-const SUMMARY_SHEET_NAME = 'Summary';
-
-const RUNS_HEADERS = [
-  'timestamp', 'commit', 'branch', 'run_url',
-  'class', 'test', 'model', 'status',
-  'duration', 'llm_calls', 'tool_calls', 'tool_errors',
-];
-
-const SUMMARY_HEADERS = ['model', 'passed', 'total', 'percent', 'last_run', 'last_commit'];
-
-/* ------------------------------------------------------------------ Ingest */
+const SHEET_NAME = 'Runs';
+const BASE_HEADERS = ['timestamp', 'branch', 'commit', 'run_url', 'total'];
 
 function doPost(e) {
   const expected = PropertiesService.getScriptProperties().getProperty('INGEST_TOKEN');
-  const auth = (e.parameter && e.parameter.token)
-    || (e.postData && e.postData.contents && extractBearer_(e));
-  if (!expected || auth !== expected) {
-    return jsonResponse_({ error: 'unauthorized' }, 401);
-  }
-
   let payload;
   try {
     payload = JSON.parse(e.postData.contents);
   } catch (err) {
-    return jsonResponse_({ error: 'invalid json' }, 400);
+    return jsonResponse_({ error: 'invalid json' });
+  }
+  if (!expected || payload._token !== expected) {
+    return jsonResponse_({ error: 'unauthorized' });
   }
 
-  const records = Array.isArray(payload.records) ? payload.records : [];
-  if (records.length === 0) {
-    return jsonResponse_({ inserted: 0 });
+  const sheet = ensureSheet_();
+  const headers = readHeaders_(sheet);
+
+  const models = payload.models || {};
+  for (const name of Object.keys(models)) {
+    if (headers.indexOf(name) === -1) {
+      sheet.getRange(1, headers.length + 1)
+        .setValue(name)
+        .setFontWeight('bold');
+      headers.push(name);
+    }
   }
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const runs = ensureSheet_(ss, RUNS_SHEET_NAME, RUNS_HEADERS);
+  const row = new Array(headers.length).fill('');
+  row[0] = payload.timestamp ? new Date(payload.timestamp) : new Date();
+  row[1] = payload.branch || '';
+  row[2] = payload.commit || '';
+  row[3] = payload.run_url || '';
+  row[4] = Number(payload.total || 0);
+  for (const [name, passed] of Object.entries(models)) {
+    row[headers.indexOf(name)] = Number(passed);
+  }
+  sheet.appendRow(row);
 
-  const rows = records.map(r => [
-    payload.timestamp || new Date().toISOString(),
-    payload.commit || '',
-    payload.branch || '',
-    payload.run_url || '',
-    r.class || '',
-    r.test || '',
-    r.model || '',
-    r.status || '',
-    r.duration ?? '',
-    r.llm_calls ?? '',
-    r.tool_calls ?? '',
-    r.tool_errors ?? '',
-  ]);
-  runs.getRange(runs.getLastRow() + 1, 1, rows.length, RUNS_HEADERS.length).setValues(rows);
-
-  recomputeSummary_(ss);
-
-  return jsonResponse_({ inserted: rows.length });
+  return jsonResponse_({ ok: true, row: sheet.getLastRow() });
 }
-
-function extractBearer_(e) {
-  // Apps Script doesn't expose request headers directly; we accept the token
-  // either via `?token=` or via a JSON body field `_token` as fallbacks.
-  try {
-    const body = JSON.parse(e.postData.contents);
-    return body._token || null;
-  } catch (err) {
-    return null;
-  }
-}
-
-/* ------------------------------------------------------------------ Read */
 
 function doGet(e) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const summary = readSummary_(ss);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet || sheet.getLastRow() < 2) {
+    return jsonResponse_({ error: 'no data' });
+  }
+  const headers = readHeaders_(sheet);
+  const lastRow = sheet.getRange(sheet.getLastRow(), 1, 1, headers.length).getValues()[0];
+  const total = Number(lastRow[headers.indexOf('total')] || 0);
 
   if (e.parameter && e.parameter.model) {
-    const row = summary[e.parameter.model];
-    if (!row) {
+    const model = e.parameter.model;
+    const idx = headers.indexOf(model);
+    if (idx === -1 || lastRow[idx] === '') {
       return jsonResponse_({
-        schemaVersion: 1,
-        label: e.parameter.model,
-        message: 'no data',
-        color: 'lightgrey',
+        schemaVersion: 1, label: model, message: 'no data', color: 'lightgrey',
       });
     }
+    const passed = Number(lastRow[idx]);
+    const percent = total === 0 ? 0 : Math.round((passed / total) * 100);
     return jsonResponse_({
       schemaVersion: 1,
-      label: e.parameter.model,
-      message: row.percent + '%',
-      color: badgeColor_(row.percent),
+      label: model,
+      message: `${passed}/${total}`,
+      color: badgeColor_(percent),
     });
   }
 
-  if (e.parameter && e.parameter.format === 'table') {
-    const lines = ['| Model | Passed | Total | % |', '|---|---|---|---|'];
-    Object.keys(summary).sort().forEach(model => {
-      const r = summary[model];
-      lines.push(`| ${model} | ${r.passed} | ${r.total} | ${r.percent}% |`);
-    });
-    return ContentService.createTextOutput(lines.join('\n'))
-      .setMimeType(ContentService.MimeType.TEXT);
+  const out = {
+    timestamp: lastRow[0],
+    branch: lastRow[1],
+    commit: lastRow[2],
+    run_url: lastRow[3],
+    total,
+    models: {},
+  };
+  for (let i = BASE_HEADERS.length; i < headers.length; i++) {
+    if (lastRow[i] !== '') out.models[headers[i]] = Number(lastRow[i]);
   }
-
-  return jsonResponse_(summary);
+  return jsonResponse_(out);
 }
 
-function badgeColor_(percent) {
-  if (percent >= 90) return 'brightgreen';
-  if (percent >= 75) return 'green';
-  if (percent >= 60) return 'yellow';
-  if (percent >= 40) return 'orange';
-  return 'red';
-}
-
-/* ------------------------------------------------------------------ Summary */
-
-function recomputeSummary_(ss) {
-  const runs = ss.getSheetByName(RUNS_SHEET_NAME);
-  if (!runs || runs.getLastRow() < 2) return;
-
-  const data = runs.getRange(2, 1, runs.getLastRow() - 1, RUNS_HEADERS.length).getValues();
-
-  // Find the most recent timestamp; the "current" pass-rate uses only the
-  // latest run (so a flaky historical model doesn't poison the badge).
-  let latestRun = '';
-  for (const row of data) {
-    const ts = String(row[0]);
-    if (ts > latestRun) latestRun = ts;
-  }
-
-  const perModel = {}; // model => { passed, total, last_commit }
-  for (const row of data) {
-    if (String(row[0]) !== latestRun) continue;
-    const model = String(row[6]);
-    const status = String(row[7]);
-    if (status === 'SKIP') continue;
-    if (!perModel[model]) {
-      perModel[model] = { passed: 0, total: 0, last_commit: String(row[1]) };
-    }
-    perModel[model].total += 1;
-    if (status === 'PASS') perModel[model].passed += 1;
-  }
-
-  const summary = ensureSheet_(ss, SUMMARY_SHEET_NAME, SUMMARY_HEADERS);
-  if (summary.getLastRow() > 1) {
-    summary.getRange(2, 1, summary.getLastRow() - 1, SUMMARY_HEADERS.length).clearContent();
-  }
-
-  const rows = Object.keys(perModel).sort().map(model => {
-    const r = perModel[model];
-    const percent = r.total === 0 ? 0 : Math.round((r.passed / r.total) * 100);
-    return [model, r.passed, r.total, percent, latestRun, r.last_commit];
-  });
-  if (rows.length > 0) {
-    summary.getRange(2, 1, rows.length, SUMMARY_HEADERS.length).setValues(rows);
-  }
-}
-
-function readSummary_(ss) {
-  const sheet = ss.getSheetByName(SUMMARY_SHEET_NAME);
-  if (!sheet || sheet.getLastRow() < 2) return {};
-  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, SUMMARY_HEADERS.length).getValues();
-  const out = {};
-  for (const row of data) {
-    out[String(row[0])] = {
-      passed: Number(row[1]),
-      total: Number(row[2]),
-      percent: Number(row[3]),
-      last_run: String(row[4]),
-      last_commit: String(row[5]),
-    };
-  }
-  return out;
-}
-
-/* ------------------------------------------------------------------ Helpers */
-
-function ensureSheet_(ss, name, headers) {
-  let sheet = ss.getSheetByName(name);
-  if (!sheet) {
-    sheet = ss.insertSheet(name);
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
-    sheet.setFrozenRows(1);
-  } else if (sheet.getLastRow() === 0) {
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+function ensureSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, BASE_HEADERS.length)
+      .setValues([BASE_HEADERS])
+      .setFontWeight('bold');
     sheet.setFrozenRows(1);
   }
   return sheet;
 }
 
-function jsonResponse_(obj, _status) {
-  // Apps Script web apps can't set HTTP status, but shields.io and the
-  // ingester only care about the body. Errors are conveyed in `error`.
-  return ContentService.createTextOutput(JSON.stringify(obj))
+function readHeaders_(sheet) {
+  return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+}
+
+function badgeColor_(p) {
+  if (p >= 90) return 'brightgreen';
+  if (p >= 75) return 'green';
+  if (p >= 60) return 'yellow';
+  if (p >= 40) return 'orange';
+  return 'red';
+}
+
+function jsonResponse_(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-/* ------------------------------------------------------------------ Tests */
-
 function testIngest_() {
   const sample = {
-    postData: {
-      contents: JSON.stringify({
-        _token: PropertiesService.getScriptProperties().getProperty('INGEST_TOKEN'),
-        timestamp: new Date().toISOString(),
-        commit: 'deadbeef',
-        branch: 'main',
-        run_url: 'https://example.invalid/run/1',
-        records: [
-          { class: 'X', test: 'testA', model: 'haiku-4.5', status: 'PASS', llm_calls: 3, tool_calls: 5, tool_errors: 0 },
-          { class: 'X', test: 'testA', model: 'gpt-5.4-mini', status: 'FAIL', llm_calls: 4, tool_calls: 6, tool_errors: 1 },
-        ],
-      }),
-    },
+    postData: { contents: JSON.stringify({
+      _token: PropertiesService.getScriptProperties().getProperty('INGEST_TOKEN'),
+      timestamp: new Date().toISOString(),
+      branch: 'main', commit: 'deadbeef', run_url: 'https://example.invalid/run/1',
+      total: 20,
+      models: { 'haiku-4.5': 18, 'gpt-5.4-mini': 14 },
+    })},
     parameter: {},
   };
   Logger.log(doPost(sample).getContent());
