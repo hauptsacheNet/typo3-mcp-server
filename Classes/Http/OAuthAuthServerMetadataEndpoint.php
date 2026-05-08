@@ -22,23 +22,23 @@ class OAuthAuthServerMetadataEndpoint
     {
         // Handle preflight OPTIONS request
         if ($request->getMethod() === 'OPTIONS') {
-            return $this->handlePreflightRequest();
+            return $this->handlePreflightRequest($request);
         }
 
         $baseUrl = $this->getBaseUrl($request);
         $oauthService = GeneralUtility::makeInstance(OAuthService::class);
-        
+
         $metadata = $oauthService->getMetadata($baseUrl);
-        
-        return $this->createJsonResponse($metadata);
+
+        return $this->createJsonResponse($metadata, $request);
     }
 
-    private function createJsonResponse(array $data): ResponseInterface
+    private function createJsonResponse(array $data, ServerRequestInterface $request): ResponseInterface
     {
         $response = new JsonResponse($data);
-        
+
         // Add CORS headers
-        $response = $this->addCorsHeaders($response);
+        $response = $this->addCorsHeaders($response, $request);
         
         // Add cache headers (short cache for dynamic content)
         $response = $response

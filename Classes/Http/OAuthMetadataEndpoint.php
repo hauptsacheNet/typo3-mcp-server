@@ -22,7 +22,7 @@ class OAuthMetadataEndpoint
     {
         // Handle preflight OPTIONS request
         if ($request->getMethod() === 'OPTIONS') {
-            return $this->handlePreflightRequest();
+            return $this->handlePreflightRequest($request);
         }
 
         try {
@@ -54,7 +54,7 @@ class OAuthMetadataEndpoint
                 ]
             );
             
-            return $this->addCorsHeaders($response);
+            return $this->addCorsHeaders($response, $request);
 
         } catch (\Throwable $e) {
             $errorData = [
@@ -72,7 +72,7 @@ class OAuthMetadataEndpoint
                 ['Content-Type' => 'application/json']
             );
             
-            return $this->addCorsHeaders($response);
+            return $this->addCorsHeaders($response, $request);
         }
     }
 }

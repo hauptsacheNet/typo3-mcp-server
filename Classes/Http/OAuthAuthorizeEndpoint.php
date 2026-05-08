@@ -163,6 +163,11 @@ class OAuthAuthorizeEndpoint
         $challengeMethod = $queryParams['code_challenge_method'] ?? 'S256';
         $state = $postParams['state'] ?? $queryParams['state'] ?? '';
 
+        // Only S256 is supported for PKCE
+        if (!empty($pkceChallenge) && $challengeMethod !== 'S256') {
+            return $this->createErrorResponse('invalid_request', 'Only S256 code_challenge_method is supported');
+        }
+
         $oauthService = GeneralUtility::makeInstance(OAuthService::class);
         $code = $oauthService->createAuthorizationCode(
             $beUserId,

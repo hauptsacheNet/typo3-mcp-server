@@ -7,6 +7,7 @@ namespace Hn\McpServer\Utility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use Hn\McpServer\Service\SelectItemResolver;
 use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
 
@@ -84,30 +85,57 @@ class TcaFormattingUtility
                     $result .= " [MM table: " . $config['MM'] . "]";
                 }
 
-                // Add select options if available
-                if (isset($config['items']) && is_array($config['items'])) {
-                    $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
-                    $parsed = $tableAccessService->parseSelectItems($config['items'], false); // Include dividers
+                // Resolve select options using FormDataCompiler (handles static items, foreign_table, itemsProcFunc, TSconfig)
+                $resolved = null;
+                if (!empty($table) && !empty($fieldName)) {
+                    $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
+                    $resolved = $resolver->resolveSelectItems($table, $fieldName);
+                }
 
-                    // Check if this field has authMode restrictions
+                if ($resolved !== null && !empty($resolved['values'])) {
+                    // Use dynamically resolved items
+                    $hasAuthMode = !empty($config['authMode']);
+                    $beUser = $GLOBALS['BE_USER'] ?? null;
+                    $isAdmin = $beUser && $beUser->isAdmin();
+
+                    $options = [];
+                    foreach ($resolved['values'] as $value) {
+                        // Filter by authMode for non-admin users
+                        if ($hasAuthMode && !$isAdmin && $beUser) {
+                            if (!$beUser->checkAuthMode($table, $fieldName, $value)) {
+                                continue;
+                            }
+                        }
+
+                        $label = $resolved['labels'][$value] ?? '';
+                        if ($label) {
+                            $translatedLabel = TableAccessService::translateLabel($label);
+                            $options[] = $value . " (" . $translatedLabel . ")";
+                        }
+                    }
+
+                    if (!empty($options)) {
+                        $result .= " [Options: " . implode(', ', $options) . "]";
+                    }
+                } elseif (isset($config['items']) && is_array($config['items'])) {
+                    // Fallback: use static TCA items
+                    $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+                    $parsed = $tableAccessService->parseSelectItems($config['items'], false);
+
                     $hasAuthMode = !empty($config['authMode']);
                     $beUser = $GLOBALS['BE_USER'] ?? null;
                     $isAdmin = $beUser && $beUser->isAdmin();
 
                     $options = [];
                     foreach ($parsed['values'] as $value) {
-                        // Skip dividers
                         if ($value === '--div--') {
                             continue;
                         }
-
-                        // Filter by authMode for non-admin users
                         if ($hasAuthMode && !$isAdmin && $beUser && !empty($table) && !empty($fieldName)) {
                             if (!$beUser->checkAuthMode($table, $fieldName, $value)) {
-                                continue; // User doesn't have permission for this value
+                                continue;
                             }
                         }
-
                         $label = $parsed['labels'][$value] ?? '';
                         if ($label) {
                             $translatedLabel = TableAccessService::translateLabel($label);
@@ -141,19 +169,35 @@ class TcaFormattingUtility
                 break;
                 
             case 'inline':
-                // Add foreign table if available
-                if (isset($config['foreign_table'])) {
-                    $result .= " [foreign table: " . $config['foreign_table'] . "]";
+            case 'file':
+                $foreignTable = $config['foreign_table'] ?? '';
+                if (empty($foreignTable)) {
+                    break;
+                }
+
+                $isHiddenTable = GeneralUtility::makeInstance(TableAccessService::class)
+                    ->isEmbeddedChildTable($foreignTable);
+
+                if ($isHiddenTable) {
+                    // Embedded relation: LLM writes array of record objects
+                    $result .= " [embedded records from " . $foreignTable . " - write as: [";
+                    $result .= self::generateMiniExample($foreignTable);
+                    $result .= "]. Use GetTableSchema on " . $foreignTable . " for all fields.]";
+                } else {
+                    // Independent relation: LLM writes array of UIDs
+                    $result .= " [relation to " . $foreignTable . " - write as array of UIDs, e.g. [12, 34]]";
                 }
                 break;
                 
             case 'flex':
-                // Only applicable for TCA
+                // TYPO3 13: surface ds_pointerField configuration if present.
+                // Removed in TYPO3 14; schemas use columnsOverrides instead.
                 if (isset($config['ds_pointerField'])) {
                     $result .= " [ds_pointerField: " . $config['ds_pointerField'] . "]";
                 }
                 break;
-                
+
+
             case 'language':
                 // Special handling for language type fields (TYPO3 11.2+)
                 // Add note about ISO code support
@@ -176,5 +220,79 @@ class TcaFormattingUtility
         if (isset($config['default']) && $type !== 'check') {
             $result .= " [Default: " . $config['default'] . "]";
         }
+    }
+
+    /**
+     * Generate a mini example object from a table's accessible fields.
+     * Shows a few key user-editable fields to give the LLM a sense of the record structure.
+     */
+    protected static function generateMiniExample(string $foreignTable): string
+    {
+        $foreignTCA = $GLOBALS['TCA'][$foreignTable] ?? [];
+        $columns = $foreignTCA['columns'] ?? [];
+
+        // System/auto-managed fields to skip in the example
+        $skipFields = [
+            'pid', 'tstamp', 'crdate', 'deleted', 'hidden', 'sorting', 'sorting_foreign',
+            'uid_foreign', 'tablenames', 'fieldname',
+            'sys_language_uid', 'l10n_parent', 'l10n_diffsource', 'l10n_state',
+            't3ver_oid', 't3ver_wsid', 't3ver_state', 't3_origuid',
+        ];
+
+        $exampleFields = [];
+        $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+
+        foreach ($columns as $fieldName => $fieldConfig) {
+            if (in_array($fieldName, $skipFields, true)) {
+                continue;
+            }
+
+            if (!$tableAccessService->canAccessField($foreignTable, $fieldName)) {
+                continue;
+            }
+
+            $fieldType = $fieldConfig['config']['type'] ?? '';
+
+            // Generate a placeholder value based on field type
+            switch ($fieldType) {
+                case 'input':
+                case 'text':
+                case 'link':
+                case 'email':
+                case 'slug':
+                    $exampleFields[$fieldName] = '...';
+                    break;
+                case 'number':
+                case 'group':
+                    $exampleFields[$fieldName] = '0';
+                    break;
+                case 'check':
+                    $exampleFields[$fieldName] = '0';
+                    break;
+                default:
+                    // Skip complex types (imageManipulation, flex, etc.) in the mini example
+                    continue 2;
+            }
+
+            // Limit to a few fields to keep it concise
+            if (count($exampleFields) >= 4) {
+                break;
+            }
+        }
+
+        if (empty($exampleFields)) {
+            return '{}';
+        }
+
+        $parts = [];
+        foreach ($exampleFields as $name => $placeholder) {
+            if ($placeholder === '0') {
+                $parts[] = '"' . $name . '": ' . $placeholder;
+            } else {
+                $parts[] = '"' . $name . '": "' . $placeholder . '"';
+            }
+        }
+
+        return '{' . implode(', ', $parts) . '}';
     }
 }

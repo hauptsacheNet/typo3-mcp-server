@@ -1,0 +1,5 @@
+"sys_file_reference"
+,"uid","pid","uid_local","uid_foreign","tablenames","fieldname","sorting_foreign","title","description","alternative","hidden","deleted","t3ver_wsid","t3ver_oid","t3ver_state","sys_language_uid","l10n_parent"
+,1,1,1,100,"tt_content","assets",256,"Hero Image","The main hero image","Homepage hero banner",0,0,0,0,0,0,0
+,2,1,1,100,"tt_content","assets",512,"Second Image","Another image","Second photo",0,0,0,0,0,0,0
+,3,1,1,100,"tt_content","media",256,"Media File",,"Download media",0,0,0,0,0,0,0

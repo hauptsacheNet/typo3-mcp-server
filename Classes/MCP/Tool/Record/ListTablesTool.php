@@ -67,10 +67,9 @@ class ListTablesTool extends AbstractRecordTool
                 'readOnly' => $accessInfo['read_only'],
                 'type' => $this->getTableType($table),
                 'workspace_capable' => $accessInfo['workspace_capable'],
-                'workspace_info' => $accessInfo['workspace_capable'] 
-                    ? 'Workspace-capable' 
+                'workspace_info' => $accessInfo['workspace_capable']
+                    ? 'Workspace-capable'
                     : 'Not workspace-capable',
-                'restrictions' => $accessInfo['restrictions'],
             ];
         }
         
@@ -111,9 +110,9 @@ class ListTablesTool extends AbstractRecordTool
     {
         $result = "ACCESSIBLE TABLES IN TYPO3 (via MCP)\n";
         $result .= "=====================================\n\n";
-        
-        $result .= "All tables listed are workspace-capable and accessible by the current user.\n";
-        $result .= "Tables marked as [READ-ONLY] can be read but not modified.\n\n";
+
+        $result .= "Tables accessible by the current user. Most are workspace-capable (changes require publishing).\n";
+        $result .= "Tables marked as [READ-ONLY] can be read but not modified via WriteTable.\n\n";
         
         foreach ($groupedTables as $extension => $extensionInfo) {
             $extensionLabel = $extensionInfo['extensionLabel'];
@@ -136,12 +135,7 @@ class ListTablesTool extends AbstractRecordTool
                 if ($tableInfo['readOnly']) {
                     $result .= " [READ-ONLY]";
                 }
-                
-                // Show any restrictions
-                if (!empty($tableInfo['restrictions'])) {
-                    $result .= " [" . implode(', ', $tableInfo['restrictions']) . "]";
-                }
-                
+
                 $result .= "\n";
             }
             

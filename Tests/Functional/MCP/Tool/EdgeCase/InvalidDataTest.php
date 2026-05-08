@@ -62,7 +62,7 @@ class InvalidDataTest extends AbstractFunctionalTest
                     'uid' => 1,
                     'data' => ['"; DROP TABLE pages; --' => 'value']
                 ],
-                'success', // TYPO3 DataHandler ignores invalid fields
+                'does not exist', // Unknown fields are rejected up front
                 'write'
             ],
             'exceeding field length' => [
@@ -186,17 +186,20 @@ class InvalidDataTest extends AbstractFunctionalTest
      */
     public function testDataTypeMismatch(): void
     {
-        // Try to set a string value to an integer field
+        // Try to set a string value to an integer field. Using only fields
+        // that have proper TCA columns entries — 'sorting' is a control-only
+        // field (ctrl.sortby) and is rejected up front, which is covered in
+        // WriteTableToolErrorTest::testSortingFieldIsRejected.
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
             'uid' => 1,
             'data' => [
                 'hidden' => 'not-a-number',
-                'sorting' => 'invalid-sorting'
+                'nav_hide' => 'also-not-a-number'
             ]
         ]);
-        
+
         // TYPO3 might cast values automatically
         $this->assertFalse($result->isError);
         $data = json_decode($result->content[0]->text, true);
@@ -204,8 +207,8 @@ class InvalidDataTest extends AbstractFunctionalTest
         if (isset($data['hidden'])) {
             $this->assertIsInt($data['hidden']);
         }
-        if (isset($data['sorting'])) {
-            $this->assertIsInt($data['sorting']);
+        if (isset($data['nav_hide'])) {
+            $this->assertIsInt($data['nav_hide']);
         }
     }
     
@@ -240,7 +243,8 @@ class InvalidDataTest extends AbstractFunctionalTest
      */
     public function testCircularParentReference(): void
     {
-        // Try to set a page as its own parent
+        // Setting pid on update triggers a move; moving a page into itself
+        // must be rejected by DataHandler.
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
@@ -249,9 +253,9 @@ class InvalidDataTest extends AbstractFunctionalTest
                 'pid' => 1 // Self-reference
             ]
         ]);
-        
+
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('can only be set during record creation', $result->content[0]->text);
+        $this->assertStringContainsString('Error moving record', $result->content[0]->text);
     }
     
     /**
@@ -392,16 +396,19 @@ class InvalidDataTest extends AbstractFunctionalTest
      */
     public function testLargeNumericValues(): void
     {
+        // Dropped 'sorting' because it's a control-only field and is now
+        // rejected up front (see WriteTableToolErrorTest::testSortingFieldIsRejected);
+        // this test focuses on whether large numeric values in real TCA
+        // columns get accepted or clamped.
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
             'uid' => 1,
             'data' => [
-                'sorting' => PHP_INT_MAX,
                 'nav_hide' => 999999 // Should be 0 or 1
             ]
         ]);
-        
+
         // TYPO3 might accept these values
         if ($result->isError) {
             $this->assertStringContainsString('Invalid', $result->content[0]->text);

@@ -21,7 +21,7 @@ class OAuthResourceMetadataEndpoint
     {
         // Handle preflight OPTIONS request
         if ($request->getMethod() === 'OPTIONS') {
-            return $this->handlePreflightRequest();
+            return $this->handlePreflightRequest($request);
         }
 
         // Get base URL from request
@@ -56,7 +56,7 @@ class OAuthResourceMetadataEndpoint
             ]
         );
         
-        return $this->addCorsHeaders($response);
+        return $this->addCorsHeaders($response, $request);
     }
     
     

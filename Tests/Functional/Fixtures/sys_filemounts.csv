@@ -1,0 +1,5 @@
+"sys_filemounts"
+,"uid","pid","title","identifier","sorting","deleted","hidden","read_only"
+,1,0,"Public Uploads","1:/user_upload/",0,0,0,0
+,2,0,"Team Folder","1:/user_upload/team/",1,0,0,0
+,3,0,"Secret","1:/secret/",2,0,0,0

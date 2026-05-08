@@ -178,31 +178,35 @@ class WorkspaceContextService
                 'members' => '',
                 'db_mountpoints' => '', // Inherit from user
                 'file_mountpoints' => '', // Inherit from user
-                'publish_access' => 1, // Allow publishing
+                'publish_access' => 0, // No publishing restrictions (matches TCA default)
                 'stagechg_notification' => 0, // No email notifications by default
-                'freeze' => 0, // Not frozen
                 'live_edit' => 0, // No live edit
                 'publish_time' => 0, // No scheduled publishing
             ];
-            
-            // Use DataHandler to create the workspace
-            $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
-            $dataHandler->admin = true; // Admin mode to bypass restrictions
-            $dataHandler->bypassWorkspaceRestrictions = true;
-            
-            $newId = 'NEW' . uniqid();
-            $dataMap = [
-                'sys_workspace' => [
-                    $newId => $workspaceData
-                ]
-            ];
-            
-            $dataHandler->start($dataMap, []);
-            $dataHandler->process_datamap();
-            
-            // Get the UID of the newly created workspace
-            $newUid = $dataHandler->substNEWwithIDs[$newId] ?? null;
-            
+
+            // TYPO3 14 removed DataHandler::$admin. Creating sys_workspace
+            // records is an admin-only operation, so briefly elevate the current
+            // BE user for the duration of the workspace creation.
+            $previousAdminFlag = $beUser->user['admin'] ?? 0;
+            $beUser->user['admin'] = 1;
+            try {
+                $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+
+                $newId = 'NEW' . uniqid();
+                $dataMap = [
+                    'sys_workspace' => [
+                        $newId => $workspaceData
+                    ]
+                ];
+
+                $dataHandler->start($dataMap, []);
+                $dataHandler->process_datamap();
+
+                $newUid = $dataHandler->substNEWwithIDs[$newId] ?? null;
+            } finally {
+                $beUser->user['admin'] = $previousAdminFlag;
+            }
+
             if ($newUid && !$dataHandler->errorLog) {
                 return (int)$newUid;
             }

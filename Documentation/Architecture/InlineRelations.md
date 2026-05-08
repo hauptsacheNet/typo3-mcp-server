@@ -25,9 +25,39 @@ $result = $readTool->execute([
 
 ### 2. Embedded/Dependent Inline Relations
 - Tables that only exist as children (e.g., `sys_file_reference`, `tx_news_domain_model_link`)
-- Have `hideTable = true` in TCA
+- Have `hideTable = true` in TCA **AND** are not listed in the `additionalStandaloneTables` extension setting
 - Displayed as full embedded records in read results
 - Should be created together with parent record
+
+### 3. Standalone Exposure of `hideTable` Children
+
+Some `hideTable=true` tables have inline structure that's too complex to be safely
+edited through the parent — for example translations independent of the parent's
+language, or rows whose visibility depends on permissions of a different table.
+For these, embedding makes the parent's update path either lossy (drops
+translations the LLM didn't echo back) or unsafe (replaces rows the LLM never
+intended to touch).
+
+The extension setting `additionalStandaloneTables` opts a `hideTable` table out
+of embedding. Such tables stay hidden in the TYPO3 backend list module (TCA is
+not modified), but the MCP tools treat them as ordinary independent tables:
+
+- `ListTables` shows them
+- `ReadTable` / `WriteTable` allow direct CRUD
+- The parent's inline field collapses to a list of child UIDs, just like for
+  any independent relation
+
+`sys_file_metadata` is on this list by default. It has `hideTable=true` plus
+its own `languageField`, while its parent `sys_file` is read-only and not
+language-aware — embedding made translations invisible and edits dangerous.
+Exposing it standalone gives the LLM normal `update` and `translate` semantics
+on title/alternative/description, while the read path on `sys_file` still
+yields `metadata: [<uid>, ...]` as a discovery hint.
+
+Mount restrictions on `sys_file` propagate transitively to
+`sys_file_metadata` via a subquery in `SysFileMetadataRestrictionListener` —
+non-admin users only see metadata for files they could read on `sys_file`.
+The same subquery filters orphaned metadata pointing at non-existent files.
 
 Example:
 ```php
@@ -107,10 +137,14 @@ $writeTool->execute([
 - **Solution**: After DataHandler creates child records, we directly update the foreign field in the database
 - **Working Example**: Creating news with embedded links now works correctly
 
-### 2. Restricted Tables
-- `sys_file_reference` is intentionally restricted in MCP tools because file references don't properly support workspaces
-- This is a deliberate limitation for now to ensure data integrity in workspace contexts
-- File uploads and media management require special handling outside of MCP tools
+### 2. File References (sys_file_reference)
+- `sys_file_reference` is fully supported as an embedded inline relation (`hideTable=true`)
+- It supports workspaces natively (`versioningWS=true` in TCA)
+- TCA `type=file` fields are expanded by `TcaPreparation` into inline relations with `foreign_table=sys_file_reference`
+- `foreign_match_fields` (`tablenames`, `fieldname`) ensure references are scoped to the correct parent field
+- File references are enriched with metadata from `sys_file` (filename, identifier, mime type, public URL)
+- `sys_file` itself is read-only - files are managed through the filesystem, not direct DB edits
+- File uploads are NOT supported - only referencing existing files via `uid_local`
 
 ### 3. Automatic Workspace Handling
 - Both ReadTableTool and WriteTableTool automatically initialize workspace context via `WorkspaceContextService`
@@ -165,7 +199,7 @@ $connection->update('child_table', ['parent_field' => $parentUid], ['uid' => $ch
 
 ## Future Improvements
 
-1. **File Reference Support**: Add special handling for sys_file_reference when workspace support improves
+1. **File Uploads**: Allow uploading new files and creating sys_file records (currently only existing files can be referenced)
 2. **Batch Operations**: Support for bulk inline relation updates
 3. **Position Management**: Full support for positioning inline records (before/after specific records)
 4. **Validation Enhancement**: More comprehensive validation for embedded record data

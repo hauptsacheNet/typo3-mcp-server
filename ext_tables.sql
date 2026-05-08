@@ -40,7 +40,8 @@ CREATE TABLE tx_mcpserver_access_tokens (
 	last_used int(11) unsigned DEFAULT '0' NOT NULL,
 	created_ip varchar(45) DEFAULT '' NOT NULL,
 	last_used_ip varchar(45) DEFAULT '' NOT NULL,
-	
+	token_version tinyint(1) DEFAULT '0' NOT NULL,
+
 	PRIMARY KEY (uid),
 	KEY parent (pid),
 	KEY token (token),

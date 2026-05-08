@@ -22,12 +22,14 @@ use Hn\McpServer\MCP\McpServerFactory;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Service\SiteInformationService;
+use Hn\McpServer\Http\CorsHeadersTrait;
 
 /**
  * MCP HTTP Endpoint for remote access
  */
 class McpEndpoint
 {
+    use CorsHeadersTrait;
     /**
      * eID entry point via __invoke method
      */
@@ -59,7 +61,7 @@ class McpEndpoint
 
             if (!$token) {
                 error_log("MCP: No token found in Authorization header or query params");
-                return $this->createUnauthorizedResponse('Missing authentication token');
+                return $this->createUnauthorizedResponse('Missing authentication token', $request);
             }
 
             // Log token for debugging (first 20 chars only for security)
@@ -70,7 +72,7 @@ class McpEndpoint
 
             if (!$tokenInfo) {
                 error_log("MCP: Token validation failed for: " . substr($token, 0, 20) . "...");
-                return $this->createUnauthorizedResponse('Invalid or expired token');
+                return $this->createUnauthorizedResponse('Invalid or expired token', $request);
             }
 
             error_log("MCP: Token validation successful for user: " . $tokenInfo['be_user_uid']);
@@ -180,6 +182,12 @@ class McpEndpoint
             return $matches[1];
         }
 
+        // Try REDIRECT_HTTP_AUTHORIZATION (Apache mod_rewrite/mod_auth_form strips and prefixes)
+        $redirectAuth = $serverParams['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+        if (!empty($redirectAuth) && preg_match('/Bearer\s+(.+)/', $redirectAuth, $matches)) {
+            return $matches[1];
+        }
+
         // Fallback to query parameter for backward compatibility
         $queryParams = $request->getQueryParams();
         return $queryParams['token'] ?? null;
@@ -188,7 +196,7 @@ class McpEndpoint
     /**
      * Create unauthorized response
      */
-    private function createUnauthorizedResponse(string $message): ResponseInterface
+    private function createUnauthorizedResponse(string $message, ?ServerRequestInterface $request = null): ResponseInterface
     {
         $stream = new Stream('php://temp', 'rw');
         $stream->write(json_encode([
@@ -197,11 +205,28 @@ class McpEndpoint
         ]));
         $stream->rewind();
 
-        return new Response(
+        // Build WWW-Authenticate header with resource_metadata URL (RFC 9728)
+        $wwwAuth = 'Bearer';
+        if ($request !== null) {
+            $uri = $request->getUri();
+            $baseUrl = $uri->getScheme() . '://' . $uri->getHost();
+            if ($uri->getPort() && $uri->getPort() !== 443 && $uri->getPort() !== 80) {
+                $baseUrl .= ':' . $uri->getPort();
+            }
+            $resourceMetadataUrl = $baseUrl . '/.well-known/oauth-protected-resource/mcp';
+            $wwwAuth = 'Bearer resource_metadata="' . $resourceMetadataUrl . '"';
+        }
+
+        $response = new Response(
             $stream,
             401,
-            ['Content-Type' => 'application/json']
+            [
+                'Content-Type' => 'application/json',
+                'WWW-Authenticate' => $wwwAuth,
+            ]
         );
+
+        return $this->addCorsHeaders($response, $request);
     }
 
     /**
@@ -226,6 +251,14 @@ class McpEndpoint
         if ($userData) {
             $beUser->user = $userData;
             $GLOBALS['BE_USER'] = $beUser;
+
+            // CRITICAL: Initialize an (anonymous) user session.
+            // Normal TYPO3 requests go through BackendUserAuthenticator middleware which wires
+            // up a real UserSession. Token auth bypasses that, so DataHandler write paths
+            // that touch $beUser->setAndSaveSessionData() (FlashMessageQueue, BackendFormProtection)
+            // crash with "Call to a member function set() on null" on UPDATE operations.
+            // An anonymous in-memory session is discarded at request end — sufficient for stateless MCP.
+            $beUser->initializeUserSessionManager();
 
             // CRITICAL: Fetch group data to populate permissions
             // This computes tables_select, tables_modify, non_exclude_fields, webmounts, etc.
@@ -297,12 +330,6 @@ class McpEndpoint
             $receivedAuthHeader = true;
         }
 
-        $response = GeneralUtility::makeInstance(Response::class)
-            ->withHeader('Content-Type', 'application/json; charset=utf-8')
-            ->withHeader('Access-Control-Allow-Origin', '*')
-            ->withHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-            ->withStatus(200);
-
         $responseData = [
             'test' => 'auth',
             'headers_received' => $headers,
@@ -314,6 +341,11 @@ class McpEndpoint
         $body = GeneralUtility::makeInstance(Stream::class, 'php://temp', 'rw');
         $body->write(json_encode($responseData, JSON_PRETTY_PRINT));
 
-        return $response->withBody($body);
+        $response = GeneralUtility::makeInstance(Response::class)
+            ->withHeader('Content-Type', 'application/json; charset=utf-8')
+            ->withStatus(200)
+            ->withBody($body);
+
+        return $this->addCorsHeaders($response, $request);
     }
 }

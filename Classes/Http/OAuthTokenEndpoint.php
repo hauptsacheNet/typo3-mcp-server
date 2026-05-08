@@ -22,13 +22,13 @@ class OAuthTokenEndpoint
     {
         // Handle preflight OPTIONS request
         if ($request->getMethod() === 'OPTIONS') {
-            return $this->handlePreflightRequest();
+            return $this->handlePreflightRequest($request);
         }
 
         try {
             // Only accept POST requests
             if ($request->getMethod() !== 'POST') {
-                return $this->createErrorResponse('invalid_request', 'Method not allowed', 405);
+                return $this->createErrorResponse($request, 'invalid_request', 'Method not allowed', 405);
             }
 
             $parsedBody = $request->getParsedBody() ?: [];
@@ -41,15 +41,15 @@ class OAuthTokenEndpoint
 
             // Validate required parameters
             if ($grantType !== 'authorization_code') {
-                return $this->createErrorResponse('unsupported_grant_type', 'Only authorization_code grant type is supported');
+                return $this->createErrorResponse($request, 'unsupported_grant_type', 'Only authorization_code grant type is supported');
             }
 
             if (empty($code)) {
-                return $this->createErrorResponse('invalid_request', 'Missing required parameter: code');
+                return $this->createErrorResponse($request, 'invalid_request', 'Missing required parameter: code');
             }
 
             if (empty($clientId) || $clientId !== 'typo3-mcp-server') {
-                return $this->createErrorResponse('invalid_client', 'Invalid client_id');
+                return $this->createErrorResponse($request, 'invalid_client', 'Invalid client_id');
             }
 
             // Exchange code for token
@@ -57,7 +57,7 @@ class OAuthTokenEndpoint
             $tokenData = $oauthService->exchangeCodeForToken($code, $codeVerifier, $request);
 
             if (!$tokenData) {
-                return $this->createErrorResponse('invalid_grant', 'Invalid or expired authorization code');
+                return $this->createErrorResponse($request, 'invalid_grant', 'Invalid or expired authorization code');
             }
 
             // Log successful token exchange for debugging
@@ -74,14 +74,14 @@ class OAuthTokenEndpoint
                 ['Content-Type' => 'application/json']
             );
             
-            return $this->addCorsHeaders($response);
+            return $this->addCorsHeaders($response, $request);
 
         } catch (\Throwable $e) {
-            return $this->createErrorResponse('server_error', $e->getMessage(), 500);
+            return $this->createErrorResponse($request, 'server_error', $e->getMessage(), 500);
         }
     }
 
-    private function createErrorResponse(string $error, string $description = '', int $statusCode = 400): ResponseInterface
+    private function createErrorResponse(ServerRequestInterface $request, string $error, string $description = '', int $statusCode = 400): ResponseInterface
     {
         $errorData = [
             'error' => $error,
@@ -98,6 +98,6 @@ class OAuthTokenEndpoint
             ['Content-Type' => 'application/json']
         );
         
-        return $this->addCorsHeaders($response);
+        return $this->addCorsHeaders($response, $request);
     }
 }
