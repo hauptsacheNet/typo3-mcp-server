@@ -243,7 +243,8 @@ class InvalidDataTest extends AbstractFunctionalTest
      */
     public function testCircularParentReference(): void
     {
-        // Try to set a page as its own parent
+        // Setting pid on update triggers a move; moving a page into itself
+        // must be rejected by DataHandler.
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
@@ -252,9 +253,9 @@ class InvalidDataTest extends AbstractFunctionalTest
                 'pid' => 1 // Self-reference
             ]
         ]);
-        
+
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('can only be set during record creation', $result->content[0]->text);
+        $this->assertStringContainsString('Error moving record', $result->content[0]->text);
     }
     
     /**

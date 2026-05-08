@@ -201,20 +201,6 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         $this->assertTrue($result->isError);
         $this->assertStringContainsString("Field 'uid' cannot be modified directly", $result->content[0]->text);
         
-        // Test 2: pid modification in update
-        $result = $this->tool->execute([
-            'action' => 'update',
-            'table' => 'pages',
-            'uid' => 1,
-            'data' => [
-                'pid' => 2, // Cannot modify pid in update
-                'title' => 'Test'
-            ]
-        ]);
-        
-        $this->assertTrue($result->isError);
-        $this->assertStringContainsString("Field 'pid' can only be set during record creation", $result->content[0]->text);
-        
         // Test 3: Invalid field value (exceeds max length)
         $longTitle = str_repeat('x', 300); // Title field typically has max length of 255
         $result = $this->tool->execute([

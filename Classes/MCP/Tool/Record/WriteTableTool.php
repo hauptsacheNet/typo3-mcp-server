@@ -69,7 +69,7 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'pid' => [
                         'type' => 'integer',
-                        'description' => 'Page ID for new records (required for "create" action)',
+                        'description' => 'Page ID. Required for "create" action (target page for the new record). On "update", set this to move the record to a different page (combine with "position" to control where on that page it lands).',
                     ],
                     'uid' => [
                         'type' => 'integer',
@@ -87,7 +87,8 @@ class WriteTableTool extends AbstractRecordTool
                             'Array order drives display order. ' .
                             'For text fields in update actions, instead of providing the full text, you can provide an array of search-and-replace operations: ' .
                             '[{"search": "old text", "replace": "new text"}]. Each operation can optionally include "replaceAll": true. ' .
-                            'Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true.',
+                            'Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true. ' .
+                            'On the "update" action, setting "pid" moves the record to that page (combine with "position" to control where on the new page it lands).',
                         'additionalProperties' => true,
                         'examples' => [
                             ['title' => 'News Title', 'bodytext' => 'News <b>content</b>', 'datetime' => '2024-01-01 10:00:00'],
@@ -153,7 +154,10 @@ class WriteTableTool extends AbstractRecordTool
                 ]);
             }
             $positionProvided = $position !== null;
-            if (empty($data) && !($action === 'update' && $positionProvided)) {
+            // On update, an empty data parameter is allowed when the caller is
+            // only changing position or moving the record to a new pid.
+            $isUpdateMoveOnly = $action === 'update' && ($positionProvided || $pid !== null);
+            if (empty($data) && !$isUpdateMoveOnly) {
                 throw new ValidationException([
                     "The data parameter must contain record fields for {$action} actions. " .
                     "Provide field names as keys, e.g. {\"title\": \"Page Title\", \"bodytext\": \"Content\"}."
@@ -208,7 +212,8 @@ class WriteTableTool extends AbstractRecordTool
                 }
 
                 $hasPosition = $position !== null;
-                if (empty($data) && empty($searchReplace) && !$hasPosition) {
+                $hasMove = $pid !== null || array_key_exists('pid', $data);
+                if (empty($data) && empty($searchReplace) && !$hasPosition && !$hasMove) {
                     throw new ValidationException(['Data is required for update action']);
                 }
                 break;
@@ -256,6 +261,12 @@ class WriteTableTool extends AbstractRecordTool
                 if (!empty($searchReplace)) {
                     $resolvedFields = $this->resolveSearchReplace($table, $uid, $searchReplace);
                     $data = array_merge($data, $resolvedFields);
+                }
+                // Top-level `pid` on update is treated the same as `data.pid`:
+                // a request to move the record to that page. LLMs are equally
+                // likely to put it at either spot.
+                if ($pid !== null && !array_key_exists('pid', $data)) {
+                    $data['pid'] = $pid;
                 }
                 return $this->updateRecord($table, $uid, $data, $position);
                 
@@ -528,7 +539,15 @@ class WriteTableTool extends AbstractRecordTool
         if ($validationResult !== true) {
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
-        
+
+        // Extract pid as a special field — it's not a TCA column, but setting it
+        // on update should move the record to the new page via DataHandler's cmdmap.
+        $targetPid = null;
+        if (array_key_exists('pid', $data)) {
+            $targetPid = (int)$data['pid'];
+            unset($data['pid']);
+        }
+
         // Extract inline relations before converting data
         $inlineRelations = $this->extractInlineRelations($table, $data);
         
@@ -542,18 +561,20 @@ class WriteTableTool extends AbstractRecordTool
         // Resolve the live UID to workspace UID (once, used throughout)
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
 
-        // First, update the parent record without inline relations
-        $dataMap = [$table => [$workspaceUid => $data]];
-        
-        // Update the record using DataHandler
-        $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
-        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
-        $dataHandler->start($dataMap, []);
-        $dataHandler->process_datamap();
-        
-        // Check for errors in parent update
-        if (!empty($dataHandler->errorLog)) {
-            return $this->createErrorResult('Error updating record: ' . implode(', ', $dataHandler->errorLog));
+        // Only run the field datamap if there are actual fields to write.
+        // A pid-only move with no field changes leaves $data empty, and
+        // calling DataHandler with an empty datamap is a no-op at best.
+        if (!empty($data)) {
+            $dataMap = [$table => [$workspaceUid => $data]];
+
+            $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+            $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+            $dataHandler->start($dataMap, []);
+            $dataHandler->process_datamap();
+
+            if (!empty($dataHandler->errorLog)) {
+                return $this->createErrorResult('Error updating record: ' . implode(', ', $dataHandler->errorLog));
+            }
         }
         
         // Now process inline relations with the resolved parent UID
@@ -619,9 +640,12 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         
-        // Handle position/reordering if requested
-        if ($position !== null) {
-            $moveResult = $this->moveRecord($table, $workspaceUid, $position);
+        // Handle pid change (move to another page) and/or position reordering.
+        // pid is a special TYPO3 control field; setting it on update means "move
+        // this record to that page". The position parameter (if given) refines
+        // where on the new page the record lands.
+        if ($targetPid !== null || $position !== null) {
+            $moveResult = $this->moveRecord($table, $workspaceUid, $position, $targetPid);
             if ($moveResult !== null) {
                 return $moveResult;
             }
@@ -670,11 +694,16 @@ class WriteTableTool extends AbstractRecordTool
     /**
      * Move a record to a new position using DataHandler's cmdmap.
      *
+     * @param string|null $position Position vocabulary: "top", "bottom",
+     *                              "before:UID", "after:UID". Null means
+     *                              "default placement on $targetPid" (top).
+     * @param int|null    $targetPid Destination page UID. Null means "stay on
+     *                               current page and just reorder".
      * @return CallToolResult|null Error result on failure, null on success
      */
-    protected function moveRecord(string $table, int $uid, string $position): ?CallToolResult
+    protected function moveRecord(string $table, int $uid, ?string $position, ?int $targetPid = null): ?CallToolResult
     {
-        $destination = $this->resolvePositionToDestination($table, $uid, $position);
+        $destination = $this->resolvePositionToDestination($table, $uid, $position, $targetPid);
         if ($destination === null) {
             return null;
         }
@@ -683,7 +712,15 @@ class WriteTableTool extends AbstractRecordTool
         $moveDataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $moveDataHandler->BE_USER = $GLOBALS['BE_USER'];
         $moveDataHandler->start([], $cmdMap);
-        $moveDataHandler->process_cmdmap();
+        try {
+            $moveDataHandler->process_cmdmap();
+        } catch (\Throwable $e) {
+            // DataHandler can raise RuntimeException for impossible moves
+            // (e.g. moving a page into itself). Surface the cause as a tool
+            // error rather than letting the global handler swallow it into a
+            // generic "Operation failed" message.
+            return $this->createErrorResult('Error moving record: ' . $e->getMessage());
+        }
 
         if (!empty($moveDataHandler->errorLog)) {
             return $this->createErrorResult('Error moving record: ' . implode(', ', $moveDataHandler->errorLog));
@@ -696,15 +733,30 @@ class WriteTableTool extends AbstractRecordTool
      * Convert a position string ("top", "bottom", "after:UID", "before:UID")
      * into a DataHandler move destination integer.
      *
+     * @param string|null $position Position vocabulary, or null for "default
+     *                              placement on $targetPid".
+     * @param int|null    $targetPid Override the page the move targets. When
+     *                               null, the record's current pid is used.
      * @return int|null Destination pid (positive=page, negative=after record), null if no move needed
      */
-    protected function resolvePositionToDestination(string $table, int $uid, string $position): ?int
+    protected function resolvePositionToDestination(string $table, int $uid, ?string $position, ?int $targetPid = null): ?int
     {
-        $record = BackendUtility::getRecord($table, $uid, 'pid');
-        if ($record === null) {
-            return null;
+        if ($targetPid !== null) {
+            $pid = $targetPid;
+        } else {
+            $record = BackendUtility::getRecord($table, $uid, 'pid');
+            if ($record === null) {
+                return null;
+            }
+            $pid = (int)$record['pid'];
         }
-        $pid = (int)$record['pid'];
+
+        // No position vocabulary given: a positive destination pid tells
+        // DataHandler "move to this page (at top)". This is the natural
+        // default for a pid-only move.
+        if ($position === null) {
+            return $pid;
+        }
 
         if ($position === 'bottom') {
             $sortingField = $this->tableAccessService->getSortingFieldName($table);
@@ -927,15 +979,19 @@ class WriteTableTool extends AbstractRecordTool
         if (isset($data['uid'])) {
             return "Field 'uid' cannot be modified directly";
         }
-        if (isset($data['pid']) && $action !== 'create') {
-            return "Field 'pid' can only be set during record creation";
-        }
+        // 'pid' is a special TYPO3 control field, not a TCA columns entry.
+        // On create it's passed as a separate argument; on update it triggers
+        // a move via DataHandler's cmdmap (handled by the caller). Either way
+        // it must skip the TCA columns check below.
 
         // Reject fields without a TCA columns entry. DataHandler silently drops
         // such fields on update/create (control-only fields like 'sorting' live in
         // TCA ctrl.sortby, not columns; typos have no entry at all), so returning
         // success without writing them would be a lying response.
         foreach (array_keys($data) as $fieldName) {
+            if ($fieldName === 'pid') {
+                continue;
+            }
             if (!$this->tableAccessService->getFieldConfig($table, $fieldName)) {
                 return "Field '{$fieldName}' does not exist in table '{$table}' and cannot be written";
             }
