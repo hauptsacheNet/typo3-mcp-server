@@ -49,12 +49,14 @@ While there are a lot of automated tests, and even some [LLM test](Tests/Llm/REA
 
 The [LLM test suite](Tests/Llm/README.md) runs every model below against the extension on every merge to `main`, and pushes the results to a public Google Sheet. Once the Sheet is deployed (see [Build/llm-stats-apps-script.gs](Build/llm-stats-apps-script.gs)), uncomment the block below and replace `SHEET_DEPLOY_ID` / `SHEET_PUBLIC_URL` to surface live shields.io badges that link to the run-by-run history.
 
-<!-- Tested-LLMs badges — uncomment and fill in after first deploy:
-[![haiku-4.5](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dhaiku-4.5&label=haiku-4.5)](SHEET_PUBLIC_URL)
-[![gpt-5.4-mini](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dgpt-5.4-mini&label=gpt-5.4-mini)](SHEET_PUBLIC_URL)
-[![gpt-oss-120b](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dgpt-oss-120b&label=gpt-oss-120b)](SHEET_PUBLIC_URL)
-[![mistral-large-2512](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dmistral-large-2512&label=mistral-large-2512)](SHEET_PUBLIC_URL)
-[![gemini-3-flash](https://img.shields.io/endpoint?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec%3Fmodel%3Dgemini-3-flash&label=gemini-3-flash)](SHEET_PUBLIC_URL)
+<!-- Tested-LLMs badges — uncomment and fill in after first deploy.
+     All badges hit one Apps Script JSON URL (cached by shields.io) and
+     pull each model's percentage via JSONPath. `&suffix=%25` adds the % sign.
+[![haiku-4.5](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec&query=%24.percentages%5B%22haiku-4.5%22%5D&suffix=%25&label=haiku-4.5)](SHEET_PUBLIC_URL)
+[![gpt-5.4-mini](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec&query=%24.percentages%5B%22gpt-5.4-mini%22%5D&suffix=%25&label=gpt-5.4-mini)](SHEET_PUBLIC_URL)
+[![gpt-oss-120b](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec&query=%24.percentages%5B%22gpt-oss-120b%22%5D&suffix=%25&label=gpt-oss-120b)](SHEET_PUBLIC_URL)
+[![mistral-large-2512](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec&query=%24.percentages%5B%22mistral-large-2512%22%5D&suffix=%25&label=mistral-large-2512)](SHEET_PUBLIC_URL)
+[![gemini-3-flash](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FSHEET_DEPLOY_ID%2Fexec&query=%24.percentages%5B%22gemini-3-flash%22%5D&suffix=%25&label=gemini-3-flash)](SHEET_PUBLIC_URL)
 -->
 
 ## Installation

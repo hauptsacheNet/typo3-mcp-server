@@ -97,9 +97,13 @@ function doGet(e) {
     run_url: lastRow[3],
     total,
     models: {},
+    percentages: {},
   };
   for (let i = BASE_HEADERS.length; i < headers.length; i++) {
-    if (lastRow[i] !== '') out.models[headers[i]] = Number(lastRow[i]);
+    if (lastRow[i] === '') continue;
+    const passed = Number(lastRow[i]);
+    out.models[headers[i]] = passed;
+    out.percentages[headers[i]] = total === 0 ? 0 : Math.round((passed / total) * 100);
   }
   return jsonResponse_(out);
 }
