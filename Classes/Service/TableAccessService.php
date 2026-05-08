@@ -734,20 +734,21 @@ class TableAccessService implements SingletonInterface
         // Check TSconfig field visibility (applies to all users including admins).
         // Resolve TSconfig at a real page id — page 0 has no rootline so it
         // misses TSconfig defined on sys_template / page records / site config.
+        // The record-type-specific TCEFORM (`types.<recordType>.disabled`) overrides the
+        // global one, which lets installations disable a field globally and re-enable it
+        // only for selected record types.
         $TSconfig = BackendUtility::getPagesTSconfig($this->resolveTSconfigPid($pid));
+        $fieldTSconfig = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.'] ?? [];
 
-        // Check if field is globally disabled via TCEFORM.[table].[field].disabled
-        $fieldDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['disabled'] ?? '';
-        if ($fieldDisabled === '1' || $fieldDisabled === 1 || $fieldDisabled === true) {
-            return false;
+        $fieldDisabled = '';
+        if ($type !== '' && isset($fieldTSconfig['types.'][$type . '.']['disabled'])) {
+            $fieldDisabled = $fieldTSconfig['types.'][$type . '.']['disabled'];
+        } elseif (isset($fieldTSconfig['disabled'])) {
+            $fieldDisabled = $fieldTSconfig['disabled'];
         }
 
-        // Check if field is disabled for specific type via TCEFORM.[table].[field].types.[type].disabled
-        if (!empty($type)) {
-            $typeDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['types.'][$type . '.']['disabled'] ?? '';
-            if ($typeDisabled === '1' || $typeDisabled === 1 || $typeDisabled === true) {
-                return false;
-            }
+        if ($fieldDisabled === '1' || $fieldDisabled === 1 || $fieldDisabled === true) {
+            return false;
         }
 
         return true;

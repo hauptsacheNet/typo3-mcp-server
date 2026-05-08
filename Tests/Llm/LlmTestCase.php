@@ -413,6 +413,25 @@ abstract class LlmTestCase extends FunctionalTestCase
     }
 
     /**
+     * Extract the target page id from a WriteTable tool call's arguments.
+     * The schema places `pid` inside `data` (it's a record column), but a
+     * legacy top-level `pid` is also accepted by the tool and might be
+     * emitted by older callers — accept either, preferring the canonical
+     * data location. Returns null when neither is set.
+     */
+    protected function extractWritePid(array $arguments): ?int
+    {
+        $data = $this->extractWriteData($arguments);
+        if (array_key_exists('pid', $data)) {
+            return (int)$data['pid'];
+        }
+        if (array_key_exists('pid', $arguments)) {
+            return (int)$arguments['pid'];
+        }
+        return null;
+    }
+
+    /**
      * Assert that the response follows one of the acceptable patterns
      *
      * @param LlmResponse $response
