@@ -78,14 +78,15 @@ class NewsTest extends LlmTestCase
             "Expected news record creation when asked for a news article");
 
         $acceptablePids = [8, 12, 30];
-        $this->assertContains($writeCall['arguments']['pid'], $acceptablePids,
-            "News articles should be created on Blog (8), Press (12), or in the storage folder (30)");
+        $data = $this->extractWriteData($writeCall['arguments']);
+        $newsPid = $this->extractWritePid($writeCall['arguments']);
+        $this->assertContains($newsPid, $acceptablePids,
+            "News articles should be created on Blog (8), Press (12), or in the storage folder (30). "
+            . "Got pid=" . var_export($newsPid, true) . ", arguments=" . json_encode($writeCall['arguments'], JSON_PRETTY_PRINT));
 
         $writeResult = $this->executeToolCall($writeCall);
         $this->assertFalse($writeResult['isError'] ?? false,
             'WriteTable failed: ' . $writeResult['content']);
-
-        $data = $this->extractWriteData($writeCall['arguments']);
 
         $allContent = ($data['title'] ?? '') . ' ' .
                      ($data['teaser'] ?? '') . ' ' .
@@ -139,8 +140,10 @@ class NewsTest extends LlmTestCase
             "\nAll WriteTable calls: " . json_encode(array_map(fn($c) => $c['arguments']['table'] ?? 'unknown', $writeCalls)));
         $this->assertEquals('create', $newsWriteCall['arguments']['action']);
         $acceptablePids = [8, 12, 30];
-        $this->assertContains($newsWriteCall['arguments']['pid'], $acceptablePids,
-            "News articles should be created on Blog (8), Press (12), or in the storage folder (30)");
+        $newsPid = $this->extractWritePid($newsWriteCall['arguments']);
+        $this->assertContains($newsPid, $acceptablePids,
+            "News articles should be created on Blog (8), Press (12), or in the storage folder (30). "
+            . "Got pid=" . var_export($newsPid, true) . ", arguments=" . json_encode($newsWriteCall['arguments'], JSON_PRETTY_PRINT));
 
         $writeResult = $this->executeToolCall($newsWriteCall);
         $this->assertFalse($writeResult['isError'] ?? false,
@@ -203,8 +206,10 @@ class NewsTest extends LlmTestCase
             "\nAll WriteTable calls: " . json_encode(array_map(fn($c) => $c['arguments']['table'] ?? 'unknown', $writeCalls)));
         $this->assertEquals('create', $newsWriteCall['arguments']['action']);
         $acceptablePids = [8, 12, 30];
-        $this->assertContains($newsWriteCall['arguments']['pid'], $acceptablePids,
-            "News articles should be created on Blog (8), Press (12), or in the storage folder (30)");
+        $newsPid = $this->extractWritePid($newsWriteCall['arguments']);
+        $this->assertContains($newsPid, $acceptablePids,
+            "News articles should be created on Blog (8), Press (12), or in the storage folder (30). "
+            . "Got pid=" . var_export($newsPid, true) . ", arguments=" . json_encode($newsWriteCall['arguments'], JSON_PRETTY_PRINT));
 
         $writeResult = $this->executeToolCall($newsWriteCall);
         $this->assertFalse($writeResult['isError'] ?? false,
