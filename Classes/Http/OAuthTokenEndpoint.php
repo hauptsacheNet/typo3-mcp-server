@@ -59,8 +59,9 @@ class OAuthTokenEndpoint
                 return $this->createErrorResponse($request, 'invalid_client', 'Invalid client_secret');
             }
 
-            // Exchange code for token (also enforces redirect_uri match per RFC 6749 §4.1.3)
-            $tokenData = $oauthService->exchangeCodeForToken($code, $codeVerifier, $request, $redirectUri);
+            // Exchange code for token (also enforces redirect_uri match per RFC 6749 §4.1.3
+            // and code-to-client binding per RFC 6749 §10.5)
+            $tokenData = $oauthService->exchangeCodeForToken($code, $codeVerifier, $request, $redirectUri, $client['client_id']);
 
             if (!$tokenData) {
                 return $this->createErrorResponse($request, 'invalid_grant', 'Invalid or expired authorization code');

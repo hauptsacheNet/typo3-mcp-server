@@ -228,4 +228,68 @@ class OAuthClientRegistrationTest extends AbstractFunctionalTest
         $result = $this->service->exchangeCodeForToken($code);
         $this->assertNotNull($result);
     }
+
+    public function testCodeIsBoundToIssuingClient(): void
+    {
+        // RFC 6749 §10.5: a code issued to client A must not be redeemable by client B,
+        // even if both are valid registered clients with no secret (PKCE not used here).
+        $clientA = $this->service->registerClient([
+            'client_name' => 'Client A',
+            'redirect_uris' => ['http://localhost'],
+        ]);
+        $clientB = $this->service->registerClient([
+            'client_name' => 'Client B',
+            'redirect_uris' => ['http://localhost'],
+        ]);
+
+        $code = $this->service->createAuthorizationCode(
+            1,
+            'Client A',
+            '',
+            '',
+            'S256',
+            $clientA['client_id']
+        );
+
+        // Wrong client id must fail
+        $this->assertNull(
+            $this->service->exchangeCodeForToken($code, null, null, null, $clientB['client_id']),
+            'Code issued to client A must not be redeemable by client B'
+        );
+        // Missing client id must fail when one was bound
+        $this->assertNull(
+            $this->service->exchangeCodeForToken($code, null, null, null, null),
+            'Bound code must require the client_id at exchange'
+        );
+        // Correct client id succeeds (and the code is then consumed)
+        $result = $this->service->exchangeCodeForToken($code, null, null, null, $clientA['client_id']);
+        $this->assertNotNull($result);
+        $this->assertArrayHasKey('access_token', $result);
+    }
+
+    public function testLoopbackMatcherRejectsDifferingQueryString(): void
+    {
+        $registered = $this->service->registerClient([
+            'redirect_uris' => ['http://localhost/cb?x=1'],
+        ]);
+        $client = $this->service->getClient($registered['client_id']);
+
+        // Same query is fine (with port wildcarding)
+        $this->assertTrue($this->service->isRedirectUriAllowed($client, 'http://localhost:6274/cb?x=1'));
+        // Different query value must NOT match
+        $this->assertFalse($this->service->isRedirectUriAllowed($client, 'http://localhost:6274/cb?x=attacker'));
+        // Missing query when one is registered must NOT match
+        $this->assertFalse($this->service->isRedirectUriAllowed($client, 'http://localhost:6274/cb'));
+    }
+
+    public function testLoopbackMatcherRejectsDifferingFragment(): void
+    {
+        $registered = $this->service->registerClient([
+            'redirect_uris' => ['http://localhost/cb#a'],
+        ]);
+        $client = $this->service->getClient($registered['client_id']);
+
+        $this->assertTrue($this->service->isRedirectUriAllowed($client, 'http://localhost:6274/cb#a'));
+        $this->assertFalse($this->service->isRedirectUriAllowed($client, 'http://localhost:6274/cb#b'));
+    }
 }

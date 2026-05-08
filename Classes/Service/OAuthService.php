@@ -47,9 +47,14 @@ class OAuthService
     }
 
     /**
-     * Create authorization code for authenticated user
+     * Create authorization code for authenticated user.
+     *
+     * The $clientId binds the issued code to the registered OAuth client per
+     * RFC 6749 §10.5; the token endpoint must reject any redemption by a
+     * different client. $clientName is the free-text display label kept for
+     * audit on the access token.
      */
-    public function createAuthorizationCode(int $beUserId, string $clientName, string $redirectUri = '', string $pkceChallenge = '', string $challengeMethod = 'S256'): string
+    public function createAuthorizationCode(int $beUserId, string $clientName, string $redirectUri = '', string $pkceChallenge = '', string $challengeMethod = 'S256', string $clientId = ''): string
     {
         $code = $this->generateSecureToken();
         $expires = time() + self::CODE_EXPIRY_SECONDS;
@@ -65,6 +70,7 @@ class OAuthService
                 'crdate' => time(),
                 'code' => $code,
                 'be_user_uid' => $beUserId,
+                'client_id' => $clientId,
                 'client_name' => $clientName,
                 'pkce_challenge' => $pkceChallenge,
                 'pkce_challenge_method' => $challengeMethod,
@@ -77,9 +83,14 @@ class OAuthService
     }
 
     /**
-     * Exchange authorization code for access token
+     * Exchange authorization code for access token.
+     *
+     * If $clientId is provided and the code was issued to a specific client,
+     * the two MUST match (RFC 6749 §10.5). A code without a stored client_id
+     * (legacy data from before code-to-client binding was introduced) is
+     * accepted regardless — those expire within {@see self::CODE_EXPIRY_SECONDS}.
      */
-    public function exchangeCodeForToken(string $code, ?string $codeVerifier = null, ?ServerRequestInterface $request = null, ?string $redirectUri = null): ?array
+    public function exchangeCodeForToken(string $code, ?string $codeVerifier = null, ?ServerRequestInterface $request = null, ?string $redirectUri = null, ?string $clientId = null): ?array
     {
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('tx_mcpserver_oauth_codes');
@@ -98,6 +109,15 @@ class OAuthService
 
         if (!$authCode) {
             return null;
+        }
+
+        // RFC 6749 §10.5: a code issued to one client must not be redeemable
+        // by a different client. Empty stored client_id means the code pre-dates
+        // binding (during the upgrade window) and is accepted.
+        if (!empty($authCode['client_id'])) {
+            if ($clientId === null || $clientId !== $authCode['client_id']) {
+                return null;
+            }
         }
 
         // RFC 6749 §4.1.3: if a redirect_uri was used in the auth request, the token
@@ -534,6 +554,14 @@ class OAuthService
             return false;
         }
         if (($reg['path'] ?? '') !== ($req['path'] ?? '')) {
+            return false;
+        }
+        // RFC 8252 §7.3 only relaxes the port; query and fragment must still match
+        // exactly so an attacker cannot pass arbitrary parameters via the redirect.
+        if (($reg['query'] ?? '') !== ($req['query'] ?? '')) {
+            return false;
+        }
+        if (($reg['fragment'] ?? '') !== ($req['fragment'] ?? '')) {
             return false;
         }
         return true;

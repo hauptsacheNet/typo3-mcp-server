@@ -186,7 +186,8 @@ class OAuthAuthorizeEndpoint
             $clientName,
             $redirectUri,
             $pkceChallenge,
-            $challengeMethod
+            $challengeMethod,
+            $client['client_id']
         );
 
         // If redirect_uri is provided, redirect there with the code

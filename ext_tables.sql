@@ -10,6 +10,7 @@ CREATE TABLE tx_mcpserver_oauth_codes (
 	
 	code varchar(255) DEFAULT '' NOT NULL,
 	be_user_uid int(11) unsigned DEFAULT '0' NOT NULL,
+	client_id varchar(255) DEFAULT '' NOT NULL,
 	client_name varchar(255) DEFAULT '' NOT NULL,
 	pkce_challenge varchar(255) DEFAULT '' NOT NULL,
 	pkce_challenge_method varchar(10) DEFAULT 'S256' NOT NULL,
