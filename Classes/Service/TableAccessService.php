@@ -691,32 +691,22 @@ class TableAccessService implements SingletonInterface
             }
         }
 
-        // Check TSconfig field visibility (applies to all users including admins)
+        // Check TSconfig field visibility (applies to all users including admins).
+        // The record-type-specific TCEFORM (`types.<recordType>.disabled`) overrides the
+        // global one, which lets installations disable a field globally and re-enable it
+        // only for selected record types.
         $TSconfig = BackendUtility::getPagesTSconfig(0);
+        $fieldTSconfig = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.'] ?? [];
 
-        // Check if field is explicitly enabled or disabled via TCEFORM.[table].[field].types.[type].disabled
-        if (isset($TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['types.'][$fieldType . '.']['disabled'])) {
-            $fieldDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['types.'][$fieldType . '.']['disabled'] ?? '';
-            if ($fieldDisabled === '1' || $fieldDisabled === 1 || $fieldDisabled === true) {
-                return false;
-            }
-            if ($fieldDisabled === '0' || $fieldDisabled === 0   || $fieldDisabled === false) {
-                return true;
-            }
+        $fieldDisabled = '';
+        if ($type !== '' && isset($fieldTSconfig['types.'][$type . '.']['disabled'])) {
+            $fieldDisabled = $fieldTSconfig['types.'][$type . '.']['disabled'];
+        } elseif (isset($fieldTSconfig['disabled'])) {
+            $fieldDisabled = $fieldTSconfig['disabled'];
         }
-        
-        // Check if field is globally disabled via TCEFORM.[table].[field].disabled
-        $fieldDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['disabled'] ?? '';
+
         if ($fieldDisabled === '1' || $fieldDisabled === 1 || $fieldDisabled === true) {
             return false;
-        }
-
-        // Check if field is disabled for specific type via TCEFORM.[table].[field].types.[type].disabled
-        if (!empty($type)) {
-            $typeDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['types.'][$type . '.']['disabled'] ?? '';
-            if ($typeDisabled === '1' || $typeDisabled === 1 || $typeDisabled === true) {
-                return false;
-            }
         }
 
         return true;
