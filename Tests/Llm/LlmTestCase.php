@@ -167,20 +167,25 @@ abstract class LlmTestCase extends FunctionalTestCase
     }
 
     /**
-     * Print one greppable line per failed attempt so silent retries become
-     * visible in CI logs. Without this, a test that flakes on attempt 1 and
-     * passes on attempt 2 reports as a clean pass — masking both the runtime
-     * cost and the underlying flakiness.
+     * Append one greppable line per failed attempt to .Build/llm-retries.log so
+     * silent retries become visible in CI artifacts. Without this, a test that
+     * flakes on attempt 1 and passes on attempt 2 reports as a clean pass —
+     * masking both the runtime cost and the underlying flakiness.
+     *
+     * Writing to a file (not STDERR) because paratest worker subprocesses do
+     * not forward STDERR to the parent run's output.
      */
     private function logAttemptFailure(int $attempt, int $maxRetries, \Throwable $e, bool $retrying): void
     {
         $modelKey = array_search($this->llmModel, static::MODELS, true);
         $modelLabel = $modelKey !== false ? (string)$modelKey : $this->llmModel;
         $shortClass = preg_replace('/^.*\\\\/', '', static::class);
-        $message = preg_replace('/\s+/', ' ', mb_substr($e->getMessage(), 0, 240));
+        $message = preg_replace('/\s+/', ' ', mb_substr($e->getMessage(), 0, 320));
         $tag = $retrying ? 'LLM-RETRY' : 'LLM-FAIL';
-        fwrite(STDERR, sprintf(
-            "\n[%s %d/%d] %s::%s#%s — %s\n",
+
+        $line = sprintf(
+            "[%s] [%s %d/%d] %s::%s#%s — %s\n",
+            date('H:i:s'),
             $tag,
             $attempt,
             $maxRetries,
@@ -188,7 +193,13 @@ abstract class LlmTestCase extends FunctionalTestCase
             $this->name(),
             $modelLabel,
             $message
-        ));
+        );
+
+        $dir = __DIR__ . '/../../.Build';
+        if (!is_dir($dir) && !@mkdir($dir, 0777, true) && !is_dir($dir)) {
+            return;
+        }
+        @file_put_contents($dir . '/llm-retries.log', $line, FILE_APPEND | LOCK_EX);
     }
 
     /**

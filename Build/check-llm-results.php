@@ -121,6 +121,29 @@ function formatStats(?array $stats): string
 $degraded = [];
 $allPassed = true;
 
+// Surface retry activity so silent flakiness becomes visible in CI logs.
+// The retry log is appended by LlmTestCase::logAttemptFailure() on every
+// failed attempt; without this section it's only readable as a CI artifact.
+$retryLog = __DIR__ . '/../.Build/llm-retries.log';
+if (file_exists($retryLog) && filesize($retryLog) > 0) {
+    $lines = array_filter(explode("\n", (string)file_get_contents($retryLog)));
+    $retryCount = 0;
+    $failCount = 0;
+    foreach ($lines as $line) {
+        if (str_contains($line, 'LLM-RETRY')) {
+            $retryCount++;
+        } elseif (str_contains($line, 'LLM-FAIL')) {
+            $failCount++;
+        }
+    }
+    echo "\033[33mRetry activity\033[0m (" . count($lines) . " events: $retryCount retries, $failCount final failures)\n";
+    echo str_repeat('-', 80) . "\n";
+    foreach ($lines as $line) {
+        echo $line . "\n";
+    }
+    echo "\n";
+}
+
 echo "LLM Test Results — Majority Pass Rule (min $minPass/" . count($testCases ? reset($testCases)['models'] : []) . " models)\n";
 echo str_repeat('=', 80) . "\n\n";
 
