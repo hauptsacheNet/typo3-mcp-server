@@ -12,6 +12,7 @@ use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Schema\Capability\TcaSchemaCapability;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
+use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -27,6 +28,7 @@ class TableAccessService implements SingletonInterface
     protected TcaSchemaFactory $tcaSchemaFactory;
     protected ?array $additionalReadOnlyTables = null;
     protected ?array $additionalStandaloneTables = null;
+    protected ?int $cachedDefaultTSconfigPid = null;
 
     public function __construct()
     {
@@ -268,12 +270,13 @@ class TableAccessService implements SingletonInterface
     
     /**
      * Get available fields for a table and type
-     * 
+     *
      * @param string $table Table name
      * @param string $type Record type (optional)
+     * @param int|null $pid Page id for TSconfig-based field visibility (null → first site root)
      * @return array Field configuration
      */
-    public function getAvailableFields(string $table, string $type = ''): array
+    public function getAvailableFields(string $table, string $type = '', ?int $pid = null): array
     {
         $this->validateTableAccess($table);
 
@@ -352,7 +355,7 @@ class TableAccessService implements SingletonInterface
 
         // Apply field-level access restrictions
         foreach ($fields as $fieldName => $fieldConfig) {
-            if (!$this->canAccessField($table, $fieldName, $type)) {
+            if (!$this->canAccessField($table, $fieldName, $type, $pid)) {
                 unset($fields[$fieldName]);
             }
         }
@@ -661,14 +664,51 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
+     * Resolve a representative page id for TSconfig lookups.
+     *
+     * TYPO3 page TSconfig is merged along the rootline. Calling
+     * BackendUtility::getPagesTSconfig(0) yields an empty rootline and silently
+     * skips TSconfig defined on actual pages (sys_template, page properties,
+     * site config). When callers don't know which page they're operating on,
+     * fall back to the first configured site's root page so project-wide
+     * TSconfig is still applied. Caches the resolved id on the instance to
+     * avoid repeated SiteFinder lookups within a request.
+     */
+    public function resolveTSconfigPid(?int $pid = null): int
+    {
+        if ($pid !== null && $pid > 0) {
+            return $pid;
+        }
+        if ($this->cachedDefaultTSconfigPid !== null) {
+            return $this->cachedDefaultTSconfigPid;
+        }
+        $resolved = 0;
+        try {
+            $siteFinder = GeneralUtility::makeInstance(SiteFinder::class);
+            foreach ($siteFinder->getAllSites() as $site) {
+                $rootPageId = $site->getRootPageId();
+                if ($rootPageId > 0) {
+                    $resolved = $rootPageId;
+                    break;
+                }
+            }
+        } catch (\Throwable) {
+            // No sites configured — fall back to 0.
+        }
+        $this->cachedDefaultTSconfigPid = $resolved;
+        return $resolved;
+    }
+
+    /**
      * Check if a specific field can be accessed
      *
      * @param string $table Table name
      * @param string $fieldName Field name
      * @param string $type Record type (optional, for type-specific TSconfig)
+     * @param int|null $pid Page id for TSconfig context (null → first site root)
      * @return bool
      */
-    public function canAccessField(string $table, string $fieldName, string $type = ''): bool
+    public function canAccessField(string $table, string $fieldName, string $type = '', ?int $pid = null): bool
     {
         $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
 
@@ -691,8 +731,10 @@ class TableAccessService implements SingletonInterface
             }
         }
 
-        // Check TSconfig field visibility (applies to all users including admins)
-        $TSconfig = BackendUtility::getPagesTSconfig(0);
+        // Check TSconfig field visibility (applies to all users including admins).
+        // Resolve TSconfig at a real page id — page 0 has no rootline so it
+        // misses TSconfig defined on sys_template / page records / site config.
+        $TSconfig = BackendUtility::getPagesTSconfig($this->resolveTSconfigPid($pid));
 
         // Check if field is globally disabled via TCEFORM.[table].[field].disabled
         $fieldDisabled = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.']['disabled'] ?? '';
@@ -1003,8 +1045,11 @@ class TableAccessService implements SingletonInterface
     
     /**
      * Get available types for a table
+     *
+     * @param string $table Table name
+     * @param int|null $pid Page id for TSconfig context (null → first site root)
      */
-    public function getAvailableTypes(string $table): array
+    public function getAvailableTypes(string $table, ?int $pid = null): array
     {
         $typeField = $this->getTypeFieldName($table);
         if (!$typeField) {
@@ -1018,17 +1063,45 @@ class TableAccessService implements SingletonInterface
         }
 
         $typeConfig = $GLOBALS['TCA'][$table]['columns'][$typeField]['config'] ?? [];
-        $items = $typeConfig['items'] ?? [];
-        
-        // Use the shared parseSelectItems method
-        $parsed = $this->parseSelectItems($items);
-        
-        // Convert to the expected format (value => label)
-        $types = [];
-        foreach ($parsed['values'] as $value) {
-            $types[$value] = $parsed['labels'][$value] ?? $value;
+
+        // Prefer TYPO3's full FormDataCompiler pipeline so TSconfig
+        // addItems / removeItems / keepItems and itemsProcFunc all run. This
+        // requires a real pid to build a rootline from — fall back to the
+        // first site's root page when no context was supplied.
+        $resolverPid = $this->resolveTSconfigPid($pid);
+        $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
+        $resolved = $resolver->resolveSelectItems($table, $typeField, ['pid' => $resolverPid]);
+
+        if ($resolved !== null && !empty($resolved['values'])) {
+            $types = [];
+            foreach ($resolved['values'] as $value) {
+                $types[$value] = $resolved['labels'][$value] ?? $value;
+            }
+        } else {
+            // Fallback: static TCA items only (used when FormDataCompiler fails,
+            // e.g. tables not registered with the Form Engine).
+            $items = $typeConfig['items'] ?? [];
+            $parsed = $this->parseSelectItems($items);
+            $types = [];
+            foreach ($parsed['values'] as $value) {
+                $types[$value] = $parsed['labels'][$value] ?? $value;
+            }
         }
-        
+
+        // tt_content also honours TCEMAIN.table.tt_content.disableCTypes,
+        // which the New Content Element Wizard reads but FormDataCompiler
+        // does not apply. Filter it here so the schema matches what the
+        // wizard would show.
+        if ($table === 'tt_content' && $typeField === 'CType') {
+            $TSconfig = BackendUtility::getPagesTSconfig($resolverPid);
+            $disableCTypes = $TSconfig['TCEMAIN.']['table.']['tt_content.']['disableCTypes'] ?? '';
+            if (!empty($disableCTypes)) {
+                foreach (GeneralUtility::trimExplode(',', $disableCTypes, true) as $disabled) {
+                    unset($types[$disabled]);
+                }
+            }
+        }
+
         return $types;
     }
     

@@ -6,7 +6,6 @@ namespace Hn\McpServer\MCP\Tool\Record;
 
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
-use TYPO3\CMS\Backend\Utility\BackendUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
 use Hn\McpServer\Service\TableAccessService;
 
@@ -41,6 +40,12 @@ class GetTableSchemaTool extends AbstractRecordTool
                             'If omitted, shows fields for the first available type and lists all available types. ' .
                             'Call again with a different type to see its fields. Types may be filtered by backend TSconfig (some types hidden from the list).',
                     ],
+                    'pid' => [
+                        'type' => 'integer',
+                        'description' => 'Page ID to resolve TSconfig context against. Different pages may allow different record types ' .
+                            'or hide different fields based on page TSconfig. Pass the page where the record will live to get an accurate schema. ' .
+                            'If omitted, the first configured site\'s root page is used so project-wide TSconfig is still applied.',
+                    ],
                 ],
                 'required' => ['table'],
             ],
@@ -57,24 +62,25 @@ class GetTableSchemaTool extends AbstractRecordTool
     protected function doExecute(array $params): CallToolResult
     {
         $table = $params['table'] ?? '';
-        
+
         if (empty($table)) {
             throw new \InvalidArgumentException('Table parameter is required');
         }
-        
+
         // Validate table access using TableAccessService
         $this->ensureTableAccess($table, 'read');
-        
+
         $filterType = $params['type'] ?? '';
-        
-        $result = $this->generateTableSchema($table, $filterType);
+        $pid = isset($params['pid']) ? (int)$params['pid'] : null;
+
+        $result = $this->generateTableSchema($table, $filterType, $pid);
         return $this->createSuccessResult($result);
     }
-    
+
     /**
      * Generate a table schema as text
      */
-    protected function generateTableSchema(string $table, string $filterType = ''): string
+    protected function generateTableSchema(string $table, string $filterType = '', ?int $pid = null): string
     {
         $result = "";
         
@@ -118,24 +124,17 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         $result .= "\n\n";
         
-        // Get the type field using TableAccessService
-        $typeField = $this->tableAccessService->getTypeFieldName($table);
-        $excludeTypes = !empty($typeField) ? $this->getRemovedTypesByTSconfig($table, $typeField) : [];
-        
-        // Get available types using TableAccessService
-        $types = $this->tableAccessService->getAvailableTypes($table);
-        
-        // Apply label translations and exclusions
+        // Get available types using TableAccessService. The service runs the
+        // FormDataCompiler pipeline internally so TCEFORM removeItems / addItems
+        // and TCEMAIN.disableCTypes are already applied at the resolved pid.
+        $types = $this->tableAccessService->getAvailableTypes($table, $pid);
+
+        // Apply label translations
         $processedTypes = [];
         foreach ($types as $value => $label) {
-            // Skip excluded types
-            if (in_array($value, $excludeTypes)) {
-                continue;
-            }
-            
             $processedTypes[$value] = TableAccessService::translateLabel($label);
         }
-        
+
         $types = $processedTypes;
         
         // If no types are available after filtering, show an error
@@ -185,8 +184,10 @@ class GetTableSchemaTool extends AbstractRecordTool
         $result .= "FIELDS:\n";
         $result .= "-------\n";
         
-        // Get available fields using TableAccessService (includes access control)
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $filterType);
+        // Get available fields using TableAccessService (includes access control).
+        // Pass the pid so TCEFORM.[table].[field].disabled is resolved at the
+        // correct page context.
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $filterType, $pid);
         
         if (empty($availableFields)) {
             $result .= "No accessible fields defined for this type.\n";
@@ -293,7 +294,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                             $tabContent .= "    " . $prefix . $paletteFieldName . " (" . $fieldLabel . "): " . $fieldType;
 
                             // Add field details inline
-                            $this->addFieldDetailsInline($tabContent, $fieldConfig, $paletteFieldName, $table, $filterType);
+                            $this->addFieldDetailsInline($tabContent, $fieldConfig, $paletteFieldName, $table, $filterType, $pid);
                             $tabContent .= "\n";
                         }
                     }
@@ -312,7 +313,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                         $tabContent .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
 
                         // Add field details inline
-                        $this->addFieldDetailsInline($tabContent, $fieldConfig, $fieldName, $table, $filterType);
+                        $this->addFieldDetailsInline($tabContent, $fieldConfig, $fieldName, $table, $filterType, $pid);
                         $tabContent .= "\n";
                     }
                 }
@@ -359,7 +360,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                 $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
 
                 // Add field details inline
-                $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType);
+                $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType, $pid);
                 $result .= "\n";
             }
         }
@@ -383,7 +384,7 @@ class GetTableSchemaTool extends AbstractRecordTool
     /**
      * Add field details inline
      */
-    protected function addFieldDetailsInline(string &$result, array $fieldConfig, string $fieldName, string $table, string $filterType = ''): void
+    protected function addFieldDetailsInline(string &$result, array $fieldConfig, string $fieldName, string $table, string $filterType = '', ?int $pid = null): void
     {
         // Handle both flattened (from TcaSchemaFactory) and nested (traditional TCA) structures
         $config = $fieldConfig['config'] ?? $fieldConfig;
@@ -395,7 +396,7 @@ class GetTableSchemaTool extends AbstractRecordTool
             $this->addFlexFormIdentifiers($result, $config, $table, $fieldName, $filterType);
         } else {
             // For other field types, use the TcaFormattingUtility
-            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName, $table);
+            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName, $table, $pid);
         }
     }
     
@@ -457,37 +458,4 @@ class GetTableSchemaTool extends AbstractRecordTool
     }
     
     
-    /**
-     * Get types that are removed by TSconfig
-     * This uses the same logic as TcaSelectItems to determine which types are restricted
-     */
-    protected function getRemovedTypesByTSconfig(string $table, string $typeField): array
-    {
-        if (empty($table) || empty($typeField)) {
-            return [];
-        }
-        
-        $removedTypes = [];
-        
-        // Get TSconfig for the current page
-        $TSconfig = BackendUtility::getPagesTSconfig(0);
-        
-        // Check TCEFORM.[table].[field].removeItems
-        $fieldTSconfig = $TSconfig['TCEFORM.'][$table . '.'][$typeField . '.']['removeItems'] ?? '';
-        if (!empty($fieldTSconfig)) {
-            $removedTypes = GeneralUtility::trimExplode(',', $fieldTSconfig, true);
-        }
-        
-        // For tt_content, also check TCEMAIN.table.tt_content.disableCTypes
-        if ($table === 'tt_content' && $typeField === 'CType') {
-            $disableCTypes = $TSconfig['TCEMAIN.']['table.']['tt_content.']['disableCTypes'] ?? '';
-            if (!empty($disableCTypes)) {
-                $disabledTypes = GeneralUtility::trimExplode(',', $disableCTypes, true);
-                $removedTypes = array_merge($removedTypes, $disabledTypes);
-            }
-        }
-        
-        return $removedTypes;
-    }
-
 }

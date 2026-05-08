@@ -949,6 +949,30 @@ class WriteTableTool extends AbstractRecordTool
             $mergedRecord = array_merge($data, ['pid' => $pid]);
         }
 
+        // Effective pid for TSconfig context (page where the record will live)
+        $effectivePid = isset($mergedRecord['pid']) ? (int)$mergedRecord['pid'] : 0;
+        if ($effectivePid < 0) {
+            // Negative pid in DataHandler datamap means "after this record uid";
+            // resolve to the referenced record's actual page id.
+            $refRecord = BackendUtility::getRecord($table, abs($effectivePid), 'pid');
+            $effectivePid = $refRecord['pid'] ?? 0;
+        }
+
+        // tt_content additionally honours TCEMAIN.table.tt_content.disableCTypes.
+        // FormDataCompiler doesn't apply this — it's used by the New Content
+        // Element Wizard — so reject those values explicitly so the LLM gets a
+        // clear error instead of a silent success.
+        if ($table === 'tt_content' && isset($data['CType'])) {
+            $TSconfig = BackendUtility::getPagesTSconfig($this->tableAccessService->resolveTSconfigPid($effectivePid));
+            $disableCTypes = $TSconfig['TCEMAIN.']['table.']['tt_content.']['disableCTypes'] ?? '';
+            if (!empty($disableCTypes)) {
+                $disabled = GeneralUtility::trimExplode(',', $disableCTypes, true);
+                if (in_array((string)$data['CType'], $disabled, true)) {
+                    return "Field 'CType' value '{$data['CType']}' is disabled by TCEMAIN.table.tt_content.disableCTypes for this page";
+                }
+            }
+        }
+
         // Validate and convert field values
         foreach ($data as $fieldName => $value) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
@@ -957,7 +981,7 @@ class WriteTableTool extends AbstractRecordTool
             }
 
             // Check if field is accessible (filters out inaccessible inline relations)
-            if (!$this->tableAccessService->canAccessField($table, $fieldName)) {
+            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $effectivePid)) {
                 return "Field '{$fieldName}' is not accessible";
             }
 
@@ -1024,7 +1048,7 @@ class WriteTableTool extends AbstractRecordTool
         }
         
         // Get available fields for this record type
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType, $effectivePid);
         
         // The type field itself should always be available if it exists
         if ($typeField) {
