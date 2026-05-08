@@ -8,6 +8,7 @@ use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Service\SelectItemResolver;
 use Hn\McpServer\Service\TableAccessService;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
@@ -28,15 +29,6 @@ class DynamicSelectItemsTest extends FunctionalTestCase
         'typo3conf/ext/mcp_server',
     ];
 
-    protected array $configurationToUseInTestInstance = [
-        'BE' => [
-            'defaultPageTSconfig' => '
-                TCEFORM.tt_content.colPos.addItems.20 = Custom Column
-                TCEFORM.tt_content.colPos.addItems.30 = Another Column
-            ',
-        ],
-    ];
-
     protected WriteTableTool $writeTool;
     protected TableAccessService $tableAccessService;
     protected SelectItemResolver $selectItemResolver;
@@ -47,6 +39,16 @@ class DynamicSelectItemsTest extends FunctionalTestCase
 
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/pages.csv');
+
+        // Page-level TSconfig that adds custom colPos items.
+        // Using pages.TSconfig works on TYPO3 13 and 14;
+        // $GLOBALS['TYPO3_CONF_VARS']['BE']['defaultPageTSconfig'] was removed in TYPO3 14 (#105377).
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('pages')
+            ->update('pages', [
+                'TSconfig' => "TCEFORM.tt_content.colPos.addItems.20 = Custom Column\n"
+                    . "TCEFORM.tt_content.colPos.addItems.30 = Another Column",
+            ], ['uid' => 1]);
 
         $this->setUpBackendUser(1);
         $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('en');
@@ -66,7 +68,7 @@ class DynamicSelectItemsTest extends FunctionalTestCase
 
     public function testSelectItemResolverReturnsTsconfigAddedItems(): void
     {
-        $resolved = $this->selectItemResolver->resolveSelectItems('tt_content', 'colPos');
+        $resolved = $this->selectItemResolver->resolveSelectItems('tt_content', 'colPos', ['pid' => 1]);
         $this->assertNotNull($resolved, 'colPos should resolve. Values: ' . json_encode($resolved));
 
         // Standard colPos value 0 should always be present
