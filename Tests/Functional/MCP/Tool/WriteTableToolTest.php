@@ -1452,10 +1452,12 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $properties = $schema['inputSchema']['properties'];
         $this->assertArrayHasKey('action', $properties);
         $this->assertArrayHasKey('table', $properties);
-        $this->assertArrayHasKey('pid', $properties);
         $this->assertArrayHasKey('uid', $properties);
         $this->assertArrayHasKey('data', $properties);
         $this->assertArrayHasKey('position', $properties);
+        // pid is a record column expressed inside `data`, not a top-level
+        // parameter — confirm we don't accidentally re-introduce it.
+        $this->assertArrayNotHasKey('pid', $properties);
         
         // Check required fields
         $this->assertArrayHasKey('required', $schema['inputSchema']);

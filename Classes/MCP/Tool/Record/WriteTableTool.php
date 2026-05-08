@@ -67,10 +67,6 @@ class WriteTableTool extends AbstractRecordTool
                         'description' => 'The table name to write records to',
                         'enum' => $tableNames,
                     ],
-                    'pid' => [
-                        'type' => 'integer',
-                        'description' => 'Page ID. Required for "create" action (target page for the new record). On "update", set this to move the record to a different page (combine with "position" to control where on that page it lands).',
-                    ],
                     'uid' => [
                         'type' => 'integer',
                         'description' => 'Record UID (required for "update" and "delete" actions)',
@@ -78,8 +74,10 @@ class WriteTableTool extends AbstractRecordTool
                     'data' => [
                         'type' => 'object',
                         'description' => 'Record data with field names as keys and their values (required for "create", "update", and "translate" actions). ' .
-                            'Uses the same field syntax as ReadTable output.' .
-                            ($hasMultipleLanguages ? ' Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs.' : '') . ' ' .
+                            'Uses the same field syntax as ReadTable output. ' .
+                            'The target page is also specified here as "pid" — required on "create" (the page the record is created on); ' .
+                            'on "update" setting "pid" moves the record to that page (combine with "position" to control where on the new page it lands; e.g. data: {"pid": 1} moves the record to page 1). ' .
+                            ($hasMultipleLanguages ? 'Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' : '') .
                             'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
                             'For embedded tables (e.g. file references), the array fully replaces the existing list: ' .
                             'children present in the previous record but missing from the new array are deleted. ' .
@@ -87,19 +85,19 @@ class WriteTableTool extends AbstractRecordTool
                             'Array order drives display order. ' .
                             'For text fields in update actions, instead of providing the full text, you can provide an array of search-and-replace operations: ' .
                             '[{"search": "old text", "replace": "new text"}]. Each operation can optionally include "replaceAll": true. ' .
-                            'Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true. ' .
-                            'On the "update" action, setting "pid" moves the record to that page (combine with "position" to control where on the new page it lands).',
+                            'Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true.',
                         'additionalProperties' => true,
                         'examples' => [
-                            ['title' => 'News Title', 'bodytext' => 'News <b>content</b>', 'datetime' => '2024-01-01 10:00:00'],
-                            ['header' => 'Content Element Header', 'bodytext' => 'Content <b>text</b>', 'CType' => 'text'],
+                            ['pid' => 42, 'title' => 'News Title', 'bodytext' => 'News <b>content</b>', 'datetime' => '2024-01-01 10:00:00'],
+                            ['pid' => 1, 'header' => 'Content Element Header', 'bodytext' => 'Content <b>text</b>', 'CType' => 'text'],
+                            ['pid' => 5],
                             ['sys_language_uid' => 'de', 'title' => 'German translation'],
                             ['header' => [['search' => 'Welcom', 'replace' => 'Welcome'], ['search' => 'Compnay', 'replace' => 'Company']]],
                         ]
                     ],
                     'position' => [
                         'type' => 'string',
-                        'description' => 'Sorting position: "top", "bottom", "after:UID", or "before:UID". For create: defaults to "bottom" if omitted. For update: omit to keep current position, or specify to move the record.',
+                        'description' => 'Sorting position within a page: "top", "bottom", "after:UID", or "before:UID". For create: defaults to "bottom" if omitted. For update: omit to keep the current sort order, or specify to reorder. To move a record to a DIFFERENT page, set "pid" in the data parameter instead (or together with "position" for fine-grained placement on the new page).',
                     ],
                 ],
                 'required' => ['action', 'table'],
@@ -120,7 +118,7 @@ class WriteTableTool extends AbstractRecordTool
         // Some models (e.g. OpenAI GPT) place record fields at the top level
         // instead of nesting them inside the 'data' parameter.
         // Collect any unknown top-level keys into 'data' so the tool works regardless.
-        $knownKeys = ['action', 'table', 'pid', 'uid', 'data', 'position'];
+        $knownKeys = ['action', 'table', 'uid', 'data', 'position'];
         $extraData = array_diff_key($params, array_flip($knownKeys));
         if (!empty($extraData) && empty($params['data'])) {
             $params['data'] = $extraData;
@@ -129,7 +127,6 @@ class WriteTableTool extends AbstractRecordTool
         // Get parameters
         $action = $params['action'] ?? '';
         $table = $params['table'] ?? '';
-        $pid = isset($params['pid']) ? (int)$params['pid'] : null;
         $uid = isset($params['uid']) ? (int)$params['uid'] : null;
         $data = $params['data'] ?? [];
         $position = $params['position'] ?? null;
@@ -153,11 +150,31 @@ class WriteTableTool extends AbstractRecordTool
                     "not a plain string. Each field name should be a key with its corresponding value."
                 ]);
             }
+        }
+
+        // Older callers (and the previous schema) put `pid` at the top level.
+        // The schema now scopes it to `data`, but if a caller still sends it
+        // at the top level, fold it in transparently rather than silently
+        // losing it. `data.pid` always wins if both are set.
+        if (isset($params['pid']) && is_array($data) && !array_key_exists('pid', $data)) {
+            $data['pid'] = $params['pid'];
+        }
+
+        // pid lives inside `data` (it's a record column). On create it picks
+        // the target page; on update it triggers a move to that page.
+        $pid = is_array($data) && isset($data['pid']) ? (int)$data['pid'] : null;
+
+        if (in_array($action, ['create', 'update', 'translate'], true)) {
             $positionProvided = $position !== null;
+            // pid alone doesn't count as "real" record content — it's a placement
+            // hint, not a field write. Strip it for the empty check so a payload
+            // of {pid: 1} still fails with "data must contain record fields" on
+            // create/translate.
+            $dataWithoutPid = is_array($data) ? array_diff_key($data, ['pid' => null]) : $data;
             // On update, an empty data parameter is allowed when the caller is
             // only changing position or moving the record to a new pid.
             $isUpdateMoveOnly = $action === 'update' && ($positionProvided || $pid !== null);
-            if (empty($data) && !$isUpdateMoveOnly) {
+            if (empty($dataWithoutPid) && !$isUpdateMoveOnly) {
                 throw new ValidationException([
                     "The data parameter must contain record fields for {$action} actions. " .
                     "Provide field names as keys, e.g. {\"title\": \"Page Title\", \"bodytext\": \"Content\"}."
@@ -198,22 +215,21 @@ class WriteTableTool extends AbstractRecordTool
         switch ($action) {
             case 'create':
                 if ($pid === null) {
-                    throw new ValidationException(['Page ID (pid) is required for create action']);
+                    throw new ValidationException(['Page ID (pid) is required for create action — include it in the data parameter, e.g. data: {pid: 1, title: "..."}']);
                 }
-                
+
                 if (empty($data)) {
                     throw new ValidationException(['Data is required for create action']);
                 }
                 break;
-                
+
             case 'update':
                 if ($uid === null) {
                     throw new ValidationException(['Record UID is required for update action']);
                 }
 
                 $hasPosition = $position !== null;
-                $hasMove = $pid !== null || array_key_exists('pid', $data);
-                if (empty($data) && empty($searchReplace) && !$hasPosition && !$hasMove) {
+                if (empty($data) && empty($searchReplace) && !$hasPosition) {
                     throw new ValidationException(['Data is required for update action']);
                 }
                 break;
@@ -254,20 +270,19 @@ class WriteTableTool extends AbstractRecordTool
         // Execute the action
         switch ($action) {
             case 'create':
+                // pid is consumed as a separate argument; remove it from data so
+                // it doesn't reach DataHandler as a field write.
+                unset($data['pid']);
                 return $this->createRecord($table, $pid, $data, $position);
-                
+
             case 'update':
                 // Resolve search_replace into concrete field values and merge into data
                 if (!empty($searchReplace)) {
                     $resolvedFields = $this->resolveSearchReplace($table, $uid, $searchReplace);
                     $data = array_merge($data, $resolvedFields);
                 }
-                // Top-level `pid` on update is treated the same as `data.pid`:
-                // a request to move the record to that page. LLMs are equally
-                // likely to put it at either spot.
-                if ($pid !== null && !array_key_exists('pid', $data)) {
-                    $data['pid'] = $pid;
-                }
+                // pid stays inside `data` here — updateRecord extracts it and
+                // turns it into a DataHandler `move` cmdmap.
                 return $this->updateRecord($table, $uid, $data, $position);
                 
             case 'delete':

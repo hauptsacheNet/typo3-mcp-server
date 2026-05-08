@@ -180,10 +180,11 @@ class WriteTableUpdatePidTest extends AbstractFunctionalTest
         $this->assertSame($parentB, (int)$record['pid'], 'Page should now live under the new parent');
     }
 
-    public function testUpdateWithTopLevelPidAlsoMovesRecord(): void
+    public function testUpdateWithTopLevelPidStillWorksAsCompatFallback(): void
     {
-        // Many LLMs will put pid at the top level (matching its create-action
-        // schema slot) instead of inside data. Both forms should move the record.
+        // Top-level `pid` is no longer in the schema, but for backwards compat
+        // with older callers (and LLMs trained on prior versions) the tool
+        // still folds a top-level pid into data and performs the same move.
         $sourcePage = $this->createPage('Top-Level Pid Source', '/tlp-src');
         $targetPage = $this->createPage('Top-Level Pid Target', '/tlp-tgt');
         $uids = $this->createOrderedContent($sourcePage, ['Mover']);

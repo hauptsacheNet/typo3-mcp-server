@@ -11,10 +11,10 @@ use TYPO3\CMS\Backend\Utility\BackendUtility;
 /**
  * Test the LLM's ability to move a content element from one page to another.
  *
- * The expected mechanism is `WriteTable(action=update, pid=<targetPid>)`. The
- * tool accepts the new pid either at the top level or inside `data`; this
- * test treats both as valid as long as the record actually ends up on the
- * target page.
+ * The schema describes `pid` as a record column inside `data`. The tool also
+ * accepts a top-level `pid` as a graceful fallback for older callers, but
+ * this test deliberately asserts the LLM puts pid in `data` — i.e. that it
+ * actually follows the current schema rather than relying on the fallback.
  *
  * @group llm
  */
@@ -86,18 +86,25 @@ class MoveContentElementTest extends LlmTestCase
         $this->assertSame($bannerUid, (int)($writeCall['uid'] ?? 0),
             "[$modelKey] Expected uid=$bannerUid (the Banner Ad). Got: " . json_encode($writeCall, JSON_PRETTY_PRINT));
 
-        // Accept pid at the top level OR inside data — both are valid per schema.
+        // Per the schema, pid lives inside `data` (it's a record column, not a
+        // top-level parameter). Verify the LLM put it there.
         $data = $this->extractWriteData($writeCall);
-        $newPid = $writeCall['pid'] ?? $data['pid'] ?? null;
-        $this->assertNotNull(
-            $newPid,
-            "[$modelKey] Expected pid to be set (top level or in data) to move the record. "
+        $this->assertArrayHasKey(
+            'pid',
+            $data,
+            "[$modelKey] Expected pid inside `data` (it's a record column per the schema). "
+            . "Got: " . json_encode($writeCall, JSON_PRETTY_PRINT)
+        );
+        $this->assertArrayNotHasKey(
+            'pid',
+            $writeCall,
+            "[$modelKey] Did not expect pid as a top-level parameter — schema places it in `data`. "
             . "Got: " . json_encode($writeCall, JSON_PRETTY_PRINT)
         );
         $this->assertSame(
             $homePid,
-            (int)$newPid,
-            "[$modelKey] Expected pid=$homePid (Home page). Got: " . json_encode($writeCall, JSON_PRETTY_PRINT)
+            (int)$data['pid'],
+            "[$modelKey] Expected data.pid=$homePid (Home page). Got: " . json_encode($writeCall, JSON_PRETTY_PRINT)
         );
 
         $writeResult = $this->executeToolCall($writeCalls[0]);
