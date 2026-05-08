@@ -622,7 +622,7 @@ class McpModule {
                         const warningDiv = document.getElementById('auth-header-warning');
                         if (warningDiv) warningDiv.style.display = 'none';
                     } else {
-                        this.setEndpointStatus(element, 'error', 'MCP endpoint cannot receive Authorization headers - see warning below');
+                        this.setEndpointStatus(element, 'error', 'MCP endpoint cannot receive Authorization headers - see warning above');
                         const warningDiv = document.getElementById('auth-header-warning');
                         if (warningDiv) warningDiv.style.display = 'block';
                     }

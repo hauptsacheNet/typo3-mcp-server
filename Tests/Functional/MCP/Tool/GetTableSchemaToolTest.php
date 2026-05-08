@@ -292,6 +292,90 @@ class GetTableSchemaToolTest extends FunctionalTestCase
     }
 
     /**
+     * Tabs whose fields are all filtered out — or that have no fields at all
+     * in the TCA showitem (e.g. sys_file_metadata's "Extended" tab) — must not
+     * be rendered as orphan headers.
+     */
+    public function testEmptyTabsAreNotRendered(): void
+    {
+        $tool = new GetTableSchemaTool();
+
+        $result = $tool->execute([
+            'table' => 'sys_file_metadata',
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        // The "Extended" tab in sys_file_metadata's TCA contains no fields,
+        // so it should not appear in the output at all.
+        $this->assertStringNotContainsString('(Extended):', $content);
+
+        // No tab header should be left without at least one field/palette below it.
+        $lines = explode("\n", $content);
+        $tabHeader = '/^  \([^)]+\):$/';
+        $childLine = '/^    [\s\S]/';
+        foreach ($lines as $index => $line) {
+            if (!preg_match($tabHeader, $line)) {
+                continue;
+            }
+            $next = $lines[$index + 1] ?? '';
+            $this->assertMatchesRegularExpression(
+                $childLine,
+                $next,
+                "Tab header '{$line}' has no field below it (next line: '{$next}')"
+            );
+        }
+    }
+
+    /**
+     * Select TCA items with numeric (int) labels must not break schema
+     * formatting. Reproduces a real-world third-party `ranking` field on
+     * sys_file_metadata (TYPO3 13) that lists items with integer labels
+     * 0..5. Before the fix, parseSelectItems handed the int label straight
+     * to the type-strict TableAccessService::translateLabel(string $label),
+     * raising a TypeError — schema introspection (which an LLM client
+     * typically calls first) then failed entirely.
+     */
+    public function testSelectItemsWithIntegerLabelsDoNotBreakFormatting(): void
+    {
+        $service = GeneralUtility::makeInstance(\Hn\McpServer\Service\TableAccessService::class);
+        $parsed = $service->parseSelectItems([
+            ['label' => 0, 'value' => 0],
+            ['label' => 1, 'value' => 1],
+            ['label' => 5, 'value' => 5],
+        ]);
+
+        // Labels must be strings so downstream type-strict consumers
+        // (translateLabel, string concatenation) do not raise.
+        foreach ($parsed['labels'] as $label) {
+            $this->assertIsString($label);
+        }
+
+        // The select formatter feeds these labels through translateLabel and
+        // concatenates them — exercise the full path that would have thrown.
+        $config = [
+            'type' => 'select',
+            'renderType' => 'selectSingle',
+            'items' => [
+                ['label' => 0, 'value' => 0],
+                ['label' => 1, 'value' => 1],
+                ['label' => 5, 'value' => 5],
+            ],
+        ];
+        $rendered = '';
+        \Hn\McpServer\Utility\TcaFormattingUtility::addFieldDetailsInline(
+            $rendered,
+            $config,
+            'ranking',
+            'sys_file_metadata'
+        );
+        // Label 0 is dropped by the truthy `if ($label)` filter; 1 and 5 remain.
+        $this->assertStringContainsString('1 (1)', $rendered);
+        $this->assertStringContainsString('5 (5)', $rendered);
+    }
+
+    /**
      * Set up backend user with workspace
      */
     protected function setUpBackendUserWithWorkspace(int $uid): void

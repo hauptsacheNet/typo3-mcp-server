@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Event\BeforeRecordReadEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
@@ -465,9 +467,13 @@ class SearchTool extends AbstractRecordTool
             return [];
         }
         
+        // Allow listeners to add restrictions to the parent-lookup query as well
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($parentTable, $queryBuilder, 'select', BeforeRecordReadEvent::SOURCE_SEARCH_PARENT));
+
         try {
             $parentRecords = $queryBuilder->executeQuery()->fetchAllAssociative();
-            
+
             // Enhance with page information
             return $this->enhanceRecordsWithPageInfo($parentRecords, $parentTable);
         } catch (\Throwable $e) {
@@ -529,8 +535,18 @@ class SearchTool extends AbstractRecordTool
                 // Check for inline fields
                 if ($fieldType === 'inline') {
                     $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
-                    
+
                     if (!empty($foreignTable) && isset($GLOBALS['TCA'][$foreignTable])) {
+                        // Only treat as inline-related when the foreign table is
+                        // still embedded into its parent. Tables exposed standalone
+                        // via additionalStandaloneTables are searched as primary
+                        // tables instead — keeping them in this path would
+                        // duplicate the search work and (worse) wrongly attribute
+                        // their hits back to the parent record they no longer
+                        // belong to.
+                        if (!$this->tableAccessService->isEmbeddedChildTable($foreignTable)) {
+                            continue;
+                        }
                         // Use TableAccessService to check if table is accessible and has searchable fields
                         if ($this->tableAccessService->canAccessTable($foreignTable) && !empty($this->getSearchableFields($foreignTable))) {
                             $inlineTables[$foreignTable] = [
@@ -697,6 +713,11 @@ class SearchTool extends AbstractRecordTool
 
         // Apply limit
         $queryBuilder->setMaxResults($limit);
+
+        // Allow listeners to add restrictions (file mounts, tenant scopes, …)
+        // so search never surfaces records ReadTableTool would have hidden.
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new BeforeRecordReadEvent($table, $queryBuilder, 'select', BeforeRecordReadEvent::SOURCE_SEARCH));
 
         // Execute query with error handling
         try {

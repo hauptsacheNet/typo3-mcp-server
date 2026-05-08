@@ -186,6 +186,25 @@ class TableAccessServiceFieldAccessTest extends FunctionalTestCase
     }
 
     /**
+     * Embedded inline children of a table with sub-schemas must each get a
+     * whitelist scoped to their own type — otherwise valid type-specific
+     * columns (e.g. tt_content.assets on textmedia) would silently drop on
+     * mixed-type child sets.
+     */
+    public function testEmbeddedRecordFieldsHonorRecordType(): void
+    {
+        // textmedia keeps the file relation (assets) and bodytext.
+        $textmedia = $this->service->getEmbeddedRecordFields('tt_content', '', 'textmedia');
+        $this->assertContains('assets', $textmedia, 'textmedia children must keep assets');
+        $this->assertContains('bodytext', $textmedia, 'textmedia children must keep bodytext');
+
+        // header has neither assets nor bodytext in its showitem.
+        $header = $this->service->getEmbeddedRecordFields('tt_content', '', 'header');
+        $this->assertNotContains('assets', $header, 'header children must not list assets');
+        $this->assertNotContains('bodytext', $header, 'header children must not list bodytext');
+    }
+
+    /**
      * ReadTable enum includes sys_file, WriteTable enum excludes it.
      */
     public function testAccessibleTablesIncludeReadOnly(): void
