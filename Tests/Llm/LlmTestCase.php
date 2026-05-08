@@ -129,8 +129,15 @@ abstract class LlmTestCase extends FunctionalTestCase
      * Retry flaky LLM tests up to 3 times on assertion failure.
      * LLM responses are inherently non-deterministic, so a single
      * failure does not necessarily indicate a broken test.
+     *
+     * Implemented as an `invokeTestMethod` override because PHPUnit 13
+     * made `runTest()` private (which silently no-op'd the original
+     * override that lived on this class until we noticed during this
+     * investigation). `invokeTestMethod` is the test-body call site
+     * that PHPUnit's private `runTest` delegates to, so wrapping it
+     * here is the correct hook on PHPUnit 13.
      */
-    protected function runTest(): mixed
+    protected function invokeTestMethod(string $methodName, array $testArguments): mixed
     {
         $maxRetries = 3;
         $lastException = null;
@@ -138,7 +145,7 @@ abstract class LlmTestCase extends FunctionalTestCase
         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
             $this->attemptCount = $attempt;
             try {
-                return parent::runTest();
+                return parent::invokeTestMethod($methodName, $testArguments);
             } catch (\PHPUnit\Framework\SkippedWithMessageException | \PHPUnit\Framework\IncompleteTestError $e) {
                 throw $e;
             } catch (\PHPUnit\Framework\AssertionFailedError $e) {
