@@ -108,14 +108,48 @@ function formatStats(?array $stats): string
     $calls = (int)($stats['llm_calls'] ?? 0);
     $toolCalls = (int)($stats['tool_calls'] ?? 0);
     $errors = (int)($stats['tool_errors'] ?? 0);
+    $attempts = (int)($stats['attempts'] ?? 1);
+    $promptTokens = (int)($stats['prompt_tokens'] ?? 0);
+    $cachedTokens = (int)($stats['cached_tokens'] ?? 0);
     $errColor = $errors > 0 ? "\033[31m" : "\033[2m";
-    return " \033[2m[" . $calls . " calls, " . $toolCalls . " tools, "
-        . $errColor . $errors . " err\033[2m]\033[0m";
+    $attemptPrefix = $attempts > 1
+        ? "\033[33m{$attempts} attempts\033[0;2m, "
+        : '';
+    $cacheSuffix = '';
+    if ($promptTokens > 0) {
+        $hitRate = $promptTokens > 0 ? (int)round(100 * $cachedTokens / $promptTokens) : 0;
+        $cacheSuffix = sprintf(', %d tok %d%% cached', $promptTokens, $hitRate);
+    }
+    return " \033[2m[" . $attemptPrefix . $calls . " calls, " . $toolCalls . " tools, "
+        . $errColor . $errors . " err\033[2m" . $cacheSuffix . "]\033[0m";
 }
 
 // Evaluate results
 $degraded = [];
 $allPassed = true;
+
+// Surface retry activity so silent flakiness becomes visible in CI logs.
+// The retry log is appended by LlmTestCase::logAttemptFailure() on every
+// failed attempt; without this section it's only readable as a CI artifact.
+$retryLog = __DIR__ . '/../.Build/llm-retries.log';
+if (file_exists($retryLog) && filesize($retryLog) > 0) {
+    $lines = array_filter(explode("\n", (string)file_get_contents($retryLog)));
+    $retryCount = 0;
+    $failCount = 0;
+    foreach ($lines as $line) {
+        if (str_contains($line, 'LLM-RETRY')) {
+            $retryCount++;
+        } elseif (str_contains($line, 'LLM-FAIL')) {
+            $failCount++;
+        }
+    }
+    echo "\033[33mRetry activity\033[0m (" . count($lines) . " events: $retryCount retries, $failCount final failures)\n";
+    echo str_repeat('-', 80) . "\n";
+    foreach ($lines as $line) {
+        echo $line . "\n";
+    }
+    echo "\n";
+}
 
 echo "LLM Test Results — Majority Pass Rule (min $minPass/" . count($testCases ? reset($testCases)['models'] : []) . " models)\n";
 echo str_repeat('=', 80) . "\n\n";

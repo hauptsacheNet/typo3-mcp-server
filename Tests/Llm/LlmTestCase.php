@@ -36,7 +36,17 @@ abstract class LlmTestCase extends FunctionalTestCase
     ];
 
     protected const MODEL_OPTIONS = [
-        'gpt-5.4-mini' => ['reasoning' => ['effort' => 'high']],
+        // 'medium' instead of 'high': gpt-5.4-mini and haiku-4.5 dominate the
+        // OpenRouter spend (~$5 + ~$4 per full suite run). 'high' was added in
+        // PR #59 for reliability; 'medium' keeps tool-use coherent without the
+        // extra reasoning-token tax. Re-tighten if majority-pass starts failing.
+        'gpt-5.4-mini' => ['reasoning' => ['effort' => 'medium']],
+        // Claude Haiku 4.5 extended thinking explicitly enabled. Empirically
+        // measured (haiku-only filter, 32 tests): with reasoning OFF we get
+        // 3 hard failures retried 3× each (~9 retry rounds), with reasoning ON
+        // we get 0 failures, 1 retry, and ~10% lower avg test time. The extra
+        // reasoning tokens are cheaper than the avoided retry round-trips.
+        'haiku-4.5' => ['reasoning' => ['enabled' => true]],
     ];
 
     protected array $coreExtensionsToLoad = [
@@ -59,10 +69,26 @@ abstract class LlmTestCase extends FunctionalTestCase
     /** @var string The provider being used */
     protected string $llmProvider = '';
 
-    /** Counters tracked per test attempt and written to .Build/llm-stats. */
+    /** Per-attempt counters; reset in setUp() and folded into the totals in tearDown(). */
     protected int $llmCallCount = 0;
     protected int $toolCallCount = 0;
     protected int $toolErrorCount = 0;
+    protected int $promptTokens = 0;
+    protected int $cachedTokens = 0;
+
+    /**
+     * Cumulative counters across all attempts (incl. silent retries) for the
+     * same test+model. Live across the retry loop so the stats artifact
+     * reflects the real wall-clock cost, not just the final passing attempt.
+     */
+    protected int $totalLlmCallCount = 0;
+    protected int $totalToolCallCount = 0;
+    protected int $totalToolErrorCount = 0;
+    protected int $totalPromptTokens = 0;
+    protected int $totalCachedTokens = 0;
+
+    /** 1 = passed first try, 2/3 = retries. Surfaced in the stats artifact. */
+    protected int $attemptCount = 0;
 
     protected function setUp(): void
     {
@@ -71,6 +97,8 @@ abstract class LlmTestCase extends FunctionalTestCase
         $this->llmCallCount = 0;
         $this->toolCallCount = 0;
         $this->toolErrorCount = 0;
+        $this->promptTokens = 0;
+        $this->cachedTokens = 0;
 
         $this->initializeLlmClient();
 
@@ -86,6 +114,12 @@ abstract class LlmTestCase extends FunctionalTestCase
 
     protected function tearDown(): void
     {
+        $this->totalLlmCallCount += $this->llmCallCount;
+        $this->totalToolCallCount += $this->toolCallCount;
+        $this->totalToolErrorCount += $this->toolErrorCount;
+        $this->totalPromptTokens += $this->promptTokens;
+        $this->totalCachedTokens += $this->cachedTokens;
+
         $this->writeTestStats();
         parent::tearDown();
     }
@@ -102,9 +136,12 @@ abstract class LlmTestCase extends FunctionalTestCase
             'class' => static::class,
             'test' => $this->name(),
             'model' => $model,
-            'llm_calls' => $this->llmCallCount,
-            'tool_calls' => $this->toolCallCount,
-            'tool_errors' => $this->toolErrorCount,
+            'attempts' => max(1, $this->attemptCount),
+            'llm_calls' => $this->totalLlmCallCount,
+            'tool_calls' => $this->totalToolCallCount,
+            'tool_errors' => $this->totalToolErrorCount,
+            'prompt_tokens' => $this->totalPromptTokens,
+            'cached_tokens' => $this->totalCachedTokens,
         ]));
     }
 
@@ -112,30 +149,77 @@ abstract class LlmTestCase extends FunctionalTestCase
      * Retry flaky LLM tests up to 3 times on assertion failure.
      * LLM responses are inherently non-deterministic, so a single
      * failure does not necessarily indicate a broken test.
+     *
+     * Implemented as an `invokeTestMethod` override because PHPUnit 13
+     * made `runTest()` private (which silently no-op'd the original
+     * override that lived on this class until we noticed during this
+     * investigation). `invokeTestMethod` is the test-body call site
+     * that PHPUnit's private `runTest` delegates to, so wrapping it
+     * here is the correct hook on PHPUnit 13.
      */
-    protected function runTest(): mixed
+    protected function invokeTestMethod(string $methodName, array $testArguments): mixed
     {
         $maxRetries = 3;
         $lastException = null;
 
         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            $this->attemptCount = $attempt;
             try {
-                return parent::runTest();
+                return parent::invokeTestMethod($methodName, $testArguments);
             } catch (\PHPUnit\Framework\SkippedWithMessageException | \PHPUnit\Framework\IncompleteTestError $e) {
                 throw $e;
             } catch (\PHPUnit\Framework\AssertionFailedError $e) {
                 $lastException = $e;
                 if ($attempt < $maxRetries) {
+                    $this->logAttemptFailure($attempt, $maxRetries, $e, retrying: true);
                     try {
                         $this->tearDown();
                     } catch (\Throwable) {
                     }
                     $this->setUp();
+                } else {
+                    $this->logAttemptFailure($attempt, $maxRetries, $e, retrying: false);
                 }
             }
         }
 
         throw $lastException;
+    }
+
+    /**
+     * Append one greppable line per failed attempt to .Build/llm-retries.log so
+     * silent retries become visible in CI artifacts. Without this, a test that
+     * flakes on attempt 1 and passes on attempt 2 reports as a clean pass —
+     * masking both the runtime cost and the underlying flakiness.
+     *
+     * Writing to a file (not STDERR) because paratest worker subprocesses do
+     * not forward STDERR to the parent run's output.
+     */
+    private function logAttemptFailure(int $attempt, int $maxRetries, \Throwable $e, bool $retrying): void
+    {
+        $modelKey = array_search($this->llmModel, static::MODELS, true);
+        $modelLabel = $modelKey !== false ? (string)$modelKey : $this->llmModel;
+        $shortClass = preg_replace('/^.*\\\\/', '', static::class);
+        $message = preg_replace('/\s+/', ' ', mb_substr($e->getMessage(), 0, 320));
+        $tag = $retrying ? 'LLM-RETRY' : 'LLM-FAIL';
+
+        $line = sprintf(
+            "[%s] [%s %d/%d] %s::%s#%s — %s\n",
+            date('H:i:s'),
+            $tag,
+            $attempt,
+            $maxRetries,
+            $shortClass,
+            $this->name(),
+            $modelLabel,
+            $message
+        );
+
+        $dir = __DIR__ . '/../../.Build';
+        if (!is_dir($dir) && !@mkdir($dir, 0777, true) && !is_dir($dir)) {
+            return;
+        }
+        @file_put_contents($dir . '/llm-retries.log', $line, FILE_APPEND | LOCK_EX);
     }
 
     /**
@@ -233,8 +317,23 @@ abstract class LlmTestCase extends FunctionalTestCase
             $tools,
             array_merge($defaults, $this->getModelOptions(), $options)
         );
+        $this->recordTokenUsage($this->lastResponse);
 
         return $this->lastResponse;
+    }
+
+    /**
+     * Pull prompt/cached token counts off the raw response so we can see how
+     * effective prompt caching is in CI (cache_read / cache_write multipliers
+     * differ wildly across providers; this lets us tell whether the markers
+     * we send are actually engaging the cache).
+     */
+    private function recordTokenUsage(LlmResponse $response): void
+    {
+        $usage = $response->getRawResponse()['usage'] ?? [];
+        $this->promptTokens += (int)($usage['prompt_tokens'] ?? 0);
+        $details = $usage['prompt_tokens_details'] ?? [];
+        $this->cachedTokens += (int)($details['cached_tokens'] ?? 0);
     }
 
     protected function getModelOptions(): array
@@ -566,6 +665,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             $this->getMcpToolsAsLlmFunctions(),
             array_merge($defaults, $this->getModelOptions(), $options)
         );
+        $this->recordTokenUsage($this->lastResponse);
 
         return $this->lastResponse;
     }
