@@ -109,12 +109,19 @@ function formatStats(?array $stats): string
     $toolCalls = (int)($stats['tool_calls'] ?? 0);
     $errors = (int)($stats['tool_errors'] ?? 0);
     $attempts = (int)($stats['attempts'] ?? 1);
+    $promptTokens = (int)($stats['prompt_tokens'] ?? 0);
+    $cachedTokens = (int)($stats['cached_tokens'] ?? 0);
     $errColor = $errors > 0 ? "\033[31m" : "\033[2m";
     $attemptPrefix = $attempts > 1
         ? "\033[33m{$attempts} attempts\033[0;2m, "
         : '';
+    $cacheSuffix = '';
+    if ($promptTokens > 0) {
+        $hitRate = $promptTokens > 0 ? (int)round(100 * $cachedTokens / $promptTokens) : 0;
+        $cacheSuffix = sprintf(', %d tok %d%% cached', $promptTokens, $hitRate);
+    }
     return " \033[2m[" . $attemptPrefix . $calls . " calls, " . $toolCalls . " tools, "
-        . $errColor . $errors . " err\033[2m]\033[0m";
+        . $errColor . $errors . " err\033[2m" . $cacheSuffix . "]\033[0m";
 }
 
 // Evaluate results

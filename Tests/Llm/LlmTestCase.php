@@ -73,6 +73,8 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected int $llmCallCount = 0;
     protected int $toolCallCount = 0;
     protected int $toolErrorCount = 0;
+    protected int $promptTokens = 0;
+    protected int $cachedTokens = 0;
 
     /**
      * Cumulative counters across all attempts (incl. silent retries) for the
@@ -82,6 +84,8 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected int $totalLlmCallCount = 0;
     protected int $totalToolCallCount = 0;
     protected int $totalToolErrorCount = 0;
+    protected int $totalPromptTokens = 0;
+    protected int $totalCachedTokens = 0;
 
     /** 1 = passed first try, 2/3 = retries. Surfaced in the stats artifact. */
     protected int $attemptCount = 0;
@@ -93,6 +97,8 @@ abstract class LlmTestCase extends FunctionalTestCase
         $this->llmCallCount = 0;
         $this->toolCallCount = 0;
         $this->toolErrorCount = 0;
+        $this->promptTokens = 0;
+        $this->cachedTokens = 0;
 
         $this->initializeLlmClient();
 
@@ -111,6 +117,8 @@ abstract class LlmTestCase extends FunctionalTestCase
         $this->totalLlmCallCount += $this->llmCallCount;
         $this->totalToolCallCount += $this->toolCallCount;
         $this->totalToolErrorCount += $this->toolErrorCount;
+        $this->totalPromptTokens += $this->promptTokens;
+        $this->totalCachedTokens += $this->cachedTokens;
 
         $this->writeTestStats();
         parent::tearDown();
@@ -132,6 +140,8 @@ abstract class LlmTestCase extends FunctionalTestCase
             'llm_calls' => $this->totalLlmCallCount,
             'tool_calls' => $this->totalToolCallCount,
             'tool_errors' => $this->totalToolErrorCount,
+            'prompt_tokens' => $this->totalPromptTokens,
+            'cached_tokens' => $this->totalCachedTokens,
         ]));
     }
 
@@ -307,8 +317,23 @@ abstract class LlmTestCase extends FunctionalTestCase
             $tools,
             array_merge($defaults, $this->getModelOptions(), $options)
         );
+        $this->recordTokenUsage($this->lastResponse);
 
         return $this->lastResponse;
+    }
+
+    /**
+     * Pull prompt/cached token counts off the raw response so we can see how
+     * effective prompt caching is in CI (cache_read / cache_write multipliers
+     * differ wildly across providers; this lets us tell whether the markers
+     * we send are actually engaging the cache).
+     */
+    private function recordTokenUsage(LlmResponse $response): void
+    {
+        $usage = $response->getRawResponse()['usage'] ?? [];
+        $this->promptTokens += (int)($usage['prompt_tokens'] ?? 0);
+        $details = $usage['prompt_tokens_details'] ?? [];
+        $this->cachedTokens += (int)($details['cached_tokens'] ?? 0);
     }
 
     protected function getModelOptions(): array
@@ -640,6 +665,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             $this->getMcpToolsAsLlmFunctions(),
             array_merge($defaults, $this->getModelOptions(), $options)
         );
+        $this->recordTokenUsage($this->lastResponse);
 
         return $this->lastResponse;
     }
