@@ -116,7 +116,18 @@ if ($status < 200 || $status >= 300) {
     exit(1);
 }
 
-echo "Published run with $total tests across " . count($modelPasses) . " models (HTTP $status).\n";
+// Apps Script always responds 200 even for auth/parse failures, so the body
+// is the real signal. Require an explicit `ok: true` to declare success.
+$decoded = json_decode((string)$response, true);
+if (!is_array($decoded) || empty($decoded['ok'])) {
+    $detail = is_array($decoded) && isset($decoded['error'])
+        ? $decoded['error']
+        : substr((string)$response, 0, 200);
+    fwrite(STDERR, "Apps Script reported failure: $detail\n");
+    exit(1);
+}
+
+echo "Published run with $total tests across " . count($modelPasses) . " models (row {$decoded['row']}).\n";
 exit(0);
 
 function collectFromSuite(SimpleXMLElement $suite, array &$tests, array &$modelPasses): void
