@@ -292,4 +292,93 @@ class OAuthClientRegistrationTest extends AbstractFunctionalTest
         $this->assertTrue($this->service->isRedirectUriAllowed($client, 'http://localhost:6274/cb#a'));
         $this->assertFalse($this->service->isRedirectUriAllowed($client, 'http://localhost:6274/cb#b'));
     }
+
+    public function testManualTokenIsBoundToWellKnownClient(): void
+    {
+        $plainToken = $this->service->createDirectAccessToken(1, 'My Laptop');
+        $wellKnown = $this->service->getClient(OAuthService::WELL_KNOWN_CLIENT_ID);
+
+        $info = $this->service->validateToken($plainToken);
+        $this->assertNotNull($info);
+        $this->assertSame($wellKnown['uid'], $info['client_uid']);
+    }
+
+    public function testOAuthTokenIsBoundToIssuingClient(): void
+    {
+        $registered = $this->service->registerClient([
+            'client_name' => 'Issuer',
+            'redirect_uris' => ['http://localhost'],
+        ]);
+        $code = $this->service->createAuthorizationCode(
+            1,
+            'Issuer',
+            '',
+            '',
+            'S256',
+            $registered['client_id']
+        );
+        $tokenData = $this->service->exchangeCodeForToken($code, null, null, null, $registered['client_id']);
+        $this->assertNotNull($tokenData);
+
+        $issuer = $this->service->getClient($registered['client_id']);
+        $info = $this->service->validateToken($tokenData['access_token']);
+        $this->assertNotNull($info);
+        $this->assertSame($issuer['uid'], $info['client_uid']);
+    }
+
+    public function testTokenIsRevokedWhenIssuingClientIsDeleted(): void
+    {
+        $registered = $this->service->registerClient([
+            'client_name' => 'ToBeDeleted',
+            'redirect_uris' => ['http://localhost'],
+        ]);
+        $code = $this->service->createAuthorizationCode(
+            1,
+            'ToBeDeleted',
+            '',
+            '',
+            'S256',
+            $registered['client_id']
+        );
+        $tokenData = $this->service->exchangeCodeForToken($code, null, null, null, $registered['client_id']);
+        $this->assertNotNull($tokenData);
+        $this->assertNotNull($this->service->validateToken($tokenData['access_token']));
+
+        // Soft-delete the client; the token must now be rejected
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_oauth_clients');
+        $connection->update(
+            'tx_mcpserver_oauth_clients',
+            ['deleted' => 1, 'tstamp' => time()],
+            ['client_id' => $registered['client_id']]
+        );
+
+        $this->assertNull(
+            $this->service->validateToken($tokenData['access_token']),
+            'Tokens for a deleted client must no longer validate'
+        );
+    }
+
+    public function testLegacyTokenWithoutClientUidStillValidates(): void
+    {
+        // A token row inserted before the client_uid column existed (client_uid=0)
+        // must remain valid for backward compatibility.
+        $plainToken = bin2hex(random_bytes(32));
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens');
+        $connection->insert('tx_mcpserver_access_tokens', [
+            'pid' => 0, 'tstamp' => time(), 'crdate' => time(),
+            'token' => hash('sha256', $plainToken),
+            'token_version' => 1,
+            'be_user_uid' => 1,
+            'client_uid' => 0,
+            'client_name' => 'pre-binding-token',
+            'expires' => time() + 86400,
+            'last_used' => time(), 'created_ip' => '', 'last_used_ip' => '',
+        ]);
+
+        $info = $this->service->validateToken($plainToken);
+        $this->assertNotNull($info, 'Legacy token without client_uid must still validate');
+        $this->assertSame(0, $info['client_uid']);
+    }
 }

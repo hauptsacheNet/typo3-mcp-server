@@ -153,6 +153,16 @@ class OAuthService
             $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
         }
 
+        // Resolve the issuing client so the token is linked to it for cascade
+        // revocation and observability.
+        $clientUid = 0;
+        if (!empty($authCode['client_id'])) {
+            $boundClient = $this->getClient((string)$authCode['client_id']);
+            if ($boundClient !== null) {
+                $clientUid = (int)$boundClient['uid'];
+            }
+        }
+
         // Create access token
         $tokenConnection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('tx_mcpserver_access_tokens');
@@ -165,6 +175,7 @@ class OAuthService
                 'crdate' => time(),
                 'token' => $this->hashToken($accessToken),
                 'be_user_uid' => $authCode['be_user_uid'],
+                'client_uid' => $clientUid,
                 'client_name' => $authCode['client_name'],
                 'expires' => $expires,
                 'last_used' => time(),
@@ -228,6 +239,14 @@ class OAuthService
             return null;
         }
 
+        // Cascade revocation: a token whose issuing client has been removed
+        // is no longer valid. Tokens with client_uid=0 are legacy (pre-binding)
+        // and are accepted as before.
+        $clientUid = (int)($tokenRecord['client_uid'] ?? 0);
+        if ($clientUid > 0 && !$this->clientUidIsActive($clientUid)) {
+            return null;
+        }
+
         // Auto-upgrade version-0 (plaintext) tokens to hashed on successful validation.
         // Best-effort: if the upgrade fails, authentication still succeeds and the
         // upgrade will be retried on next validation or handled by the upgrade wizard.
@@ -268,6 +287,7 @@ class OAuthService
 
         return [
             'be_user_uid' => (int)$tokenRecord['be_user_uid'],
+            'client_uid' => (int)($tokenRecord['client_uid'] ?? 0),
             'client_name' => $tokenRecord['client_name'],
             'token_uid' => (int)$tokenRecord['uid'],
         ];
@@ -478,6 +498,26 @@ class OAuthService
         ];
     }
 
+    private function clientUidIsActive(int $clientUid): bool
+    {
+        if ($clientUid <= 0) {
+            return false;
+        }
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable(self::CLIENTS_TABLE);
+        $qb = $connection->createQueryBuilder();
+        $count = (int)$qb
+            ->count('uid')
+            ->from(self::CLIENTS_TABLE)
+            ->where(
+                $qb->expr()->eq('uid', $qb->createNamedParameter($clientUid)),
+                $qb->expr()->eq('deleted', $qb->createNamedParameter(0))
+            )
+            ->executeQuery()
+            ->fetchOne();
+        return $count > 0;
+    }
+
     private function fetchClientRow(string $clientId): ?array
     {
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
@@ -649,7 +689,11 @@ class OAuthService
     }
 
     /**
-     * Create access token directly (bypassing authorization code flow)
+     * Create access token directly (bypassing authorization code flow).
+     *
+     * Used by the backend module for admin-issued tokens. These are bound to
+     * the well-known {@see self::WELL_KNOWN_CLIENT_ID} public client so they
+     * participate in cascade revocation and audit alongside OAuth-flow tokens.
      */
     public function createDirectAccessToken(int $beUserId, string $clientName, ?ServerRequestInterface $request = null): string
     {
@@ -661,6 +705,10 @@ class OAuthService
         if ($request !== null) {
             $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
         }
+
+        // Bind to the well-known client (auto-seeded if missing)
+        $wellKnown = $this->getClient(self::WELL_KNOWN_CLIENT_ID);
+        $clientUid = $wellKnown !== null ? (int)$wellKnown['uid'] : 0;
 
         // Create access token
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
@@ -674,6 +722,7 @@ class OAuthService
                 'crdate' => time(),
                 'token' => $this->hashToken($accessToken),
                 'be_user_uid' => $beUserId,
+                'client_uid' => $clientUid,
                 'client_name' => $clientName,
                 'expires' => $expires,
                 'last_used' => time(),
