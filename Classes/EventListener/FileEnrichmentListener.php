@@ -47,6 +47,7 @@ final class FileEnrichmentListener
         match ($event->getTable()) {
             'sys_file' => $this->declareSysFileFields($event),
             'sys_file_reference' => $this->declareSysFileReferenceFields($event),
+            'sys_file_metadata' => $this->declareSysFileMetadataFields($event),
             default => null,
         };
     }
@@ -84,6 +85,24 @@ final class FileEnrichmentListener
             ],
             'mcp' => ['computed' => true],
         ]);
+    }
+
+    private function declareSysFileMetadataFields(AfterSchemaLoadEvent $event): void
+    {
+        // sys_file_metadata uses foreign type notation (`file:type`) so
+        // getAvailableFields builds a union of sub-schema showitems. The TCA
+        // also defines `file` (FK to sys_file, essential for filtering),
+        // `categories`, `width` and `height` — none of which appear in any
+        // showitem because the backend renders them through the `fileinfo`
+        // control. Pull them in so the LLM can find the metadata row for a
+        // given file (LLMs typically `ReadTable(sys_file_metadata, where:
+        // {file: <uid>})` before translating).
+        $columns = $GLOBALS['TCA']['sys_file_metadata']['columns'] ?? [];
+        foreach (['file', 'categories', 'width', 'height'] as $name) {
+            if (isset($columns[$name]) && !$event->hasField($name)) {
+                $event->addField($name, $columns[$name]);
+            }
+        }
     }
 
     private function declareSysFileReferenceFields(AfterSchemaLoadEvent $event): void
