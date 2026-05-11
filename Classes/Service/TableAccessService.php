@@ -371,7 +371,20 @@ class TableAccessService implements SingletonInterface
         // Allow extensions to add, remove, or reconfigure fields
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
         $event = $eventDispatcher->dispatch(new AfterSchemaLoadEvent($table, $type, $fields));
-        return $event->getFields();
+        $fields = $event->getFields();
+
+        // Re-apply field-level access restrictions to any fields added by
+        // listeners. Without this second pass, an enrichment listener that
+        // injects existing TCA columns (e.g. sys_file's `name`, `identifier`)
+        // would bypass `exclude` permissions and TCEFORM `disabled` TSconfig
+        // — the access filter must be the last word, not the first.
+        foreach ($fields as $fieldName => $fieldConfig) {
+            if (!$this->canAccessField($table, $fieldName, $type, $pid)) {
+                unset($fields[$fieldName]);
+            }
+        }
+
+        return $fields;
     }
     
     /**
