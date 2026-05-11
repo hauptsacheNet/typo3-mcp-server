@@ -251,37 +251,7 @@ class ReadTableTool extends AbstractRecordTool
         // Filter by uid(s) if specified. Single int and array are normalised
         // to a list — IN(...) handles both cases identically.
         if ($uids !== null) {
-            if ($uids === []) {
-                // The caller passed a uid filter, but every value was
-                // non-positive after sanitisation. Match nothing.
-                $queryBuilder->andWhere('1 = 0');
-            } else {
-                $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-                if ($currentWorkspace > 0) {
-                    // In workspace context, match either the live uid or the
-                    // overlay's t3ver_oid. WorkspaceDeletePlaceholderRestriction
-                    // handles delete placeholders.
-                    $queryBuilder->andWhere(
-                        $queryBuilder->expr()->or(
-                            $queryBuilder->expr()->in(
-                                'uid',
-                                $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
-                            ),
-                            $queryBuilder->expr()->in(
-                                't3ver_oid',
-                                $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
-                            )
-                        )
-                    );
-                } else {
-                    $queryBuilder->andWhere(
-                        $queryBuilder->expr()->in(
-                            'uid',
-                            $queryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
-                        )
-                    );
-                }
-            }
+            $this->applyUidFilter($queryBuilder, $table, $uids);
         }
 
         // Apply custom condition if specified
@@ -346,32 +316,7 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         if ($uids !== null) {
-            if ($uids === []) {
-                $countQueryBuilder->andWhere('1 = 0');
-            } else {
-                $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-                if ($currentWorkspace > 0) {
-                    $countQueryBuilder->andWhere(
-                        $countQueryBuilder->expr()->or(
-                            $countQueryBuilder->expr()->in(
-                                'uid',
-                                $countQueryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
-                            ),
-                            $countQueryBuilder->expr()->in(
-                                't3ver_oid',
-                                $countQueryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
-                            )
-                        )
-                    );
-                } else {
-                    $countQueryBuilder->andWhere(
-                        $countQueryBuilder->expr()->in(
-                            'uid',
-                            $countQueryBuilder->createNamedParameter($uids, \TYPO3\CMS\Core\Database\Connection::PARAM_INT_ARRAY)
-                        )
-                    );
-                }
-            }
+            $this->applyUidFilter($countQueryBuilder, $table, $uids);
         }
 
         if (!empty($condition)) {
@@ -429,6 +374,52 @@ class ReadTableTool extends AbstractRecordTool
             'offset' => $offset,
             'hasMore' => ($offset + count($records)) < $totalCount,
         ];
+    }
+
+    /**
+     * Apply the uid filter to a QueryBuilder.
+     *
+     * In a workspace, a logical record may be addressed either by its live
+     * uid or by a workspace overlay row whose `t3ver_oid` points at that
+     * live uid. We OR both sides so a uid lookup hits new-in-workspace
+     * placeholders too. That OR branch only makes sense — and only compiles —
+     * on workspace-capable tables; for tables without versioningWS the
+     * t3ver_oid column doesn't exist, so we fall back to a plain uid IN(...).
+     */
+    protected function applyUidFilter(QueryBuilder $queryBuilder, string $table, array $uids): void
+    {
+        if ($uids === []) {
+            // Caller passed a uid filter, but every value was non-positive
+            // after sanitisation. Match nothing.
+            $queryBuilder->andWhere('1 = 0');
+            return;
+        }
+
+        $isWorkspaceCapable = !empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS'] ?? false);
+        $currentWorkspace = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+
+        if ($currentWorkspace > 0 && $isWorkspaceCapable) {
+            $queryBuilder->andWhere(
+                $queryBuilder->expr()->or(
+                    $queryBuilder->expr()->in(
+                        'uid',
+                        $queryBuilder->createNamedParameter($uids, Connection::PARAM_INT_ARRAY)
+                    ),
+                    $queryBuilder->expr()->in(
+                        't3ver_oid',
+                        $queryBuilder->createNamedParameter($uids, Connection::PARAM_INT_ARRAY)
+                    )
+                )
+            );
+            return;
+        }
+
+        $queryBuilder->andWhere(
+            $queryBuilder->expr()->in(
+                'uid',
+                $queryBuilder->createNamedParameter($uids, Connection::PARAM_INT_ARRAY)
+            )
+        );
     }
 
     /**
