@@ -62,6 +62,19 @@ final class FileEnrichmentListener
 
     private function declareSysFileFields(AfterSchemaLoadEvent $event): void
     {
+        // sys_file's only sub-schema (type=1) shows `fileinfo, storage, missing`
+        // where `fileinfo` is a virtual `type: none` renderer. The actually-useful
+        // columns (name, identifier, mime_type, sha1, size, type, metadata) exist
+        // in TCA but are referenced by no showitem in any palette because the
+        // backend displays them through the `fileinfo` control. Pull them in here
+        // so the LLM can filter and read by them.
+        $columns = $GLOBALS['TCA']['sys_file']['columns'] ?? [];
+        foreach (['name', 'identifier', 'type', 'mime_type', 'sha1', 'size', 'metadata'] as $name) {
+            if (isset($columns[$name]) && !$event->hasField($name)) {
+                $event->addField($name, $columns[$name]);
+            }
+        }
+
         $event->addField('public_url', [
             'label' => 'Public URL',
             'description' => 'Resolved frontend URL of the file. Computed read-only.',
