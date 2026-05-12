@@ -1,0 +1,18 @@
+.. More information about this file:
+   https://docs.typo3.org/permalink/h2document:start-file-includes
+
+.. role:: aspect (emphasis)
+.. role:: bash (code)
+.. role:: js (code)
+.. role:: json (code)
+.. role:: php (code)
+.. role:: rst (code)
+.. role:: sep (strong)
+.. role:: sql (code)
+.. role:: tsconfig (code)
+.. role:: typoscript (code)
+.. role:: xml (code)
+.. role:: yaml (code)
+
+.. |ext-key| replace:: mcp_server
+.. |composer-name| replace:: hn/typo3-mcp-server

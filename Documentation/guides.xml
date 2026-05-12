@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<guides xmlns="https://www.phpdoc.org/guides"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="https://www.phpdoc.org/guides ../vendor/phpdocumentor/guides-cli/resources/schema/guides.xsd"
+        links-are-relative="true">
+
+    <project title="TYPO3 MCP Server"
+             version="0.2"
+             release="0.2.1"/>
+
+    <inventory id="t3coreapi" url="https://docs.typo3.org/m/typo3/reference-coreapi/main/en-us/"/>
+    <inventory id="t3tca" url="https://docs.typo3.org/m/typo3/reference-tca/main/en-us/"/>
+    <inventory id="t3start" url="https://docs.typo3.org/m/typo3/tutorial-getting-started/main/en-us/"/>
+    <inventory id="t3install" url="https://docs.typo3.org/m/typo3/guide-installation/main/en-us/"/>
+
+    <extension class="\T3Docs\Typo3DocsTheme\DependencyInjection\Typo3DocsThemeExtension"
+               project-home="https://github.com/hauptsacheNet/typo3-mcp-server"
+               project-issues="https://github.com/hauptsacheNet/typo3-mcp-server/issues"
+               project-repository="https://github.com/hauptsacheNet/typo3-mcp-server"
+               edit-on-github="hauptsacheNet/typo3-mcp-server"
+               edit-on-github-branch="main"
+               typo3-core-preferred="main"/>
+</guides>

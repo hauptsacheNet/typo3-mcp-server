@@ -28,7 +28,7 @@ With the TYPO3 MCP Server, your AI assistant can help you:
 
 All these operations happen safely in workspaces, giving you full control to review before publishing!
 
-> 💡 **Want to know how it works?** Check out our [Technical Overview](TECHNICAL_OVERVIEW.md) for detailed information about the implementation, available tools, and real-world examples with actual tool calls.
+> 💡 **Want to know how it works?** Read the [Documentation](Documentation/Index.rst) — it covers the editor's view, the integrator's view (events, extension settings, TCA tuning), testing, and a tool reference.
 
 ## Project Status
 
@@ -116,11 +116,11 @@ Tools are defined in the `Classes/MCP/Tools` directory. Each tool follows the MC
 
 ## Learn More
 
-- 📖 **[Technical Overview](TECHNICAL_OVERVIEW.md)** - Comprehensive guide covering architecture, implementation details, and advanced usage
-- 🏗️ **[Architecture Documentation](Documentation/Architecture/)** - Deep dives into specific implementation aspects:
-  - [Workspace Transparency](Documentation/Architecture/WorkspaceTransparency.md) - How workspace complexity is hidden from AI
-  - [Language Overlays](Documentation/Architecture/LanguageOverlays.md) - Multi-language content handling
-  - [Inline Relations](Documentation/Architecture/InlineRelations.md) - Managing TYPO3's complex relation types
+- 📖 **[Documentation](Documentation/Index.rst)** — the full guide. Two tracks:
+  - **For editors** — what the LLM can do, prompting tips, reviewing changes in Workspaces.
+  - **For integrators** — the [event system](Documentation/ForIntegrators/Customization/Index.rst), [extension settings](Documentation/ForIntegrators/ExtensionConfiguration.rst), [TCA tuning for LLMs](Documentation/ForIntegrators/OptimizingTcaForLlms.rst), [authentication](Documentation/ForIntegrators/Authentication.rst), [troubleshooting](Documentation/ForIntegrators/Troubleshooting.rst).
+- 🧪 **[Testing](Documentation/Testing/Index.rst)** — post-install smoke test, per-extension compatibility checklist, patterns for testing your own listeners.
+- 📚 **[Tool & event reference](Documentation/Reference/Index.rst)** — input schemas, signatures, configuration options.
 
 ## License
 
