@@ -288,26 +288,34 @@ class TableAccessService implements SingletonInterface
         $schema = $this->tcaSchemaFactory->get($table);
         $fields = [];
 
-        // Two cases bypass sub-schema filtering and use the full main schema:
-        //
-        // 1) Foreign type notation (e.g. "uid_local:type" on sys_file_reference): the
-        //    record type is derived from a related record at runtime, so there is no
-        //    local type column the LLM can choose. Each "type" maps to a different
-        //    palette (basicoverlayPalette vs imageoverlayPalette etc.), and picking
-        //    one would hide fields like `alternative` or `crop` even though they are
-        //    writable for any type.
-        //
-        // 2) Read-only tables (e.g. sys_file): showitem describes a backend form
-        //    layout, which is irrelevant when the LLM can only read. The user expects
-        //    the schema to advertise every column they can filter on (mime_type, sha1,
-        //    size, identifier, ...). sys_file's TCA only defines a showitem for type
-        //    "1" listing 3 fields, so a sub-schema view drops the rest.
+        // Foreign type notation (e.g. "uid_local:type" on sys_file_reference) derives
+        // the record type from a related record at runtime, so there is no local type
+        // column the LLM can choose. Each "type" maps to a different palette
+        // (basicoverlayPalette vs imageoverlayPalette etc.); restricting to one would
+        // hide fields like `alternative` or `crop` even though they are writable for
+        // any type. Build the union of all sub-schemas' fields so the schema reflects
+        // every showitem-listed column across types — and naturally excludes plumbing
+        // columns (uid_foreign, tablenames, fieldname, sorting_foreign) that no
+        // showitem references.
         $rawTypeField = $GLOBALS['TCA'][$table]['ctrl']['type'] ?? null;
         $usesForeignTypeNotation = is_string($rawTypeField) && str_contains($rawTypeField, ':');
-        $isReadOnly = $this->isTableReadOnly($table);
-        if ($usesForeignTypeNotation || $isReadOnly) {
-            foreach ($schema->getFields() as $field) {
-                $fields[$field->getName()] = $field->getConfiguration();
+        if ($usesForeignTypeNotation) {
+            $subSchemata = $schema->getSubSchemata();
+            if (count($subSchemata) > 0) {
+                foreach ($subSchemata as $subSchema) {
+                    foreach ($subSchema->getFields() as $field) {
+                        $fieldName = $field->getName();
+                        if (!isset($fields[$fieldName])) {
+                            $fields[$fieldName] = $field->getConfiguration();
+                        }
+                    }
+                }
+            } else {
+                // Defensive fallback: a foreign-type-notation table without any
+                // sub-schemas defined would otherwise return an empty list.
+                foreach ($schema->getFields() as $field) {
+                    $fields[$field->getName()] = $field->getConfiguration();
+                }
             }
         } elseif (!empty($type) && $schema->hasSubSchema($type)) {
             $subSchema = $schema->getSubSchema($type);
@@ -363,7 +371,20 @@ class TableAccessService implements SingletonInterface
         // Allow extensions to add, remove, or reconfigure fields
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
         $event = $eventDispatcher->dispatch(new AfterSchemaLoadEvent($table, $type, $fields));
-        return $event->getFields();
+        $fields = $event->getFields();
+
+        // Re-apply field-level access restrictions to any fields added by
+        // listeners. Without this second pass, an enrichment listener that
+        // injects existing TCA columns (e.g. sys_file's `name`, `identifier`)
+        // would bypass `exclude` permissions and TCEFORM `disabled` TSconfig
+        // — the access filter must be the last word, not the first.
+        foreach ($fields as $fieldName => $fieldConfig) {
+            if (!$this->canAccessField($table, $fieldName, $type, $pid)) {
+                unset($fields[$fieldName]);
+            }
+        }
+
+        return $fields;
     }
     
     /**

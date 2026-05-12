@@ -47,6 +47,7 @@ final class FileEnrichmentListener
         match ($event->getTable()) {
             'sys_file' => $this->declareSysFileFields($event),
             'sys_file_reference' => $this->declareSysFileReferenceFields($event),
+            'sys_file_metadata' => $this->declareSysFileMetadataFields($event),
             default => null,
         };
     }
@@ -62,6 +63,19 @@ final class FileEnrichmentListener
 
     private function declareSysFileFields(AfterSchemaLoadEvent $event): void
     {
+        // sys_file's only sub-schema (type=1) shows `fileinfo, storage, missing`
+        // where `fileinfo` is a virtual `type: none` renderer. The actually-useful
+        // columns (name, identifier, mime_type, sha1, size, type, metadata) exist
+        // in TCA but are referenced by no showitem in any palette because the
+        // backend displays them through the `fileinfo` control. Pull them in here
+        // so the LLM can filter and read by them.
+        $columns = $GLOBALS['TCA']['sys_file']['columns'] ?? [];
+        foreach (['name', 'identifier', 'type', 'mime_type', 'sha1', 'size', 'metadata'] as $name) {
+            if (isset($columns[$name]) && !$event->hasField($name)) {
+                $event->addField($name, $columns[$name]);
+            }
+        }
+
         $event->addField('public_url', [
             'label' => 'Public URL',
             'description' => 'Resolved frontend URL of the file. Computed read-only.',
@@ -71,6 +85,24 @@ final class FileEnrichmentListener
             ],
             'mcp' => ['computed' => true],
         ]);
+    }
+
+    private function declareSysFileMetadataFields(AfterSchemaLoadEvent $event): void
+    {
+        // sys_file_metadata uses foreign type notation (`file:type`) so
+        // getAvailableFields builds a union of sub-schema showitems. The TCA
+        // also defines `file` (FK to sys_file, essential for filtering),
+        // `categories`, `width` and `height` — none of which appear in any
+        // showitem because the backend renders them through the `fileinfo`
+        // control. Pull them in so the LLM can find the metadata row for a
+        // given file (LLMs typically `ReadTable(sys_file_metadata, where:
+        // {file: <uid>})` before translating).
+        $columns = $GLOBALS['TCA']['sys_file_metadata']['columns'] ?? [];
+        foreach (['file', 'categories', 'width', 'height'] as $name) {
+            if (isset($columns[$name]) && !$event->hasField($name)) {
+                $event->addField($name, $columns[$name]);
+            }
+        }
     }
 
     private function declareSysFileReferenceFields(AfterSchemaLoadEvent $event): void

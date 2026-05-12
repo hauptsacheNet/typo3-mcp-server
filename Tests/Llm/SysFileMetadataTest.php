@@ -30,6 +30,7 @@ class SysFileMetadataTest extends LlmTestCase
         parent::setUp();
 
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/pages.csv');
+        $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/backend_layout.csv');
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/sys_file.csv');
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/sys_file_metadata.csv');
 
