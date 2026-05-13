@@ -19,7 +19,8 @@ use TYPO3\CMS\Core\Information\Typo3Version;
 class McpServerFactory
 {
     public function __construct(
-        private readonly ToolRegistry $toolRegistry
+        private readonly ToolRegistry $toolRegistry,
+        private readonly ResourceRegistry $resourceRegistry
     ) {}
 
     /**
@@ -77,6 +78,7 @@ class McpServerFactory
     private function registerHandlers(Server $server, ?callable $debugLogger): void
     {
         $toolRegistry = $this->toolRegistry;
+        $resourceRegistry = $this->resourceRegistry;
         $debug = $debugLogger ?? static fn($msg) => null;
 
         // Register tool/list handler
@@ -116,6 +118,42 @@ class McpServerFactory
                     true
                 );
             }
+        });
+
+        // Register resources/list handler
+        $server->registerHandler('resources/list', static function () use ($resourceRegistry, $debug) {
+            $debug('Handling resources/list request');
+            $resources = [];
+            foreach ($resourceRegistry->getResources() as $resource) {
+                $resources[] = [
+                    'uri' => $resource->getUri(),
+                    'name' => $resource->getName(),
+                    'description' => $resource->getDescription(),
+                    'mimeType' => $resource->getMimeType(),
+                ];
+            }
+            return ['resources' => $resources];
+        });
+
+        // Register resources/read handler
+        $server->registerHandler('resources/read', static function ($params) use ($resourceRegistry, $debug) {
+            $uri = is_object($params) ? ($params->uri ?? null) : ($params['uri'] ?? null);
+            $debug('Handling resources/read request for URI: ' . (string)$uri);
+
+            $resource = $uri ? $resourceRegistry->getResource((string)$uri) : null;
+            if (!$resource) {
+                throw new \InvalidArgumentException('Resource not found: ' . (string)$uri);
+            }
+
+            return [
+                'contents' => [
+                    [
+                        'uri' => $resource->getUri(),
+                        'mimeType' => $resource->getMimeType(),
+                        'text' => $resource->read(),
+                    ],
+                ],
+            ];
         });
     }
 }

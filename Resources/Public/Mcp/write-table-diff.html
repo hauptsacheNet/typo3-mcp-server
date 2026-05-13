@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Change preview</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  body { margin: 0; padding: 12px; color: #111; background: #fff; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e8e8e8; background: #1f1f1f; }
+    .card { border-color: #3a3a3a; background: #262626; }
+    .field-name { color: #b8b8b8; }
+    ins { background: #1f3d24; color: #b9f3c0; }
+    del { background: #4a1e1e; color: #f3b9b9; }
+    button, a.btn { background: #2f6dcc; color: #fff; }
+    button.secondary, a.btn.secondary { background: #444; color: #eee; }
+  }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px 14px; }
+  .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+  .title { font-weight: 600; font-size: 15px; margin: 0; }
+  .subtitle { font-size: 12px; color: #777; margin-top: 2px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .badge.create { background: #e7f6ec; color: #186a2c; }
+  .badge.update { background: #e7eef7; color: #1b4e95; }
+  .badge.delete { background: #f7e7e7; color: #952121; }
+  .badge.translate { background: #f3e7f7; color: #6a1e8f; }
+  .badge.superseded { background: #ffeacc; color: #8a4b00; }
+  .field { padding: 8px 0; border-top: 1px dashed #eee; }
+  .field:first-child { border-top: 0; padding-top: 0; }
+  .field-name { font-size: 12px; color: #555; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+  .diff { white-space: pre-wrap; word-break: break-word; }
+  .diff ins { background: #d5f5dd; color: #0e5a23; text-decoration: none; padding: 0 2px; border-radius: 2px; }
+  .diff del { background: #f8d3d3; color: #7c1a1a; text-decoration: line-through; padding: 0 2px; border-radius: 2px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; column-gap: 10px; row-gap: 2px; font-size: 13px; }
+  .kv .k { color: #777; }
+  .kv .v { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
+  .actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  button, a.btn { appearance: none; border: 0; background: #2f6dcc; color: #fff; padding: 7px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: none; display: inline-block; }
+  button.secondary, a.btn.secondary { background: #ddd; color: #333; }
+  button[disabled], a.btn[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; pointer-events: none; }
+  .status { font-size: 12px; color: #777; margin-top: 6px; min-height: 1.2em; }
+  .status.error { color: #952121; }
+  .superseded-card { opacity: 0.7; }
+  .superseded-note { font-size: 12px; color: #8a4b00; margin-top: 4px; }
+  .empty { font-size: 13px; color: #777; padding: 4px 0; }
+</style>
+</head>
+<body>
+<div class="card" id="card" role="region" aria-label="Change preview">
+  <div class="header">
+    <div>
+      <div class="title" id="title">Loading change…</div>
+      <div class="subtitle" id="subtitle"></div>
+    </div>
+    <div>
+      <span class="badge" id="badge"></span>
+      <span class="badge superseded" id="superseded-badge" hidden>Superseded</span>
+    </div>
+  </div>
+  <div id="body" class="empty">Loading…</div>
+  <div class="actions" id="actions" hidden>
+    <a class="btn secondary" id="preview-btn" target="_blank" rel="noopener" hidden>Preview</a>
+    <button id="publish-btn" type="button">Publish this change</button>
+  </div>
+  <div class="status" id="status"></div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  // ---------- MCP App host bridge ----------
+  // The exact API surface still varies between hosts; this shim normalises
+  // the small slice we need: read tool call result + call another tool.
+  function getHostApi() {
+    if (typeof window.openai === "object" && window.openai) return window.openai;
+    if (typeof window.mcp === "object" && window.mcp) return window.mcp;
+    return null;
+  }
+
+  function getToolResult() {
+    var host = getHostApi();
+    if (!host) return null;
+    if (host.toolOutput) return host.toolOutput;
+    if (host.toolResult) return host.toolResult;
+    if (typeof host.getToolResult === "function") return host.getToolResult();
+    return null;
+  }
+
+  function callTool(name, args) {
+    var host = getHostApi();
+    if (!host) {
+      return Promise.reject(new Error("MCP host bridge unavailable"));
+    }
+    if (typeof host.callTool === "function") return host.callTool(name, args);
+    if (typeof host.tools === "object" && host.tools && typeof host.tools.call === "function") {
+      return host.tools.call(name, args);
+    }
+    return Promise.reject(new Error("MCP host does not expose callTool"));
+  }
+
+  function parseToolResultJson(result) {
+    if (!result) return null;
+    // Hosts often present TextContent items; extract first text payload.
+    var content = result.content || result;
+    if (Array.isArray(content)) {
+      for (var i = 0; i < content.length; i++) {
+        var item = content[i];
+        if (item && typeof item.text === "string") {
+          try { return JSON.parse(item.text); } catch (_) {}
+        }
+      }
+    }
+    if (typeof content === "object" && content && content.text) {
+      try { return JSON.parse(content.text); } catch (_) {}
+    }
+    if (typeof result.text === "string") {
+      try { return JSON.parse(result.text); } catch (_) {}
+    }
+    return null;
+  }
+
+  // ---------- DOM helpers ----------
+  function $(id) { return document.getElementById(id); }
+  function setText(id, t) { var el = $(id); if (el) el.textContent = t == null ? "" : String(t); }
+  function setHtml(id, h) { var el = $(id); if (el) el.innerHTML = h; }
+  function show(id) { var el = $(id); if (el) el.hidden = false; }
+  function hide(id) { var el = $(id); if (el) el.hidden = true; }
+
+  // ---------- State ----------
+  var ctx = parseToolResultJson(getToolResult()) || {};
+  var table = ctx.table;
+  var uid = ctx.uid;
+  var action = ctx.action || "update";
+  var ownWriteId = typeof ctx.writeId === "number" ? ctx.writeId : 0;
+  var supersededByLocal = false;
+  var channel = null;
+
+  function isStale(currentWriteId) {
+    return currentWriteId > ownWriteId || supersededByLocal;
+  }
+
+  function markSuperseded() {
+    if (supersededByLocal) return;
+    supersededByLocal = true;
+    show("superseded-badge");
+    $("card").classList.add("superseded-card");
+    var pub = $("publish-btn");
+    if (pub) { pub.disabled = true; pub.title = "Newer change exists for this record."; }
+    var prev = $("preview-btn");
+    if (prev) prev.setAttribute("aria-disabled", "true");
+    setText("status", "A newer write for this record exists below.");
+  }
+
+  function setupBroadcast() {
+    if (typeof BroadcastChannel !== "function" || !table || !uid) return;
+    try {
+      channel = new BroadcastChannel("mcp-write-table");
+      channel.onmessage = function (ev) {
+        var msg = ev && ev.data;
+        if (!msg || msg.table !== table || msg.uid !== uid) return;
+        if (typeof msg.writeId === "number" && msg.writeId > ownWriteId) {
+          markSuperseded();
+        }
+      };
+      // Announce ourselves so older widgets can self-mark.
+      channel.postMessage({ table: table, uid: uid, writeId: ownWriteId });
+    } catch (e) {
+      // BroadcastChannel may be unavailable in sandboxed iframes with opaque
+      // origins; the server-side currentWriteId comparison below still applies.
+      channel = null;
+    }
+  }
+
+  function renderBadge() {
+    var b = $("badge");
+    if (!b) return;
+    b.textContent = action;
+    b.className = "badge " + action;
+  }
+
+  function renderHeader(diff) {
+    setText("title", action.charAt(0).toUpperCase() + action.slice(1)
+      + " in " + (table || "?") + " #" + (uid != null ? uid : "?"));
+    var sub = [];
+    if (diff && diff.recordLabel) sub.push(diff.recordLabel);
+    if (ownWriteId) sub.push("change #" + ownWriteId);
+    setText("subtitle", sub.join(" · "));
+  }
+
+  function renderFields(diff) {
+    var fields = (diff && Array.isArray(diff.fields)) ? diff.fields : [];
+    if (!fields.length) {
+      setHtml("body", '<div class="empty">No tracked field changes detected.</div>');
+      return;
+    }
+    var html = "";
+    for (var i = 0; i < fields.length; i++) {
+      var f = fields[i];
+      html += '<div class="field">';
+      html += '<div class="field-name">' + escapeHtml(f.label || f.name) + '</div>';
+      if (f.isText && typeof f.diffHtml === "string" && f.diffHtml.length) {
+        html += '<div class="diff">' + f.diffHtml + '</div>';
+      } else {
+        html += '<div class="kv">';
+        html += '<span class="k">before</span><span class="v">' + escapeHtml(stringify(f.before)) + '</span>';
+        html += '<span class="k">after</span><span class="v">' + escapeHtml(stringify(f.after)) + '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+    setHtml("body", html);
+  }
+
+  function stringify(v) {
+    if (v === null || v === undefined) return "(empty)";
+    if (typeof v === "string") return v;
+    try { return JSON.stringify(v); } catch (_) { return String(v); }
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function wireActions(diff) {
+    var actions = $("actions");
+    if (!actions) return;
+    actions.hidden = false;
+
+    var preview = $("preview-btn");
+    if (preview) {
+      var url = diff && typeof diff.previewUrl === "string" ? diff.previewUrl : "";
+      if (url) {
+        preview.href = url;
+        preview.hidden = false;
+      } else {
+        preview.hidden = true;
+      }
+    }
+
+    var publish = $("publish-btn");
+    if (action === "delete") {
+      // Publishing a delete still works, but rename the label for clarity.
+      publish.textContent = "Publish deletion";
+    }
+    publish.addEventListener("click", function () {
+      if (publish.disabled) return;
+      publish.disabled = true;
+      setText("status", "Publishing…");
+      $("status").classList.remove("error");
+      callTool("PublishRecord", { table: table, uid: uid }).then(function (res) {
+        var data = parseToolResultJson(res) || {};
+        if (data.published) {
+          publish.textContent = "Published";
+          setText("status", "Change is now live.");
+        } else {
+          publish.disabled = false;
+          $("status").classList.add("error");
+          setText("status", data.error || "Publish failed.");
+        }
+      }).catch(function (err) {
+        publish.disabled = false;
+        $("status").classList.add("error");
+        setText("status", (err && err.message) || "Publish failed.");
+      });
+    });
+  }
+
+  // ---------- Boot ----------
+  function boot() {
+    renderBadge();
+    setupBroadcast();
+
+    if (!table || uid == null) {
+      setText("title", "Change preview");
+      setHtml("body", '<div class="empty">Tool result missing table/uid.</div>');
+      return;
+    }
+
+    callTool("GetRecordDiff", { table: table, uid: uid }).then(function (res) {
+      var diff = parseToolResultJson(res);
+      if (!diff) {
+        setHtml("body", '<div class="empty">No diff data returned by server.</div>');
+        return;
+      }
+      if (typeof diff.currentWriteId === "number" && diff.currentWriteId > ownWriteId) {
+        markSuperseded();
+      }
+      renderHeader(diff);
+      renderFields(diff);
+      wireActions(diff);
+    }).catch(function (err) {
+      setHtml("body", '<div class="empty">Could not load diff: '
+        + escapeHtml((err && err.message) || "unknown error") + '</div>');
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>

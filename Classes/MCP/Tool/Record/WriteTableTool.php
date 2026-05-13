@@ -10,6 +10,8 @@ use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\LanguageService;
+use Hn\McpServer\Service\WorkspaceVersionService;
+use Hn\McpServer\Service\WriteLogService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -25,11 +27,15 @@ use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 class WriteTableTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
+    protected WorkspaceVersionService $workspaceVersionService;
+    protected WriteLogService $writeLogService;
 
     public function __construct()
     {
         parent::__construct();
         $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
+        $this->workspaceVersionService = GeneralUtility::makeInstance(WorkspaceVersionService::class);
+        $this->writeLogService = GeneralUtility::makeInstance(WriteLogService::class);
     }
 
     /**
@@ -105,7 +111,12 @@ class WriteTableTool extends AbstractRecordTool
             'annotations' => [
                 'readOnlyHint' => false,
                 'idempotentHint' => false
-            ]
+            ],
+            '_meta' => [
+                'ui' => [
+                    'resourceUri' => 'ui://mcp-server/write-table-diff',
+                ],
+            ],
         ];
     }
 
@@ -547,9 +558,10 @@ class WriteTableTool extends AbstractRecordTool
             'action' => 'create',
             'table' => $table,
             'uid' => $liveUid,
+            'writeId' => $this->writeLogService->recordWrite($table, $liveUid),
         ]);
     }
-    
+
     /**
      * Update an existing record
      */
@@ -680,9 +692,10 @@ class WriteTableTool extends AbstractRecordTool
             'action' => 'update',
             'table' => $table,
             'uid' => $uid, // Return the live UID that was passed in
+            'writeId' => $this->writeLogService->recordWrite($table, $uid),
         ]);
     }
-    
+
     /**
      * Delete a record
      */
@@ -709,6 +722,7 @@ class WriteTableTool extends AbstractRecordTool
             'action' => 'delete',
             'table' => $table,
             'uid' => $uid, // Return the live UID that was passed in
+            'writeId' => $this->writeLogService->recordWrite($table, $uid),
         ]);
     }
     
@@ -983,13 +997,18 @@ class WriteTableTool extends AbstractRecordTool
             $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'translate', (int)$newTranslationUid, [], null));
         }
 
-        return $this->createJsonResult([
+        $result = [
             'action' => 'translate',
             'table' => $table,
             'sourceUid' => $uid,
             'translationUid' => $newTranslationUid ?: 'Translation created but UID not found',
             'targetLanguage' => $targetIsoCode,
-        ]);
+        ];
+        if ($newTranslationUid) {
+            $result['writeId'] = $this->writeLogService->recordWrite($table, (int)$newTranslationUid);
+            $result['uid'] = (int)$newTranslationUid;
+        }
+        return $this->createJsonResult($result);
     }
 
     /**
@@ -1858,75 +1877,16 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function getLiveUid(string $table, int $workspaceUid): int
     {
-        // If we're in live workspace, the UID is already the live UID
-        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-        if ($currentWorkspace === 0) {
-            return $workspaceUid;
-        }
-        
-        // Look up the record to get its t3ver_oid
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable($table);
-        
-        $queryBuilder->getRestrictions()->removeAll();
-        
-        $record = $queryBuilder
-            ->select('t3ver_oid', 't3ver_state', 't3ver_wsid')
-            ->from($table)
-            ->where(
-                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($workspaceUid, ParameterType::INTEGER))
-            )
-            ->executeQuery()
-            ->fetchAssociative();
-        
-        if (!$record) {
-            // Record not found, return the original UID
-            return $workspaceUid;
-        }
-        
-        // If this is a workspace record with an original, return the original UID
-        if ($record['t3ver_oid'] > 0) {
-            return (int)$record['t3ver_oid'];
-        }
-        
-        // For new records (t3ver_state = 1), the workspace UID IS the UID we should use
-        // New records don't have a live counterpart until published
-        if ($record['t3ver_state'] == 1) {
-            return $workspaceUid;
-        }
-        
-        // Default: return the workspace UID
-        return $workspaceUid;
+        return $this->workspaceVersionService->getLiveUid($table, $workspaceUid);
     }
-    
+
     /**
      * Resolve a live UID to its workspace version
      * Used for update/delete operations where we receive a live UID but need the workspace version
      */
     protected function resolveToWorkspaceUid(string $table, int $liveUid): int
     {
-        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-        
-        // If we're in live workspace, no resolution needed
-        if ($currentWorkspace === 0) {
-            return $liveUid;
-        }
-        
-        // Use BackendUtility to get the workspace version
-        $record = BackendUtility::getRecord($table, $liveUid);
-        if (!$record) {
-            return $liveUid;
-        }
-        
-        // Let BackendUtility handle the workspace overlay
-        BackendUtility::workspaceOL($table, $record);
-        
-        // If we got a different UID, that's the workspace version
-        if (isset($record['_ORIG_uid']) && $record['_ORIG_uid'] != $liveUid) {
-            return (int)$record['uid'];
-        }
-        
-        return $liveUid;
+        return $this->workspaceVersionService->resolveToWorkspaceUid($table, $liveUid);
     }
 
     /**
