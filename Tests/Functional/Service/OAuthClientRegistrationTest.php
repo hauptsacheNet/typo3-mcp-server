@@ -359,6 +359,48 @@ class OAuthClientRegistrationTest extends AbstractFunctionalTest
         );
     }
 
+    public function testGetClientsByUidsReturnsMapKeyedByUid(): void
+    {
+        $a = $this->service->registerClient([
+            'client_name' => 'A',
+            'redirect_uris' => ['http://localhost'],
+        ]);
+        $b = $this->service->registerClient([
+            'client_name' => 'B',
+            'redirect_uris' => ['http://localhost'],
+        ]);
+        $clientA = $this->service->getClient($a['client_id']);
+        $clientB = $this->service->getClient($b['client_id']);
+
+        $map = $this->service->getClientsByUids([$clientA['uid'], $clientB['uid'], 999999]);
+
+        $this->assertArrayHasKey($clientA['uid'], $map);
+        $this->assertArrayHasKey($clientB['uid'], $map);
+        $this->assertArrayNotHasKey(999999, $map);
+        $this->assertSame('A', $map[$clientA['uid']]['client_name']);
+        $this->assertSame('B', $map[$clientB['uid']]['client_name']);
+    }
+
+    public function testGetClientsByUidsExcludesDeletedClients(): void
+    {
+        $registered = $this->service->registerClient([
+            'client_name' => 'Doomed',
+            'redirect_uris' => ['http://localhost'],
+        ]);
+        $client = $this->service->getClient($registered['client_id']);
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_oauth_clients');
+        $connection->update('tx_mcpserver_oauth_clients', ['deleted' => 1], ['uid' => $client['uid']]);
+
+        $this->assertSame([], $this->service->getClientsByUids([$client['uid']]));
+    }
+
+    public function testGetClientsByUidsHandlesEmptyInput(): void
+    {
+        $this->assertSame([], $this->service->getClientsByUids([]));
+        $this->assertSame([], $this->service->getClientsByUids([0, 0]));
+    }
+
     public function testLegacyTokenWithoutClientUidStillValidates(): void
     {
         // A token row inserted before the client_uid column existed (client_uid=0)

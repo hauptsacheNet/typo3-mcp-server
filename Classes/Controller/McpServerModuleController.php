@@ -77,15 +77,7 @@ class McpServerModuleController
         ]);
 
         // Format tokens for template display (same shape as AJAX response)
-        $formattedTokens = array_map(function ($token) {
-            return [
-                'uid' => $token['uid'],
-                'client_name' => $token['client_name'],
-                'created' => date('Y-m-d H:i:s', $token['crdate']),
-                'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
-                'expires' => date('Y-m-d H:i:s', $token['expires']),
-            ];
-        }, $tokens);
+        $formattedTokens = $this->formatTokensForDisplay($tokens);
 
         // Prepare template variables
         $templateVariables = [
@@ -232,6 +224,43 @@ class McpServerModuleController
     }
 
     /**
+     * Enrich raw token rows with the registered client's name so the UI can show
+     * "Claude" (registered) instead of just whatever free-text label was put on
+     * the token. For tokens bound to the well-known public client (manual tokens
+     * issued from this module) the registered name is generic, so we keep showing
+     * the user-entered token label as the primary name.
+     */
+    private function formatTokensForDisplay(array $tokens): array
+    {
+        $clientUids = array_filter(array_map(fn($t) => (int)($t['client_uid'] ?? 0), $tokens));
+        $clients = $this->oauthService->getClientsByUids($clientUids);
+
+        return array_map(function ($token) use ($clients) {
+            $clientUid = (int)($token['client_uid'] ?? 0);
+            $client = $clients[$clientUid] ?? null;
+            $isWellKnown = $client !== null && $client['client_id'] === OAuthService::WELL_KNOWN_CLIENT_ID;
+            $tokenLabel = (string)($token['client_name'] ?? '');
+
+            if ($client !== null && !$isWellKnown) {
+                $primary = $client['client_name'] !== '' ? $client['client_name'] : $tokenLabel;
+                $secondary = ($tokenLabel !== '' && $tokenLabel !== $primary) ? $tokenLabel : null;
+            } else {
+                $primary = $tokenLabel;
+                $secondary = null;
+            }
+
+            return [
+                'uid' => $token['uid'],
+                'client_name' => $primary,
+                'token_label' => $secondary,
+                'created' => date('Y-m-d H:i:s', $token['crdate']),
+                'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
+                'expires' => date('Y-m-d H:i:s', $token['expires']),
+            ];
+        }, $tokens);
+    }
+
+    /**
      * Get user tokens via AJAX for dynamic updates
      */
     public function getUserTokensAction(ServerRequestInterface $request): ResponseInterface
@@ -246,15 +275,7 @@ class McpServerModuleController
             $tokens = $this->oauthService->getUserTokens($userId);
             
             // Format tokens for frontend display
-            $formattedTokens = array_map(function($token) {
-                return [
-                    'uid' => $token['uid'],
-                    'client_name' => $token['client_name'],
-                    'created' => date('Y-m-d H:i:s', $token['crdate']),
-                    'expires' => date('Y-m-d H:i:s', $token['expires']),
-                    'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
-                ];
-            }, $tokens);
+            $formattedTokens = $this->formatTokensForDisplay($tokens);
             
             return new JsonResponse([
                 'success' => true,

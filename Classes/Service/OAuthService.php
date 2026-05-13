@@ -539,6 +539,49 @@ class OAuthService
     }
 
     /**
+     * Batch-load registered clients by their uids. Returns a map [uid => clientArray]
+     * with the same shape as {@see self::getClient()}. Missing or deleted clients
+     * are simply absent from the result.
+     */
+    public function getClientsByUids(array $uids): array
+    {
+        $uids = array_values(array_unique(array_filter(array_map('intval', $uids))));
+        if (empty($uids)) {
+            return [];
+        }
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable(self::CLIENTS_TABLE);
+        $qb = $connection->createQueryBuilder();
+        $rows = $qb
+            ->select('*')
+            ->from(self::CLIENTS_TABLE)
+            ->where(
+                $qb->expr()->in('uid', $qb->createNamedParameter($uids, \Doctrine\DBAL\ArrayParameterType::INTEGER)),
+                $qb->expr()->eq('deleted', $qb->createNamedParameter(0))
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        $result = [];
+        foreach ($rows as $row) {
+            $redirectUris = json_decode((string)($row['redirect_uris'] ?? ''), true);
+            $grantTypes = json_decode((string)($row['grant_types'] ?? ''), true);
+            $result[(int)$row['uid']] = [
+                'uid' => (int)$row['uid'],
+                'client_id' => (string)$row['client_id'],
+                'client_name' => (string)$row['client_name'],
+                'redirect_uris' => is_array($redirectUris) ? $redirectUris : [],
+                'grant_types' => is_array($grantTypes) ? $grantTypes : ['authorization_code'],
+                'scope' => (string)$row['scope'],
+                'token_endpoint_auth_method' => (string)($row['token_endpoint_auth_method'] ?? 'none'),
+                'client_secret_hash' => (string)($row['client_secret'] ?? ''),
+            ];
+        }
+        return $result;
+    }
+
+    /**
      * Verify a redirect_uri against the URIs registered for a client.
      *
      * Exact match by default. As a transition affordance, the seeded

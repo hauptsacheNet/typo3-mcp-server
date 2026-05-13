@@ -368,7 +368,12 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                         <tbody id="tokens-table-body">
                                             <f:for each="{tokens}" as="token">
                                                 <tr data-token-id="{token.uid}">
-                                                    <td><strong>{token.client_name}</strong></td>
+                                                    <td>
+                                                        <strong>{token.client_name}</strong>
+                                                        <f:if condition="{token.token_label}">
+                                                            <br><small class="text-muted">as &quot;{token.token_label}&quot;</small>
+                                                        </f:if>
+                                                    </td>
                                                     <td><small class="text-muted">{token.created}</small></td>
                                                     <td><small class="text-muted">{token.last_used}</small></td>
                                                     <td><small class="text-muted">{token.expires}</small></td>

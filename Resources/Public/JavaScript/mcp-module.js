@@ -518,7 +518,10 @@ class McpModule {
                         <tbody>
                             ${tokens.map(token => `
                                 <tr data-token-id="${esc(token.uid)}">
-                                    <td><strong>${esc(token.client_name)}</strong></td>
+                                    <td>
+                                        <strong>${esc(token.client_name)}</strong>
+                                        ${token.token_label ? `<br><small class="text-muted">as &quot;${esc(token.token_label)}&quot;</small>` : ''}
+                                    </td>
                                     <td><small class="text-muted">${esc(token.created)}</small></td>
                                     <td><small class="text-muted">${esc(token.last_used)}</small></td>
                                     <td><small class="text-muted">${esc(token.expires)}</small></td>

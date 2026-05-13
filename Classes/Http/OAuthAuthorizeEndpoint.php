@@ -245,7 +245,14 @@ class OAuthAuthorizeEndpoint
             return $this->createErrorResponse('invalid_request', 'redirect_uri is not registered for this client');
         }
 
-        $clientName = $this->resolveClientName($request);
+        // Prefer the name the client supplied during dynamic registration; fall
+        // back to the Referer-hostname heuristic only for the well-known seeded
+        // client (which has a generic placeholder name).
+        $registeredName = trim((string)($client['client_name'] ?? ''));
+        $isWellKnown = $client['client_id'] === OAuthService::WELL_KNOWN_CLIENT_ID;
+        $clientName = (!$isWellKnown && $registeredName !== '')
+            ? $registeredName
+            : $this->resolveClientName($request);
 
         $beUser = $GLOBALS['BE_USER'];
         $username = $beUser->user['username'] ?? 'Unknown';
