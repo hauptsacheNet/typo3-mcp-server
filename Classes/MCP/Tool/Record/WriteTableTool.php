@@ -48,7 +48,7 @@ class WriteTableTool extends AbstractRecordTool
             : '';
 
         return [
-            'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live.' . $languageHint . ' ' .
+            'description' => 'Create, update, translate, delete, copy, or move records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live.' . $languageHint . ' ' .
                 'Before creating or updating content, always use GetPage to understand the page structure, existing content, and writing style. ' .
                 'Check existing content elements with ReadTable to ensure new content fits the page\'s tone and doesn\'t duplicate existing elements. ' .
                 'For content creation, verify the appropriate colPos by examining existing content layout. ' .
@@ -59,8 +59,8 @@ class WriteTableTool extends AbstractRecordTool
                 'properties' => [
                     'action' => [
                         'type' => 'string',
-                        'description' => 'Action to perform: "create", "update", "translate", or "delete"',
-                        'enum' => ['create', 'update', 'translate', 'delete'],
+                        'description' => 'Action to perform: "create", "update", "translate", "delete", "copy", or "move"',
+                        'enum' => ['create', 'update', 'translate', 'delete', 'copy', 'move'],
                     ],
                     'table' => [
                         'type' => 'string',
@@ -69,7 +69,7 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'uid' => [
                         'type' => 'integer',
-                        'description' => 'Record UID (required for "update" and "delete" actions)',
+                        'description' => 'Record UID (required for "update", "delete", "copy", and "move" actions)',
                     ],
                     'data' => [
                         'type' => 'object',
@@ -77,6 +77,7 @@ class WriteTableTool extends AbstractRecordTool
                             'Uses the same field syntax as ReadTable output. ' .
                             'The target page is also specified here as "pid" — required on "create" (the page the record is created on); ' .
                             'on "update" setting "pid" moves the record to that page (combine with "position" to control where on the new page it lands; e.g. data: {"pid": 1} moves the record to page 1). ' .
+                            'For "copy" and "move", data may only carry "pid" (the destination page); other fields are not allowed. Use update afterwards to change values. ' .
                             ($hasMultipleLanguages ? 'Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' : '') .
                             'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
                             'For embedded tables (e.g. file references), the array fully replaces the existing list: ' .
@@ -97,7 +98,7 @@ class WriteTableTool extends AbstractRecordTool
                     ],
                     'position' => [
                         'type' => 'string',
-                        'description' => 'Sorting position within a page: "top", "bottom", "after:UID", or "before:UID". For create: defaults to "bottom" if omitted. For update: omit to keep the current sort order, or specify to reorder. To move a record to a DIFFERENT page, set "pid" in the data parameter instead (or together with "position" for fine-grained placement on the new page).',
+                        'description' => 'Sorting position within a page: "top", "bottom", "after:UID", or "before:UID". For create: defaults to "bottom" if omitted. For update: omit to keep the current sort order, or specify to reorder. For copy and move: combine with "pid" in data to control placement on the target page; at least one of "pid" or "position" is required. Without "pid" the record is copied/moved within its current page.',
                     ],
                 ],
                 'required' => ['action', 'table'],
@@ -140,8 +141,8 @@ class WriteTableTool extends AbstractRecordTool
             throw new ValidationException(['Table name is required']);
         }
 
-        // Validate data parameter for create/update/translate
-        if (in_array($action, ['create', 'update', 'translate'], true)) {
+        // Validate data parameter shape for all actions that accept data
+        if (in_array($action, ['create', 'update', 'translate', 'copy', 'move'], true)) {
             if (isset($params['data']) && !is_array($params['data'])) {
                 $dataType = gettype($params['data']);
                 throw new ValidationException([
@@ -254,8 +255,32 @@ class WriteTableTool extends AbstractRecordTool
                 }
                 break;
 
+            case 'copy':
+            case 'move':
+                if ($uid === null) {
+                    throw new ValidationException(['Record UID is required for ' . $action . ' action']);
+                }
+
+                // data may only carry pid for copy/move; any other field is rejected
+                // so callers don't expect field changes that won't happen.
+                $extraDataFields = array_diff(array_keys($data), ['pid']);
+                if (!empty($extraDataFields)) {
+                    throw new ValidationException([
+                        'The data parameter for ' . $action . ' may only contain "pid" (the destination page). ' .
+                        'Disallowed fields: ' . implode(', ', $extraDataFields) . '. ' .
+                        'Use the update action to change field values.'
+                    ]);
+                }
+
+                if ($pid === null && $position === null) {
+                    throw new ValidationException([
+                        ucfirst($action) . ' requires at least one of "pid" (in data, the destination page) or "position" (placement vocabulary like "top", "bottom", "after:UID", "before:UID").'
+                    ]);
+                }
+                break;
+
             default:
-                throw new ValidationException(['Invalid action: ' . $action . '. Valid actions are: create, update, translate, delete']);
+                throw new ValidationException(['Invalid action: ' . $action . '. Valid actions are: create, update, translate, delete, copy, move']);
         }
 
         // Allow listeners to modify data or veto the operation
@@ -298,7 +323,13 @@ class WriteTableTool extends AbstractRecordTool
                 // The language UID has already been converted from ISO code if needed
                 $targetLanguageUid = (int)$data['sys_language_uid'];
                 return $this->translateRecord($table, $uid, $targetLanguageUid);
-                
+
+            case 'copy':
+                return $this->copyRecord($table, $uid, $pid, $position);
+
+            case 'move':
+                return $this->moveRecordAction($table, $uid, $pid, $position);
+
             default:
                 // This should never happen due to earlier validation
                 throw new \LogicException('Invalid action: ' . $action);
@@ -711,7 +742,81 @@ class WriteTableTool extends AbstractRecordTool
             'uid' => $uid, // Return the live UID that was passed in
         ]);
     }
-    
+
+    /**
+     * Copy a record using DataHandler's `copy` cmdmap. Returns the new live UID.
+     */
+    protected function copyRecord(string $table, int $uid, ?int $targetPid, ?string $position): CallToolResult
+    {
+        $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
+
+        $destination = $this->resolvePositionToDestination($table, $workspaceUid, $position, $targetPid);
+        if ($destination === null) {
+            // resolvePositionToDestination only returns null when nothing can be
+            // resolved (e.g. invalid position vocabulary). Fall back to the
+            // source record's pid so the copy still lands somewhere valid.
+            $record = BackendUtility::getRecord($table, $workspaceUid, 'pid');
+            if ($record === null) {
+                return $this->createErrorResult('Source record not found for copy');
+            }
+            $destination = (int)$record['pid'];
+        }
+
+        $cmdMap = [$table => [$workspaceUid => ['copy' => $destination]]];
+        $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->BE_USER = $GLOBALS['BE_USER'];
+        $dataHandler->start([], $cmdMap);
+        try {
+            $dataHandler->process_cmdmap();
+        } catch (\Throwable $e) {
+            return $this->createErrorResult('Error copying record: ' . $e->getMessage());
+        }
+
+        if (!empty($dataHandler->errorLog)) {
+            return $this->createErrorResult('Error copying record: ' . implode(', ', $dataHandler->errorLog));
+        }
+
+        $newWorkspaceUid = $dataHandler->copyMappingArray[$table][$workspaceUid] ?? null;
+        if ($newWorkspaceUid === null) {
+            return $this->createErrorResult('Copy completed but the new record UID could not be determined');
+        }
+
+        $newLiveUid = $this->getLiveUid($table, (int)$newWorkspaceUid);
+
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'copy', $newLiveUid, [], null));
+
+        return $this->createJsonResult([
+            'action' => 'copy',
+            'table' => $table,
+            'uid' => $newLiveUid,
+            'sourceUid' => $uid,
+        ]);
+    }
+
+    /**
+     * Move a record to a different page and/or reorder it. Delegates to the
+     * shared moveRecord() helper that the update action also uses.
+     */
+    protected function moveRecordAction(string $table, int $uid, ?int $targetPid, ?string $position): CallToolResult
+    {
+        $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
+
+        $moveResult = $this->moveRecord($table, $workspaceUid, $position, $targetPid);
+        if ($moveResult !== null) {
+            return $moveResult;
+        }
+
+        $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
+        $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'move', $uid, [], null));
+
+        return $this->createJsonResult([
+            'action' => 'move',
+            'table' => $table,
+            'uid' => $uid,
+        ]);
+    }
+
     /**
      * Move a record to a new position using DataHandler's cmdmap.
      *
