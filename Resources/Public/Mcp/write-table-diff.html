@@ -46,8 +46,9 @@
   .status { font-size: 12px; color: #777; margin-top: 6px; min-height: 1.2em; }
   .status.error { color: #952121; }
   .superseded-card { opacity: 0.7; }
-  .superseded-note { font-size: 12px; color: #8a4b00; margin-top: 4px; }
   .empty { font-size: 13px; color: #777; padding: 4px 0; }
+  details.bridge-debug { font-size: 11px; color: #888; margin-top: 8px; }
+  details.bridge-debug pre { white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; }
 </style>
 </head>
 <body>
@@ -64,48 +65,132 @@
   </div>
   <div id="body" class="empty">Loading…</div>
   <div class="actions" id="actions" hidden>
-    <a class="btn secondary" id="preview-btn" target="_blank" rel="noopener" hidden>Preview</a>
+    <button class="secondary" id="preview-btn" type="button" hidden>Preview</button>
     <button id="publish-btn" type="button">Publish this change</button>
   </div>
   <div class="status" id="status"></div>
+  <details class="bridge-debug" id="bridge-debug" hidden>
+    <summary>Bridge details</summary>
+    <pre id="bridge-debug-content"></pre>
+  </details>
 </div>
 <script>
 (function () {
   "use strict";
 
-  // ---------- MCP App host bridge ----------
-  // The exact API surface still varies between hosts; this shim normalises
-  // the small slice we need: read tool call result + call another tool.
-  function getHostApi() {
-    if (typeof window.openai === "object" && window.openai) return window.openai;
-    if (typeof window.mcp === "object" && window.mcp) return window.mcp;
-    return null;
+  // ---------- MCP host bridge ----------
+  //
+  // We support both bridge flavours in use today:
+  //
+  //   (A) OpenAI Apps SDK (Claude Desktop, ChatGPT, anything tracking the
+  //       reference SDK). Surface: window.openai.{toolOutput, callTool,
+  //       openExternal, ...}. https://developers.openai.com/apps-sdk/reference
+  //
+  //   (B) SEP-1865 raw postMessage JSON-RPC (MCP Inspector and other
+  //       spec-literal hosts). The view sends ui/initialize then
+  //       ui/call-tool messages; the host returns JSON-RPC responses.
+  //       https://github.com/modelcontextprotocol/ext-apps
+  //
+  // The widget tries (A) first since it's strictly richer, and falls back to
+  // (B) when window.openai is absent. Failures are surfaced in a collapsible
+  // diagnostic panel rather than swallowed silently.
+
+  var DEBUG_LOG = [];
+  function log(label, data) {
+    try {
+      DEBUG_LOG.push(label + ": " + (typeof data === "string" ? data : JSON.stringify(data)));
+    } catch (_) {
+      DEBUG_LOG.push(label + ": [unserialisable]");
+    }
   }
 
-  function getToolResult() {
-    var host = getHostApi();
-    if (!host) return null;
-    if (host.toolOutput) return host.toolOutput;
-    if (host.toolResult) return host.toolResult;
-    if (typeof host.getToolResult === "function") return host.getToolResult();
+  function hasOpenAi() {
+    return typeof window.openai === "object" && window.openai !== null;
+  }
+
+  // ----- SEP-1865 fallback: minimal JSON-RPC over postMessage -----
+  var pendingRpc = {};
+  var rpcSeq = 1;
+
+  function rpcCall(method, params) {
+    return new Promise(function (resolve, reject) {
+      var id = "rpc-" + (rpcSeq++);
+      pendingRpc[id] = { resolve: resolve, reject: reject };
+      var msg = { jsonrpc: "2.0", id: id, method: method, params: params || {} };
+      log("postMessage send", msg);
+      try {
+        window.parent.postMessage(msg, "*");
+      } catch (e) {
+        delete pendingRpc[id];
+        reject(e);
+      }
+      // 8s timeout — hosts vary, this is generous.
+      setTimeout(function () {
+        if (pendingRpc[id]) {
+          delete pendingRpc[id];
+          reject(new Error("Host did not respond to " + method + " within 8s"));
+        }
+      }, 8000);
+    });
+  }
+
+  window.addEventListener("message", function (ev) {
+    var data = ev && ev.data;
+    if (!data || typeof data !== "object") return;
+    if (data.jsonrpc !== "2.0") return;
+    if (data.id != null && pendingRpc[data.id]) {
+      var entry = pendingRpc[data.id];
+      delete pendingRpc[data.id];
+      log("postMessage recv", data);
+      if (data.error) {
+        entry.reject(new Error(data.error.message || "RPC error"));
+      } else {
+        entry.resolve(data.result);
+      }
+    }
+  });
+
+  // ----- Unified API surface -----
+  function getToolOutput() {
+    if (hasOpenAi()) {
+      // OpenAI Apps SDK: structuredContent of the originating tool call.
+      var o = window.openai.toolOutput;
+      log("openai.toolOutput", o == null ? null : "present");
+      return o == null ? null : o;
+    }
+    // Spec fallback: ui/initialize hands us host context including toolInfo.
+    // We block on it during boot — see boot().
     return null;
   }
 
   function callTool(name, args) {
-    var host = getHostApi();
-    if (!host) {
-      return Promise.reject(new Error("MCP host bridge unavailable"));
+    if (hasOpenAi() && typeof window.openai.callTool === "function") {
+      log("openai.callTool", name);
+      return Promise.resolve(window.openai.callTool(name, args || {}));
     }
-    if (typeof host.callTool === "function") return host.callTool(name, args);
-    if (typeof host.tools === "object" && host.tools && typeof host.tools.call === "function") {
-      return host.tools.call(name, args);
-    }
-    return Promise.reject(new Error("MCP host does not expose callTool"));
+    log("rpc.callTool", name);
+    return rpcCall("ui/call-tool", { name: name, arguments: args || {} });
   }
 
-  function parseToolResultJson(result) {
+  function openExternal(href) {
+    if (!href) return;
+    if (hasOpenAi() && typeof window.openai.openExternal === "function") {
+      log("openai.openExternal", href);
+      window.openai.openExternal({ href: href });
+      return;
+    }
+    // Spec fallback. Many hosts implement this; if not, we last-resort to
+    // window.open (which may be blocked by sandbox flags — handled by the UI
+    // by surfacing the URL).
+    rpcCall("ui/open-external", { href: href }).catch(function () {
+      try { window.open(href, "_blank", "noopener"); } catch (_) {}
+    });
+  }
+
+  function parseToolResultText(result) {
+    // Some hosts give us a CallToolResult shape (content[].text) — fall back
+    // to digging the JSON out of it when structuredContent isn't available.
     if (!result) return null;
-    // Hosts often present TextContent items; extract first text payload.
     var content = result.content || result;
     if (Array.isArray(content)) {
       for (var i = 0; i < content.length; i++) {
@@ -115,39 +200,48 @@
         }
       }
     }
-    if (typeof content === "object" && content && content.text) {
-      try { return JSON.parse(content.text); } catch (_) {}
-    }
-    if (typeof result.text === "string") {
-      try { return JSON.parse(result.text); } catch (_) {}
-    }
     return null;
+  }
+
+  function extractToolPayload(result) {
+    // OpenAI Apps SDK returns structuredContent directly from callTool; the
+    // SEP-1865 fallback returns a full CallToolResult envelope. Handle both.
+    if (!result) return null;
+    if (result.structuredContent && typeof result.structuredContent === "object") {
+      return result.structuredContent;
+    }
+    return parseToolResultText(result);
   }
 
   // ---------- DOM helpers ----------
   function $(id) { return document.getElementById(id); }
   function setText(id, t) { var el = $(id); if (el) el.textContent = t == null ? "" : String(t); }
   function setHtml(id, h) { var el = $(id); if (el) el.innerHTML = h; }
-  function show(id) { var el = $(id); if (el) el.hidden = false; }
-  function hide(id) { var el = $(id); if (el) el.hidden = true; }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function stringify(v) {
+    if (v === null || v === undefined) return "(empty)";
+    if (typeof v === "string") return v;
+    try { return JSON.stringify(v); } catch (_) { return String(v); }
+  }
 
   // ---------- State ----------
-  var ctx = parseToolResultJson(getToolResult()) || {};
-  var table = ctx.table;
-  var uid = ctx.uid;
-  var action = ctx.action || "update";
-  var ownWriteId = typeof ctx.writeId === "number" ? ctx.writeId : 0;
+  var diff = null;
   var supersededByLocal = false;
   var channel = null;
-
-  function isStale(currentWriteId) {
-    return currentWriteId > ownWriteId || supersededByLocal;
-  }
 
   function markSuperseded() {
     if (supersededByLocal) return;
     supersededByLocal = true;
-    show("superseded-badge");
+    var sb = $("superseded-badge"); if (sb) sb.hidden = false;
     $("card").classList.add("superseded-card");
     var pub = $("publish-btn");
     if (pub) { pub.disabled = true; pub.title = "Newer change exists for this record."; }
@@ -156,8 +250,8 @@
     setText("status", "A newer write for this record exists below.");
   }
 
-  function setupBroadcast() {
-    if (typeof BroadcastChannel !== "function" || !table || !uid) return;
+  function setupBroadcast(table, uid, ownWriteId) {
+    if (typeof BroadcastChannel !== "function" || !table || uid == null) return;
     try {
       channel = new BroadcastChannel("mcp-write-table");
       channel.onmessage = function (ev) {
@@ -167,35 +261,39 @@
           markSuperseded();
         }
       };
-      // Announce ourselves so older widgets can self-mark.
       channel.postMessage({ table: table, uid: uid, writeId: ownWriteId });
     } catch (e) {
-      // BroadcastChannel may be unavailable in sandboxed iframes with opaque
-      // origins; the server-side currentWriteId comparison below still applies.
+      log("BroadcastChannel error", e && e.message);
       channel = null;
     }
   }
 
-  function renderBadge() {
+  function renderBadge(action) {
     var b = $("badge");
     if (!b) return;
-    b.textContent = action;
-    b.className = "badge " + action;
+    b.textContent = action || "change";
+    b.className = "badge " + (action || "");
   }
 
-  function renderHeader(diff) {
-    setText("title", action.charAt(0).toUpperCase() + action.slice(1)
-      + " in " + (table || "?") + " #" + (uid != null ? uid : "?"));
+  function renderHeader() {
+    setText("title",
+      (diff.action || "change").charAt(0).toUpperCase()
+      + (diff.action || "change").slice(1)
+      + " in " + (diff.table || "?") + " #" + (diff.uid != null ? diff.uid : "?")
+    );
     var sub = [];
-    if (diff && diff.recordLabel) sub.push(diff.recordLabel);
-    if (ownWriteId) sub.push("change #" + ownWriteId);
+    if (diff.recordLabel) sub.push(diff.recordLabel);
+    if (diff.writeId) sub.push("change #" + diff.writeId);
     setText("subtitle", sub.join(" · "));
   }
 
-  function renderFields(diff) {
-    var fields = (diff && Array.isArray(diff.fields)) ? diff.fields : [];
+  function renderFields() {
+    var fields = Array.isArray(diff.fields) ? diff.fields : [];
     if (!fields.length) {
-      setHtml("body", '<div class="empty">No tracked field changes detected.</div>');
+      var hint = diff.isDeleted ? "Record marked for deletion." :
+                 (diff.hasWorkspaceChange ? "No tracked field changes." :
+                                            "No pending workspace change.");
+      setHtml("body", '<div class="empty">' + escapeHtml(hint) + '</div>');
       return;
     }
     var html = "";
@@ -216,92 +314,121 @@
     setHtml("body", html);
   }
 
-  function stringify(v) {
-    if (v === null || v === undefined) return "(empty)";
-    if (typeof v === "string") return v;
-    try { return JSON.stringify(v); } catch (_) { return String(v); }
-  }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
-  function wireActions(diff) {
+  function wireActions() {
     var actions = $("actions");
     if (!actions) return;
     actions.hidden = false;
 
     var preview = $("preview-btn");
-    if (preview) {
-      var url = diff && typeof diff.previewUrl === "string" ? diff.previewUrl : "";
-      if (url) {
-        preview.href = url;
-        preview.hidden = false;
-      } else {
-        preview.hidden = true;
-      }
+    var url = (diff && typeof diff.previewUrl === "string") ? diff.previewUrl : "";
+    if (url) {
+      preview.hidden = false;
+      preview.title = url;
+      preview.addEventListener("click", function () { openExternal(url); });
+    } else {
+      preview.hidden = true;
     }
 
     var publish = $("publish-btn");
-    if (action === "delete") {
-      // Publishing a delete still works, but rename the label for clarity.
+    if (diff.action === "delete") {
       publish.textContent = "Publish deletion";
+    }
+    if (!diff.hasWorkspaceChange) {
+      publish.disabled = true;
+      publish.title = "Nothing pending to publish.";
     }
     publish.addEventListener("click", function () {
       if (publish.disabled) return;
       publish.disabled = true;
       setText("status", "Publishing…");
-      $("status").classList.remove("error");
-      callTool("PublishRecord", { table: table, uid: uid }).then(function (res) {
-        var data = parseToolResultJson(res) || {};
+      var s = $("status"); if (s) s.classList.remove("error");
+      callTool("PublishRecord", { table: diff.table, uid: diff.uid }).then(function (res) {
+        var data = extractToolPayload(res) || {};
         if (data.published) {
           publish.textContent = "Published";
           setText("status", "Change is now live.");
         } else {
           publish.disabled = false;
-          $("status").classList.add("error");
+          var s2 = $("status"); if (s2) s2.classList.add("error");
           setText("status", data.error || "Publish failed.");
         }
       }).catch(function (err) {
         publish.disabled = false;
-        $("status").classList.add("error");
+        var s3 = $("status"); if (s3) s3.classList.add("error");
         setText("status", (err && err.message) || "Publish failed.");
       });
     });
   }
 
-  // ---------- Boot ----------
-  function boot() {
-    renderBadge();
-    setupBroadcast();
+  function exposeBridgeDebug() {
+    if (!DEBUG_LOG.length) return;
+    var el = $("bridge-debug");
+    var pre = $("bridge-debug-content");
+    if (el && pre) {
+      pre.textContent = DEBUG_LOG.join("\n");
+      el.hidden = false;
+    }
+  }
 
-    if (!table || uid == null) {
-      setText("title", "Change preview");
-      setHtml("body", '<div class="empty">Tool result missing table/uid.</div>');
+  function showError(message) {
+    setText("title", "Change preview");
+    setHtml("body", '<div class="empty">' + escapeHtml(message) + '</div>');
+    exposeBridgeDebug();
+  }
+
+  // ---------- Boot ----------
+  function applyDiff(payload) {
+    diff = payload;
+    renderBadge(diff.action);
+    renderHeader();
+    renderFields();
+    wireActions();
+    if (typeof diff.currentWriteId === "number" && diff.currentWriteId > (diff.writeId || 0)) {
+      markSuperseded();
+    }
+    setupBroadcast(diff.table, diff.uid, diff.writeId || 0);
+  }
+
+  function bootFromOpenAi() {
+    var payload = getToolOutput();
+    if (payload && typeof payload === "object") {
+      applyDiff(payload);
+      return true;
+    }
+    return false;
+  }
+
+  function bootFromSpec() {
+    // SEP-1865: initialise the view, then pull structuredContent off the
+    // toolInfo handed back by the host.
+    rpcCall("ui/initialize", { protocolVersion: "0.1" }).then(function (initResult) {
+      log("ui/initialize result", initResult);
+      var toolInfo = initResult && (initResult.hostContext && initResult.hostContext.toolInfo);
+      var payload = toolInfo && (toolInfo.structuredContent || toolInfo.tool && toolInfo.tool.structuredContent);
+      if (!payload && toolInfo && toolInfo.tool && toolInfo.tool.result) {
+        payload = extractToolPayload(toolInfo.tool.result);
+      }
+      if (payload && typeof payload === "object") {
+        applyDiff(payload);
+      } else {
+        showError("Host did not provide tool result data (no structuredContent in ui/initialize response).");
+      }
+    }).catch(function (err) {
+      showError("Bridge initialise failed: " + ((err && err.message) || "unknown error"));
+    });
+  }
+
+  function boot() {
+    if (bootFromOpenAi()) return;
+    if (hasOpenAi()) {
+      // Bridge exists but exposed no tool output — likely the host hasn't
+      // forwarded the originating call yet. Retry once on the next frame.
+      setTimeout(function () {
+        if (!bootFromOpenAi()) bootFromSpec();
+      }, 50);
       return;
     }
-
-    callTool("GetRecordDiff", { table: table, uid: uid }).then(function (res) {
-      var diff = parseToolResultJson(res);
-      if (!diff) {
-        setHtml("body", '<div class="empty">No diff data returned by server.</div>');
-        return;
-      }
-      if (typeof diff.currentWriteId === "number" && diff.currentWriteId > ownWriteId) {
-        markSuperseded();
-      }
-      renderHeader(diff);
-      renderFields(diff);
-      wireActions(diff);
-    }).catch(function (err) {
-      setHtml("body", '<div class="empty">Could not load diff: '
-        + escapeHtml((err && err.message) || "unknown error") + '</div>');
-    });
+    bootFromSpec();
   }
 
   if (document.readyState === "loading") {

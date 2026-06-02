@@ -55,6 +55,14 @@ class PublishRecordTool extends AbstractRecordTool
                 'idempotentHint' => false,
                 'destructiveHint' => true,
             ],
+            // visibility=["app"] keeps this tool out of the LLM's tool list per
+            // SEP-1865 — only the embedded MCP App widget can invoke it via
+            // window.openai.callTool. The LLM cannot autonomously publish.
+            '_meta' => [
+                'ui' => [
+                    'visibility' => ['app'],
+                ],
+            ],
         ];
     }
 

@@ -70,7 +70,7 @@ abstract class AbstractRecordTool extends AbstractTool
      * because it expects a string. Substitute mode replaces the offending byte
      * with U+FFFD so the response is well-formed.
      */
-    protected function createJsonResult(array $data): CallToolResult
+    protected function createJsonResult(array $data, ?array $structuredContent = null): CallToolResult
     {
         $encoded = json_encode(
             $data,
@@ -79,7 +79,12 @@ abstract class AbstractRecordTool extends AbstractTool
         if ($encoded === false) {
             $encoded = '{}';
         }
-        return new CallToolResult([new TextContent($encoded)]);
+        return new CallToolResult(
+            [new TextContent($encoded)],
+            false,
+            null,
+            $structuredContent
+        );
     }
 
     /**

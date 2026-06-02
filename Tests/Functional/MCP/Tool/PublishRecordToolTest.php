@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\PublishRecordTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Hn\McpServer\Tests\Functional\Traits\McpAssertionsTrait;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
@@ -23,6 +24,27 @@ class PublishRecordToolTest extends AbstractFunctionalTest
         parent::setUp();
         $this->writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
         $this->publishTool = GeneralUtility::makeInstance(PublishRecordTool::class);
+    }
+
+    public function testSchemaMarksToolAsWidgetOnly(): void
+    {
+        $schema = $this->publishTool->getSchema();
+        $this->assertSame(
+            ['app'],
+            $schema['_meta']['ui']['visibility'] ?? null,
+            'PublishRecord must be widget-only — LLM must not see it'
+        );
+    }
+
+    public function testToolRegistryStillExposesPublishToolForCallTool(): void
+    {
+        // Hidden from tools/list does NOT mean unregistered — the host must
+        // still be able to dispatch tools/call from the widget bridge.
+        $registry = GeneralUtility::makeInstance(ToolRegistry::class);
+        $this->assertNotNull(
+            $registry->getTool('PublishRecord'),
+            'PublishRecord must remain registered so the widget can call it via tools/call'
+        );
     }
 
     public function testPublishesNewWorkspaceRecord(): void

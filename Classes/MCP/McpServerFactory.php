@@ -82,12 +82,22 @@ class McpServerFactory
         $debug = $debugLogger ?? static fn($msg) => null;
 
         // Register tool/list handler
+        // Tools annotated with _meta.ui.visibility=["app"] (SEP-1865) are
+        // hidden from the LLM's tool list here — they remain executable via
+        // tools/call so the embedded MCP App widget can still invoke them.
+        // Defense-in-depth: spec-compliant hosts already filter on visibility,
+        // but filtering server-side too ensures the LLM cannot discover them
+        // on hosts that ignore the annotation.
         $server->registerHandler('tools/list', static function () use ($toolRegistry, $debug) {
             $debug('Handling tools/list request');
             $tools = [];
 
             foreach ($toolRegistry->getTools() as $tool) {
                 $schema = $tool->getSchema();
+                $visibility = $schema['_meta']['ui']['visibility'] ?? null;
+                if (is_array($visibility) && !in_array('model', $visibility, true)) {
+                    continue;
+                }
                 $tools[] = [
                     'name' => $tool->getName(),
                     ...$schema

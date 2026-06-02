@@ -114,6 +114,24 @@ Build/runTests.sh -h
 
 Tools are defined in the `Classes/MCP/Tools` directory. Each tool follows the MCP tool specification and maps to specific TYPO3 functionality.
 
+### Testing the inline change-preview widget (MCP Apps)
+
+`write_table` ships with an [MCP Apps](https://modelcontextprotocol.io/community/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp) UI resource (`ui://mcp-server/write-table-diff`). Hosts that implement SEP-1865 render an inline diff with Preview and Publish buttons after every write. The diff payload travels as `structuredContent` on the tool result — no extra tool call. `publish_record` is annotated `_meta.ui.visibility: ["app"]`, so it is hidden from the LLM's tool list and is only callable from inside the widget.
+
+To exercise the widget against your local server without deploying anywhere:
+
+- **Claude Desktop** (recommended for fast iteration). Configure the STDIO connection as documented above. Open a chat, run a `write_table` call, and the widget renders next to the tool result.
+- **claude.ai / ChatGPT cloud**. The cloud UI can't reach `localhost`. Open a no-signup HTTPS tunnel:
+
+  ```bash
+  cloudflared tunnel --url http://localhost:<port>
+  ```
+
+  Point your MCP client at the `https://*.trycloudflare.com` URL it prints.
+- **MCP Inspector**. Renders the HTML resource and exercises the SEP-1865 raw `postMessage` bridge fallback. Useful for confirming the HTML is served correctly and the JSON-RPC fallback path works, but `window.openai.*` features (preview links, callbacks) only light up in Claude Desktop / ChatGPT.
+
+If the widget shows a "Bridge details" panel at the bottom, expand it — it logs every host-bridge attempt so you can see which API surface the host exposes.
+
 ## Learn More
 
 - 📖 **[Technical Overview](TECHNICAL_OVERVIEW.md)** - Comprehensive guide covering architecture, implementation details, and advanced usage

@@ -10,6 +10,7 @@ use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\LanguageService;
+use Hn\McpServer\Service\RecordDiffBuilder;
 use Hn\McpServer\Service\WorkspaceVersionService;
 use Hn\McpServer\Service\WriteLogService;
 use Mcp\Types\CallToolResult;
@@ -29,6 +30,7 @@ class WriteTableTool extends AbstractRecordTool
     protected LanguageService $languageService;
     protected WorkspaceVersionService $workspaceVersionService;
     protected WriteLogService $writeLogService;
+    protected RecordDiffBuilder $recordDiffBuilder;
 
     public function __construct()
     {
@@ -36,6 +38,30 @@ class WriteTableTool extends AbstractRecordTool
         $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
         $this->workspaceVersionService = GeneralUtility::makeInstance(WorkspaceVersionService::class);
         $this->writeLogService = GeneralUtility::makeInstance(WriteLogService::class);
+        $this->recordDiffBuilder = GeneralUtility::makeInstance(RecordDiffBuilder::class);
+    }
+
+    /**
+     * Build the JSON result a successful write returns. The text payload stays
+     * compact (the LLM reads this directly). The same data plus a full diff
+     * payload is also exposed via $structuredContent so the inline MCP App
+     * widget can render the change without a follow-up tool call.
+     *
+     * @param array<string, mixed> $extra Extra fields to merge into the text payload
+     */
+    private function buildWriteResult(string $table, int $liveUid, string $action, array $extra = []): CallToolResult
+    {
+        $writeId = $this->writeLogService->recordWrite($table, $liveUid);
+        $diff = $this->recordDiffBuilder->build($table, $liveUid, $action, $writeId, $writeId);
+
+        $payload = array_merge([
+            'action' => $action,
+            'table' => $table,
+            'uid' => $liveUid,
+            'writeId' => $writeId,
+        ], $extra);
+
+        return $this->createJsonResult($payload, $diff);
     }
 
     /**
@@ -114,7 +140,13 @@ class WriteTableTool extends AbstractRecordTool
             ],
             '_meta' => [
                 'ui' => [
+                    // SEP-1865: declare the MCP App UI resource the host should
+                    // render after every successful tool call. Hosts that don't
+                    // implement MCP Apps simply ignore the annotation.
                     'resourceUri' => 'ui://mcp-server/write-table-diff',
+                    // Explicit visibility=["model"] (default) so the contrast
+                    // with PublishRecord's widget-only visibility is obvious.
+                    'visibility' => ['model'],
                 ],
             ],
         ];
@@ -554,12 +586,7 @@ class WriteTableTool extends AbstractRecordTool
         $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'create', $liveUid, $data, $pid));
 
         // Return the result with live UID
-        return $this->createJsonResult([
-            'action' => 'create',
-            'table' => $table,
-            'uid' => $liveUid,
-            'writeId' => $this->writeLogService->recordWrite($table, $liveUid),
-        ]);
+        return $this->buildWriteResult($table, $liveUid, 'create');
     }
 
     /**
@@ -688,12 +715,7 @@ class WriteTableTool extends AbstractRecordTool
         $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'update', $uid, $data, null));
 
         // Return the result with the original live UID
-        return $this->createJsonResult([
-            'action' => 'update',
-            'table' => $table,
-            'uid' => $uid, // Return the live UID that was passed in
-            'writeId' => $this->writeLogService->recordWrite($table, $uid),
-        ]);
+        return $this->buildWriteResult($table, $uid, 'update');
     }
 
     /**
@@ -718,12 +740,7 @@ class WriteTableTool extends AbstractRecordTool
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
         $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'delete', $uid, [], null));
 
-        return $this->createJsonResult([
-            'action' => 'delete',
-            'table' => $table,
-            'uid' => $uid, // Return the live UID that was passed in
-            'writeId' => $this->writeLogService->recordWrite($table, $uid),
-        ]);
+        return $this->buildWriteResult($table, $uid, 'delete');
     }
     
     /**
@@ -997,18 +1014,26 @@ class WriteTableTool extends AbstractRecordTool
             $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'translate', (int)$newTranslationUid, [], null));
         }
 
-        $result = [
+        if ($newTranslationUid) {
+            return $this->buildWriteResult(
+                $table,
+                (int)$newTranslationUid,
+                'translate',
+                [
+                    'sourceUid' => $uid,
+                    'translationUid' => (int)$newTranslationUid,
+                    'targetLanguage' => $targetIsoCode,
+                ]
+            );
+        }
+
+        return $this->createJsonResult([
             'action' => 'translate',
             'table' => $table,
             'sourceUid' => $uid,
-            'translationUid' => $newTranslationUid ?: 'Translation created but UID not found',
+            'translationUid' => 'Translation created but UID not found',
             'targetLanguage' => $targetIsoCode,
-        ];
-        if ($newTranslationUid) {
-            $result['writeId'] = $this->writeLogService->recordWrite($table, (int)$newTranslationUid);
-            $result['uid'] = (int)$newTranslationUid;
-        }
-        return $this->createJsonResult($result);
+        ]);
     }
 
     /**

@@ -2,90 +2,52 @@
 
 declare(strict_types=1);
 
-namespace Hn\McpServer\MCP\Tool\Record;
+namespace Hn\McpServer\Service;
 
-use Hn\McpServer\Exception\ValidationException;
-use Hn\McpServer\Service\WorkspaceVersionService;
-use Hn\McpServer\Service\WriteLogService;
-use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\DiffUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Workspaces\Preview\PreviewUriBuilder;
 
 /**
- * Produce the diff payload consumed by the write_table MCP App widget.
+ * Build the structured diff payload that the write_table MCP App widget
+ * renders inline after every write.
  *
- * Returns a structured comparison between the live record and its workspace
- * version, plus a workspace preview URL and the current writeId. Restricted
- * to workspace-capable tables that the user can also write to — listing the
- * diff is conceptually a read operation on a pending write, so we require
- * the same access as ReadTable.
+ * Payload shape (also returned as CallToolResult::$structuredContent so MCP
+ * App hosts surface it via window.openai.toolOutput):
+ *   {
+ *     table, uid, action, writeId, currentWriteId, recordLabel,
+ *     hasWorkspaceChange, isNewRecord, isDeleted,
+ *     previewUrl,            // null when the record isn't placed on a page
+ *     fields: [{name, label, type, isText, before, after, diffHtml}]
+ *   }
  */
-class GetRecordDiffTool extends AbstractRecordTool
+class RecordDiffBuilder
 {
-    protected WorkspaceVersionService $workspaceVersionService;
-    protected WriteLogService $writeLogService;
+    private WorkspaceVersionService $workspaceVersionService;
 
-    public function __construct()
+    public function __construct(?WorkspaceVersionService $workspaceVersionService = null)
     {
-        parent::__construct();
-        $this->workspaceVersionService = GeneralUtility::makeInstance(WorkspaceVersionService::class);
-        $this->writeLogService = GeneralUtility::makeInstance(WriteLogService::class);
+        $this->workspaceVersionService = $workspaceVersionService
+            ?? GeneralUtility::makeInstance(WorkspaceVersionService::class);
     }
 
-    public function getSchema(): array
+    /**
+     * @return array<string, mixed>
+     */
+    public function build(string $table, int $liveUid, string $action, int $writeId, int $currentWriteId): array
     {
-        return [
-            'description' => 'Internal companion tool for the write_table inline diff widget. '
-                . 'Returns the per-field diff between the live record and its current workspace '
-                . 'version, the current write counter, and a workspace preview URL. Intended to be '
-                . 'called from the MCP App widget — calling it directly from chat is rarely useful.',
-            'inputSchema' => [
-                'type' => 'object',
-                'properties' => [
-                    'table' => [
-                        'type' => 'string',
-                        'description' => 'The table name of the record.',
-                    ],
-                    'uid' => [
-                        'type' => 'integer',
-                        'description' => 'The live UID of the record (same UID write_table returned).',
-                    ],
-                ],
-                'required' => ['table', 'uid'],
-            ],
-            'annotations' => [
-                'readOnlyHint' => true,
-                'idempotentHint' => true,
-            ],
-        ];
-    }
-
-    protected function doExecute(array $params): CallToolResult
-    {
-        $table = (string)($params['table'] ?? '');
-        $liveUid = (int)($params['uid'] ?? 0);
-
-        if ($table === '' || $liveUid <= 0) {
-            throw new ValidationException(['table and uid are required']);
-        }
-
-        $this->ensureTableAccess($table, 'read');
-
-        // The MCP convention is that callers always pass a "live UID". In
-        // practice that may be (a) a real live record UID with a workspace
-        // overlay, or (b) the workspace UID of a brand-new record that has
-        // never been in live. BackendUtility::getRecord queries by raw uid
-        // so it doesn't disambiguate the two — we look at t3ver_state on the
-        // row we get back to tell which situation we're in.
+        // The MCP convention exposes only live UIDs. In practice that uid may
+        // be (a) a real live record uid with a workspace overlay, or (b) the
+        // workspace uid of a brand-new record that has never been in live.
+        // BackendUtility::getRecord queries by raw uid so it doesn't
+        // disambiguate the two — t3ver_state on the row tells us which.
         $rawRow = BackendUtility::getRecord($table, $liveUid, '*', '', false);
         $isNewRecord = false;
         $liveRecord = null;
         $workspaceRecord = null;
 
         if (is_array($rawRow) && (int)($rawRow['t3ver_state'] ?? 0) === 1 && (int)($rawRow['t3ver_wsid'] ?? 0) > 0) {
-            // Brand-new workspace record — the row IS the workspace record.
             $workspaceRecord = $rawRow;
             $isNewRecord = true;
         } else {
@@ -96,12 +58,14 @@ class GetRecordDiffTool extends AbstractRecordTool
             }
         }
 
-        $fields = $this->buildFieldDiffs(
-            $table,
-            $liveRecord ?? [],
-            $workspaceRecord ?? $liveRecord ?? [],
-            $isNewRecord
-        );
+        // For deletes, the workspace record is the delete placeholder; surface
+        // every previously-set field as a removal by treating the live row as
+        // the "before" and an empty row as the "after".
+        $isDeleted = $this->isDeletePlaceholder($workspaceRecord);
+        $afterRow = $isDeleted ? [] : ($workspaceRecord ?? $liveRecord ?? []);
+        $beforeRow = $liveRecord ?? [];
+
+        $fields = $this->buildFieldDiffs($table, $beforeRow, $afterRow, $isNewRecord || $isDeleted);
 
         $recordLabel = '';
         $labelSource = $workspaceRecord ?? $liveRecord;
@@ -109,28 +73,28 @@ class GetRecordDiffTool extends AbstractRecordTool
             $recordLabel = (string)BackendUtility::getRecordTitle($table, $labelSource, true);
         }
 
-        return $this->createJsonResult([
+        return [
             'table' => $table,
             'uid' => $liveUid,
-            'currentWriteId' => $this->writeLogService->getCurrentWriteId($table, $liveUid),
+            'action' => $action,
+            'writeId' => $writeId,
+            'currentWriteId' => $currentWriteId,
             'hasWorkspaceChange' => $workspaceRecord !== null,
             'isNewRecord' => $isNewRecord,
-            'isDeleted' => $this->isDeletePlaceholder($workspaceRecord),
+            'isDeleted' => $isDeleted,
             'recordLabel' => $recordLabel,
             'previewUrl' => $this->buildPreviewUrl($table, $liveUid),
             'fields' => $fields,
-        ]);
+        ];
     }
 
     /**
+     * @param array<string, mixed> $beforeRow
+     * @param array<string, mixed> $afterRow
      * @return array<int, array<string, mixed>>
      */
-    private function buildFieldDiffs(
-        string $table,
-        array $liveRecord,
-        array $workspaceRecord,
-        bool $isNewRecord
-    ): array {
+    private function buildFieldDiffs(string $table, array $beforeRow, array $afterRow, bool $forceShowAllChanges): array
+    {
         $columns = $GLOBALS['TCA'][$table]['columns'] ?? [];
         if ($columns === []) {
             return [];
@@ -144,10 +108,10 @@ class GetRecordDiffTool extends AbstractRecordTool
                 continue;
             }
 
-            $beforeRaw = $liveRecord[$fieldName] ?? null;
-            $afterRaw = $workspaceRecord[$fieldName] ?? null;
+            $beforeRaw = $beforeRow[$fieldName] ?? null;
+            $afterRaw = $afterRow[$fieldName] ?? null;
 
-            if (!$isNewRecord && $this->valuesEqual($beforeRaw, $afterRaw)) {
+            if (!$forceShowAllChanges && $this->valuesEqual($beforeRaw, $afterRaw)) {
                 continue;
             }
 
@@ -181,8 +145,9 @@ class GetRecordDiffTool extends AbstractRecordTool
 
     private function shouldSkipField(string $fieldName): bool
     {
-        // These house workspace bookkeeping, sorting, timestamps — they always
-        // differ between live and workspace and add noise rather than signal.
+        // These house workspace bookkeeping, sorting and timestamps — they
+        // always differ between live and workspace and add noise rather than
+        // signal in a user-facing diff.
         static $skip = [
             'uid', 'pid', 'tstamp', 'crdate', 'sorting', 'cruser_id',
             't3ver_oid', 't3ver_wsid', 't3ver_state', 't3ver_stage', 't3_origuid',
@@ -190,6 +155,9 @@ class GetRecordDiffTool extends AbstractRecordTool
         return in_array($fieldName, $skip, true);
     }
 
+    /**
+     * @param array<string, mixed> $config
+     */
     private function isTextField(string $type, array $config): bool
     {
         if ($type === 'text') {
@@ -221,8 +189,6 @@ class GetRecordDiffTool extends AbstractRecordTool
         if ($a === $b) {
             return true;
         }
-        // Treat null and empty string as equivalent — TCA inserts often store
-        // either one depending on the column default.
         $aN = $a === null ? '' : (string)$a;
         $bN = $b === null ? '' : (string)$b;
         return $aN === $bN;
@@ -244,13 +210,24 @@ class GetRecordDiffTool extends AbstractRecordTool
         if ($label === '') {
             return $label;
         }
-        if (str_starts_with($label, 'LLL:')) {
-            $translated = $GLOBALS['LANG']->sL($label) ?? '';
-            return $translated !== '' ? $translated : $label;
+        if (!str_starts_with($label, 'LLL:')) {
+            return $label;
         }
-        return $label;
+        try {
+            $translated = $GLOBALS['LANG']->sL($label) ?? '';
+        } catch (\Throwable $e) {
+            // Extension referenced in TCA labels may not be loaded in this
+            // request (e.g. running tests against tt_content with EXT:news TCA
+            // also pulling foreign LLL refs). Fall back to the raw key rather
+            // than fail the entire write.
+            return $label;
+        }
+        return $translated !== '' ? $translated : $label;
     }
 
+    /**
+     * @param array<string, mixed>|null $workspaceRecord
+     */
     private function isDeletePlaceholder(?array $workspaceRecord): bool
     {
         if ($workspaceRecord === null) {
