@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Mcp\Types\CallToolResult;
-use TYPO3\CMS\Core\Service\FlexFormService;
+use TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
 use Hn\McpServer\Service\TableAccessService;
@@ -691,13 +691,13 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
                 if (file_exists($file)) {
                     $content = file_get_contents($file);
                     if (!empty($content)) {
-                        $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
-                        return $flexFormService->convertFlexFormContentToArray($content);
+                        $flexFormTools = GeneralUtility::makeInstance(FlexFormTools::class);
+                        return $flexFormTools->convertFlexFormContentToArray($content);
                     }
                 }
             } elseif (is_string($flexFormDS)) {
-                $flexFormService = GeneralUtility::makeInstance(FlexFormService::class);
-                return $flexFormService->convertFlexFormContentToArray($flexFormDS);
+                $flexFormTools = GeneralUtility::makeInstance(FlexFormTools::class);
+                return $flexFormTools->convertFlexFormContentToArray($flexFormDS);
             } elseif (is_array($flexFormDS)) {
                 return $flexFormDS;
             }
