@@ -19,7 +19,6 @@ use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 use Hn\McpServer\Service\LanguageService;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
-use TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
@@ -588,9 +587,9 @@ class ReadTableTool extends AbstractRecordTool
         // Convert FlexForm XML to JSON
         if ($this->tableAccessService->isFlexFormField($table, $field) && is_string($value) && !empty($value) && strpos($value, '<?xml') === 0) {
             try {
-                // Use TYPO3's FlexFormTools to convert XML to array.
-                $flexFormTools = GeneralUtility::makeInstance(FlexFormTools::class);
-                $flexFormArray = $flexFormTools->convertFlexFormContentToArray($value);
+                // Use TYPO3's FlexForm service to convert XML to array.
+                $flexFormService = $this->getFlexFormService();
+                $flexFormArray = $flexFormService->convertFlexFormContentToArray($value);
 
                 // Simplify the structure for easier use in LLMs
                 $result = [];
@@ -1259,6 +1258,23 @@ class ReadTableTool extends AbstractRecordTool
         }
 
         return $indexedRecords;
+    }
+
+    /**
+     * Get the FlexForm service in a backwards-compatible way.
+     *
+     * TYPO3 14.3+ uses FlexFormTools, TYPO3 13.4 uses FlexFormService.
+     * Both classes have the same method signatures.
+     *
+     * @return object FlexFormTools or FlexFormService instance
+     */
+    protected function getFlexFormService(): object
+    {
+        $class = \TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools::class;
+        if (!class_exists($class)) {
+            $class = \TYPO3\CMS\Core\Service\FlexFormService::class;
+        }
+        return GeneralUtility::makeInstance($class);
     }
 
 }
