@@ -1203,6 +1203,12 @@ class WriteTableTool extends AbstractRecordTool
      * and resolved dynamically by container's itemsProcFunc — so they can't be
      * validated against a fixed list.
      *
+     * The parent reference is verified: it must point to an existing record whose
+     * CType is a registered container. This keeps the relaxation tight — a
+     * non-existent uid or the uid of an ordinary content element does NOT count as
+     * a container child, so colPos / tx_container_parent stay strictly validated
+     * and a misplaced/orphan child cannot slip through.
+     *
      * Returns false when container is not installed (column absent from TCA) so
      * the method is inert in projects that do not use it.
      */
@@ -1215,18 +1221,33 @@ class WriteTableTool extends AbstractRecordTool
             return false;
         }
 
-        // If the caller sets the container link in this operation, trust it.
+        // Resolve the parent reference: from the current payload, or — for updates
+        // that don't repeat the link — from the stored record.
         if (array_key_exists('tx_container_parent', $data)) {
-            return (int)$data['tx_container_parent'] > 0;
-        }
-
-        // For updates that don't repeat the link, fall back to the stored record.
-        if ($action === 'update' && $uid !== null) {
+            $parentUid = (int)$data['tx_container_parent'];
+        } elseif ($action === 'update' && $uid !== null) {
             $current = BackendUtility::getRecord($table, $uid, 'tx_container_parent');
-            return $current !== null && (int)($current['tx_container_parent'] ?? 0) > 0;
+            $parentUid = (int)($current['tx_container_parent'] ?? 0);
+        } else {
+            return false;
         }
 
-        return false;
+        if ($parentUid <= 0) {
+            return false;
+        }
+
+        // The parent must exist and be a registered container CType. Container
+        // registers each container under TCA containerConfiguration (this mirrors
+        // \B13\Container\Tca\Registry::isContainerElement()), so we can check it
+        // without a hard dependency on the container extension's classes.
+        $parent = BackendUtility::getRecord($table, $parentUid, 'CType');
+        if ($parent === null) {
+            return false;
+        }
+        $parentCType = (string)($parent['CType'] ?? '');
+
+        return $parentCType !== ''
+            && !empty($GLOBALS['TCA']['tt_content']['containerConfiguration'][$parentCType]);
     }
 
 

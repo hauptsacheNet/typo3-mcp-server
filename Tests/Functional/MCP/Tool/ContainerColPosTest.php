@@ -185,4 +185,56 @@ class ContainerColPosTest extends FunctionalTestCase
         $errorMessage = $result->jsonSerialize()['content'][0]->text ?? '';
         $this->assertStringContainsString('colPos', $errorMessage);
     }
+
+    /**
+     * The relaxation is tight: pointing tx_container_parent at an ordinary content
+     * element (not a container) must NOT enable the bypass, so an unknown colPos is
+     * still rejected and a misplaced child cannot be stored.
+     */
+    public function testNonContainerParentDoesNotBypassValidation(): void
+    {
+        // An ordinary text element, not a container.
+        $create = $this->writeTool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => 1,
+            'data' => ['CType' => 'text', 'header' => 'Just text', 'colPos' => 0],
+        ]);
+        $this->assertFalse($create->isError, json_encode($create->jsonSerialize()));
+        $plainUid = (int)json_decode($create->content[0]->text, true)['uid'];
+
+        $result = $this->writeTool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => 1,
+            'data' => [
+                'CType' => 'text',
+                'header' => 'Pretend child',
+                'colPos' => 123456,
+                'tx_container_parent' => $plainUid,
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'A non-container parent must not relax colPos validation');
+    }
+
+    /**
+     * A non-existent parent uid must not enable the bypass either.
+     */
+    public function testNonexistentParentDoesNotBypassValidation(): void
+    {
+        $result = $this->writeTool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'pid' => 1,
+            'data' => [
+                'CType' => 'text',
+                'header' => 'Orphan',
+                'colPos' => 123456,
+                'tx_container_parent' => 999999,
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'A non-existent container parent must not relax colPos validation');
+    }
 }
