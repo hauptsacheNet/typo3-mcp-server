@@ -1057,6 +1057,18 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
+        // b13/container: a content element placed inside a container is linked to
+        // its parent via tx_container_parent and lives in one of the parent
+        // container's grid columns. Those colPos values are arbitrary numbers the
+        // integrator picks when registering the container (201, 305, 9001, ...);
+        // they are resolved dynamically by container's itemsProcFunc and are not a
+        // fixed list we can validate against generically. tx_container_parent is
+        // likewise a dynamic select with no static items. So for a container child
+        // we skip the strict select-value check on those two fields and trust the
+        // submitted values — container and the DataHandler enforce placement.
+        // Inert when container is not installed (column absent from TCA).
+        $isContainerChild = $this->isContainerChild($table, $data, $action, $uid);
+
         // Validate and convert field values
         foreach ($data as $fieldName => $value) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
@@ -1069,10 +1081,17 @@ class WriteTableTool extends AbstractRecordTool
                 return "Field '{$fieldName}' is not accessible";
             }
 
+            // Skip the strict select validation for the container linkage fields
+            // (see $isContainerChild above); their allowed values are dynamic.
+            $skipDynamicContainerField = $isContainerChild
+                && in_array($fieldName, ['colPos', 'tx_container_parent'], true);
+
             // Validate field value (with record context for dynamic select item resolution)
-            $validationError = $this->tableAccessService->validateFieldValue($table, $fieldName, $value, $mergedRecord);
-            if ($validationError !== null) {
-                return $validationError;
+            if (!$skipDynamicContainerField) {
+                $validationError = $this->tableAccessService->validateFieldValue($table, $fieldName, $value, $mergedRecord);
+                if ($validationError !== null) {
+                    return $validationError;
+                }
             }
             
             // Handle date/time fields - convert ISO 8601 to timestamp for TYPO3
@@ -1175,8 +1194,42 @@ class WriteTableTool extends AbstractRecordTool
         
         return true;
     }
-    
-    
+
+    /**
+     * Determine whether a tt_content record is (or is becoming) a child of a
+     * b13/container container. Children are linked to their parent via
+     * tx_container_parent and placed in one of the parent's grid columns, whose
+     * colPos values are arbitrary integers chosen per container by the integrator
+     * and resolved dynamically by container's itemsProcFunc — so they can't be
+     * validated against a fixed list.
+     *
+     * Returns false when container is not installed (column absent from TCA) so
+     * the method is inert in projects that do not use it.
+     */
+    protected function isContainerChild(string $table, array $data, string $action, ?int $uid): bool
+    {
+        if ($table !== 'tt_content') {
+            return false;
+        }
+        if (!isset($GLOBALS['TCA'][$table]['columns']['tx_container_parent'])) {
+            return false;
+        }
+
+        // If the caller sets the container link in this operation, trust it.
+        if (array_key_exists('tx_container_parent', $data)) {
+            return (int)$data['tx_container_parent'] > 0;
+        }
+
+        // For updates that don't repeat the link, fall back to the stored record.
+        if ($action === 'update' && $uid !== null) {
+            $current = BackendUtility::getRecord($table, $uid, 'tx_container_parent');
+            return $current !== null && (int)($current['tx_container_parent'] ?? 0) > 0;
+        }
+
+        return false;
+    }
+
+
     /**
      * Extract inline relations from data array
      */
