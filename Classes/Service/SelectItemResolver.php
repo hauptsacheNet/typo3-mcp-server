@@ -87,13 +87,13 @@ class SelectItemResolver
     private function compileFormData(string $table, array $record): array
     {
         $pid = (int)($record['pid'] ?? 0);
-        $defaultValues = $this->extractDefaultValues($table, $record);
+        $rowValues = $this->extractRowValues($table, $record);
 
         // The cache must key on the full record context, not just table:pid:
         // itemsProcFunc results can differ for two records on the same page
         // (e.g. depending on tx_container_parent or CType), so a table:pid key
         // would hand back a stale item list for a different record.
-        $cacheKey = $table . ':' . $pid . ':' . md5(serialize($defaultValues));
+        $cacheKey = $table . ':' . $pid . ':' . md5(serialize($rowValues));
 
         if (isset($this->cache[$cacheKey])) {
             return $this->cache[$cacheKey];
@@ -109,7 +109,10 @@ class SelectItemResolver
             'tableName' => $table,
             'vanillaUid' => $pid,
             'command' => 'new',
-            'defaultValues' => $defaultValues === [] ? [] : [$table => $defaultValues],
+            // FormEngine seeds these into the databaseRow (the &defVals mechanism).
+            // Empty when no record context is given (e.g. schema display), which
+            // makes this a plain blank "new" record exactly as before.
+            'defaultValues' => $rowValues === [] ? [] : [$table => $rowValues],
         ];
 
         // Because we seed the record's own field values (above), FormEngine would
@@ -164,19 +167,20 @@ class SelectItemResolver
     }
 
     /**
-     * Reduce the record context to the scalar field values that can be seeded as
-     * FormEngine default values. Non-scalar values (inline/file collections, etc.)
-     * and the pid (handled separately via vanillaUid) are dropped: they are never
-     * itemsProcFunc inputs and could trip up the compiler pipeline.
+     * Reduce the record context to the scalar field values to seed into the form's
+     * databaseRow, so itemsProcFunc callbacks see the record they are resolving for.
+     * Non-scalar values (inline/file collections, etc.) and the pid (handled
+     * separately via vanillaUid) are dropped: they are never itemsProcFunc inputs
+     * and could trip up the compiler pipeline.
      *
      * @param string $table Table name
      * @param array $record Record context
      * @return array<string, scalar> Field name => value
      */
-    private function extractDefaultValues(string $table, array $record): array
+    private function extractRowValues(string $table, array $record): array
     {
         $columns = $GLOBALS['TCA'][$table]['columns'] ?? [];
-        $defaultValues = [];
+        $rowValues = [];
         foreach ($record as $fieldName => $value) {
             if ($fieldName === 'pid') {
                 continue;
@@ -187,10 +191,10 @@ class SelectItemResolver
             if (!isset($columns[$fieldName])) {
                 continue;
             }
-            $defaultValues[$fieldName] = $value;
+            $rowValues[$fieldName] = $value;
         }
 
-        return $defaultValues;
+        return $rowValues;
     }
 
     /**
