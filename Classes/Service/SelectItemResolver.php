@@ -71,6 +71,15 @@ class SelectItemResolver
     /**
      * Compile form data using TYPO3's FormDataCompiler.
      *
+     * The record's field values are fed into the compiler as "defaultValues"
+     * (the same mechanism the backend uses for &defVals[...] when opening a new
+     * record). DatabaseRowInitializeNew copies these into the databaseRow, which
+     * is what itemsProcFunc callbacks receive as $parameters['row']. Without this,
+     * dynamic select fields whose items depend on sibling field values cannot be
+     * resolved — e.g. b13/container's tt_content.colPos itemsProcFunc reads
+     * tx_container_parent (and the current colPos) off the row to expose the
+     * container's grid columns.
+     *
      * @param string $table Table name
      * @param array $record Record context for databaseRow and pid resolution
      * @return array The compiled form data
@@ -78,7 +87,13 @@ class SelectItemResolver
     private function compileFormData(string $table, array $record): array
     {
         $pid = (int)($record['pid'] ?? 0);
-        $cacheKey = $table . ':' . $pid;
+        $rowValues = $this->extractRowValues($table, $record);
+
+        // The cache must key on the full record context, not just table:pid:
+        // itemsProcFunc results can differ for two records on the same page
+        // (e.g. depending on tx_container_parent or CType), so a table:pid key
+        // would hand back a stale item list for a different record.
+        $cacheKey = $table . ':' . $pid . ':' . md5(serialize($rowValues));
 
         if (isset($this->cache[$cacheKey])) {
             return $this->cache[$cacheKey];
@@ -94,12 +109,92 @@ class SelectItemResolver
             'tableName' => $table,
             'vanillaUid' => $pid,
             'command' => 'new',
+            // FormEngine seeds these into the databaseRow (the &defVals mechanism).
+            // Empty when no record context is given (e.g. schema display), which
+            // makes this a plain blank "new" record exactly as before.
+            'defaultValues' => $rowValues === [] ? [] : [$table => $rowValues],
         ];
 
-        $result = $formDataCompiler->compile($input, $formDataGroup);
+        // Because we seed the record's own field values (above), FormEngine would
+        // otherwise echo any seeded select value back as a "[ invalid value ]"
+        // pseudo-item (TcaSelectItems::addInvalidItemsFromDatabase) so the backend
+        // form does not silently drop an out-of-range stored value. For *validation*
+        // that is exactly wrong: it would make every submitted value resolve as
+        // "allowed". We want the canonical item set, so suppress that affordance.
+        $restoreTca = $this->disableNoMatchingValueElement($table);
+        try {
+            $result = $formDataCompiler->compile($input, $formDataGroup);
+        } finally {
+            $restoreTca();
+        }
         $this->cache[$cacheKey] = $result;
 
         return $result;
+    }
+
+    /**
+     * Temporarily set disableNoMatchingValueElement on every select column of the
+     * table so the compiler does not add the seeded value back as an invalid
+     * pseudo-item. Returns a restore closure to revert the TCA afterwards.
+     *
+     * @return callable(): void
+     */
+    private function disableNoMatchingValueElement(string $table): callable
+    {
+        $columns = &$GLOBALS['TCA'][$table]['columns'];
+        if (!is_array($columns)) {
+            return static function (): void {};
+        }
+
+        $originals = [];
+        foreach ($columns as $fieldName => $fieldConfig) {
+            if (($fieldConfig['config']['type'] ?? '') !== 'select') {
+                continue;
+            }
+            $originals[$fieldName] = $columns[$fieldName]['config']['disableNoMatchingValueElement'] ?? null;
+            $columns[$fieldName]['config']['disableNoMatchingValueElement'] = true;
+        }
+
+        return static function () use ($table, $originals): void {
+            foreach ($originals as $fieldName => $original) {
+                if ($original === null) {
+                    unset($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['disableNoMatchingValueElement']);
+                } else {
+                    $GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['disableNoMatchingValueElement'] = $original;
+                }
+            }
+        };
+    }
+
+    /**
+     * Reduce the record context to the scalar field values to seed into the form's
+     * databaseRow, so itemsProcFunc callbacks see the record they are resolving for.
+     * Non-scalar values (inline/file collections, etc.) and the pid (handled
+     * separately via vanillaUid) are dropped: they are never itemsProcFunc inputs
+     * and could trip up the compiler pipeline.
+     *
+     * @param string $table Table name
+     * @param array $record Record context
+     * @return array<string, scalar> Field name => value
+     */
+    private function extractRowValues(string $table, array $record): array
+    {
+        $columns = $GLOBALS['TCA'][$table]['columns'] ?? [];
+        $rowValues = [];
+        foreach ($record as $fieldName => $value) {
+            if ($fieldName === 'pid') {
+                continue;
+            }
+            if (!is_scalar($value)) {
+                continue;
+            }
+            if (!isset($columns[$fieldName])) {
+                continue;
+            }
+            $rowValues[$fieldName] = $value;
+        }
+
+        return $rowValues;
     }
 
     /**
