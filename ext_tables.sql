@@ -10,6 +10,7 @@ CREATE TABLE tx_mcpserver_oauth_codes (
 	
 	code varchar(255) DEFAULT '' NOT NULL,
 	be_user_uid int(11) unsigned DEFAULT '0' NOT NULL,
+	client_id varchar(255) DEFAULT '' NOT NULL,
 	client_name varchar(255) DEFAULT '' NOT NULL,
 	pkce_challenge varchar(255) DEFAULT '' NOT NULL,
 	pkce_challenge_method varchar(10) DEFAULT 'S256' NOT NULL,
@@ -35,6 +36,7 @@ CREATE TABLE tx_mcpserver_access_tokens (
 	
 	token varchar(255) DEFAULT '' NOT NULL,
 	be_user_uid int(11) unsigned DEFAULT '0' NOT NULL,
+	client_uid int(11) unsigned DEFAULT '0' NOT NULL,
 	client_name varchar(255) DEFAULT '' NOT NULL,
 	expires int(11) unsigned DEFAULT '0' NOT NULL,
 	last_used int(11) unsigned DEFAULT '0' NOT NULL,
@@ -47,4 +49,28 @@ CREATE TABLE tx_mcpserver_access_tokens (
 	KEY token (token),
 	KEY be_user_uid (be_user_uid),
 	KEY expires (expires)
+);
+
+#
+# OAuth registered clients table (Dynamic Client Registration, RFC 7591)
+#
+CREATE TABLE tx_mcpserver_oauth_clients (
+	uid int(11) NOT NULL auto_increment,
+	pid int(11) DEFAULT '0' NOT NULL,
+	tstamp int(11) unsigned DEFAULT '0' NOT NULL,
+	crdate int(11) unsigned DEFAULT '0' NOT NULL,
+	deleted tinyint(4) unsigned DEFAULT '0' NOT NULL,
+
+	client_id varchar(255) DEFAULT '' NOT NULL,
+	client_secret varchar(255) DEFAULT '' NOT NULL,
+	client_name varchar(255) DEFAULT '' NOT NULL,
+	redirect_uris text,
+	grant_types varchar(255) DEFAULT '' NOT NULL,
+	scope varchar(255) DEFAULT '' NOT NULL,
+	token_endpoint_auth_method varchar(50) DEFAULT 'none' NOT NULL,
+	last_used int(11) unsigned DEFAULT '0' NOT NULL,
+
+	PRIMARY KEY (uid),
+	KEY parent (pid),
+	KEY client_id (client_id)
 );

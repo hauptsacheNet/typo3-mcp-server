@@ -56,7 +56,11 @@ class OAuthRegisterEndpoint
 
             // Register the client
             $oauthService = GeneralUtility::makeInstance(OAuthService::class);
-            $clientInfo = $oauthService->registerClient($clientData);
+            try {
+                $clientInfo = $oauthService->registerClient($clientData);
+            } catch (\InvalidArgumentException $e) {
+                return $this->createErrorResponse($request, 'invalid_redirect_uri', $e->getMessage());
+            }
 
             // Return client registration response
             $stream = new Stream('php://temp', 'rw');
