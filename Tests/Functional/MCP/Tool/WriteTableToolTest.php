@@ -213,6 +213,49 @@ class WriteTableToolTest extends AbstractFunctionalTest
     }
 
     /**
+     * Regression test for #94: creating a page with an explicit language field
+     * value must be accepted even though sys_language_uid is not part of the
+     * `pages` showitem (and therefore not reported by getAvailableFields()).
+     * The language field is a control field the MCP manages itself, so it must
+     * always be treated as available during validation.
+     */
+    public function testCreatePageWithExplicitLanguageField(): void
+    {
+        $tableAccessService = GeneralUtility::makeInstance(\Hn\McpServer\Service\TableAccessService::class);
+
+        // Document the premise: sys_language_uid is NOT an editable showitem
+        // field for pages, so getAvailableFields() does not list it.
+        $availableFields = $tableAccessService->getAvailableFields('pages', '1');
+        $this->assertArrayNotHasKey(
+            'sys_language_uid',
+            $availableFields,
+            'Premise of #94: sys_language_uid is not part of the pages showitem'
+        );
+
+        $result = $this->tool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => $this->getRootPageUid(),
+            'data' => [
+                'title' => 'Page With Explicit Language',
+                'slug' => '/page-with-explicit-language',
+                'doktype' => 1,
+                'sys_language_uid' => 0,
+            ]
+        ]);
+
+        $this->assertFalse(
+            $result->isError,
+            'Creating a page with explicit sys_language_uid must not be rejected. Error: '
+            . json_encode($result->jsonSerialize(), JSON_PRETTY_PRINT)
+        );
+
+        $pageData = $this->extractJsonFromResult($result);
+        $this->assertEquals('create', $pageData['action']);
+        $this->assertIsInt($pageData['uid']);
+    }
+
+    /**
      * User story: Edit existing content element
      */
     public function testEditExistingContentElement(): void

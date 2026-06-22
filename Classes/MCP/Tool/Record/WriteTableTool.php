@@ -1141,7 +1141,25 @@ class WriteTableTool extends AbstractRecordTool
                 $availableFields[$typeField] = $typeFieldConfig;
             }
         }
-        
+
+        // The language field (ctrl.languageField, e.g. sys_language_uid) is a control
+        // field the MCP manages itself: it is converted from ISO codes, set by the
+        // translate action, and defaulted for non-admin permission checks (see
+        // ensureLanguageField()). TYPO3 does not list it in the showitem of every
+        // language-aware table — most notably `pages`, where translations are handled by
+        // the dedicated localize workflow instead of by editing the field. As of TYPO3
+        // 13.3 the field is even auto-injected into content-type showitems but never into
+        // pages (feature #104814). Without this, getAvailableFields() (derived from the
+        // showitem) would omit it and validation would wrongly reject a value the MCP
+        // itself added. Treat it as always available, mirroring the type field. (#94)
+        $languageField = $this->tableAccessService->getLanguageFieldName($table);
+        if ($languageField) {
+            $languageFieldConfig = $this->tableAccessService->getFieldConfig($table, $languageField);
+            if ($languageFieldConfig) {
+                $availableFields[$languageField] = $languageFieldConfig;
+            }
+        }
+
         // If we have type-specific configuration, validate field availability
         if (!empty($availableFields) || !empty($typeField)) {
             // Check each field in data is available
