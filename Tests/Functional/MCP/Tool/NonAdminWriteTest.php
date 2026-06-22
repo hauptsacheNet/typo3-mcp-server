@@ -322,7 +322,79 @@ class NonAdminWriteTest extends AbstractFunctionalTest
     }
 
     /**
-     * Test read operation for non-admin (should work with basic permissions)
+     * Test that a non-admin user can create a page (regression test for #94).
+     *
+     * TYPO3 does not list the language field (sys_language_uid) in the `pages`
+     * showitem - page translations are handled by the dedicated localize
+     * workflow, and as of TYPO3 13.3 the field is only auto-injected into
+     * content-type showitems, never into pages. The WriteTableTool still adds
+     * sys_language_uid to the data for non-admin permission checks
+     * (ensureLanguageField()), so before the fix the availability validation -
+     * which is derived from the showitem - rejected page creation with
+     * "Field 'sys_language_uid' is not available for this record type".
+     */
+    public function testNonAdminCanCreatePage(): void
+    {
+        // 1. Set up BE_USER as user 99 (non-admin)
+        $user = $this->setupDefaultBackendUser(99);
+
+        // 2. Configure user permissions for creating pages
+        $user->groupData['tables_select'] = 'pages';
+        $user->groupData['tables_modify'] = 'pages';
+        // Allow all relevant page fields (incl. the language field so that
+        // ensureLanguageField() adds it and we exercise the validation path)
+        $user->groupData['non_exclude_fields'] = implode(',', [
+            'pages:title',
+            'pages:slug',
+            'pages:doktype',
+            'pages:sys_language_uid',
+            'pages:l18n_cfg',
+            'pages:hidden',
+        ]);
+        $user->groupData['modules'] = 'web_WorkspacesWorkspaces';
+        // Allow standard page type
+        $user->groupData['pagetypes_select'] = '1';
+
+        // DB Mount points - non-admin users need this to access the page tree
+        $user->groupData['webmounts'] = '1,100';
+        $user->user['db_mountpoints'] = '1';
+
+        // 3. Switch to workspace 50 (where user 99 is a member)
+        $this->switchToWorkspace(50);
+
+        $this->assertFalse($GLOBALS['BE_USER']->isAdmin(), 'User should NOT be admin');
+
+        // 4. Create a subpage under page 100 (where user 99 has "new" permission)
+        // Note: sys_language_uid is intentionally NOT provided - it must work
+        // exactly as a normal page creation would.
+        $result = $this->writeTool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => 100,
+            'data' => [
+                'title' => 'Non-Admin Created Page',
+                'slug' => '/non-admin-created-page',
+                'doktype' => 1,
+            ]
+        ]);
+
+        // 5. This SHOULD succeed - before the fix it failed with
+        // "Field 'sys_language_uid' is not available for this record type"
+        $this->assertFalse(
+            $result->isError,
+            'Non-admin page creation FAILED. Error: ' .
+            json_encode($result->jsonSerialize(), JSON_PRETTY_PRINT)
+        );
+
+        // 6. Verify the page was created
+        $responseData = json_decode($result->content[0]->text, true);
+        $this->assertIsArray($responseData, 'Response should be valid JSON');
+        $this->assertArrayHasKey('uid', $responseData, 'Response should contain UID');
+        $this->assertGreaterThan(0, $responseData['uid'], 'UID should be positive');
+    }
+
+    /**
+     * Read operation for non-admin (should work with basic permissions)
      */
     public function testNonAdminCanRead(): void
     {
