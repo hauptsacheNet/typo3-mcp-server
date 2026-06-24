@@ -16,6 +16,7 @@ use TYPO3\CMS\Core\Http\Stream;
 class OAuthResourceMetadataEndpoint
 {
     use CorsHeadersTrait;
+    use RequestUrlTrait;
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
@@ -25,7 +26,7 @@ class OAuthResourceMetadataEndpoint
         }
 
         // Get base URL from request
-        $baseUrl = $this->getBaseUrl($request);
+        $baseUrl = $this->getRequestBaseUrl($request);
         
         $metadata = [
             'resource' => $baseUrl . '/mcp',
@@ -57,20 +58,5 @@ class OAuthResourceMetadataEndpoint
         );
         
         return $this->addCorsHeaders($response, $request);
-    }
-    
-    
-    private function getBaseUrl(ServerRequestInterface $request): string
-    {
-        $scheme = $request->getUri()->getScheme();
-        $host = $request->getUri()->getHost();
-        $port = $request->getUri()->getPort();
-        
-        $baseUrl = $scheme . '://' . $host;
-        if ($port && !in_array($port, [80, 443])) {
-            $baseUrl .= ':' . $port;
-        }
-        
-        return $baseUrl;
     }
 }

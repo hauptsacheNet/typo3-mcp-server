@@ -14,6 +14,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Page\PageRenderer;
 use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\HtmlResponse;
+use Hn\McpServer\Http\RequestUrlTrait;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Service\WorkspaceContextService;
@@ -23,6 +24,8 @@ use Hn\McpServer\Service\WorkspaceContextService;
  */
 class McpServerModuleController
 {
+    use RequestUrlTrait;
+
     public function __construct(
         private readonly ModuleTemplateFactory $moduleTemplateFactory,
         private readonly ToolRegistry $toolRegistry,
@@ -47,7 +50,7 @@ class McpServerModuleController
         $tokens = $this->oauthService->getUserTokens($userId);
         
         // Get base URL for endpoint
-        $baseUrl = $this->getBaseUrl($request);
+        $baseUrl = $this->getRequestBaseUrl($request);
         
         // Generate OAuth authorization URL
         $authUrl = $this->oauthService->generateAuthorizationUrl($baseUrl, 'Claude Desktop');
@@ -199,27 +202,6 @@ class McpServerModuleController
             ], 500);
         }
     }
-    
-    private function getBaseUrl(ServerRequestInterface $request): string
-    {
-        // Try to get from TYPO3 configuration first
-        $baseUrl = $GLOBALS['TYPO3_CONF_VARS']['SYS']['reverseProxyBaseUrl'] ?? '';
-        
-        if (empty($baseUrl)) {
-            // Fallback to request-based detection
-            $scheme = $request->getUri()->getScheme();
-            $host = $request->getUri()->getHost();
-            $port = $request->getUri()->getPort();
-            
-            $baseUrl = $scheme . '://' . $host;
-            if ($port && !in_array($port, [80, 443])) {
-                $baseUrl .= ':' . $port;
-            }
-        }
-        
-        return rtrim($baseUrl, '/');
-    }
-    
     
     private function getSiteName(): string
     {

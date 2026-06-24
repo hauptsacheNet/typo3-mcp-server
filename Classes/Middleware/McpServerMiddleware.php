@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Middleware;
 
 use Hn\McpServer\Http\CorsHeadersTrait;
+use Hn\McpServer\Http\RequestUrlTrait;
 use Hn\McpServer\Http\McpEndpoint;
 use Hn\McpServer\Http\OAuthAuthorizeEndpoint;
 use Hn\McpServer\Http\OAuthTokenEndpoint;
@@ -27,8 +28,10 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class McpServerMiddleware implements MiddlewareInterface
 {
+    use RequestUrlTrait;
+
     private Context $context;
-    
+
     public function __construct(Context $context)
     {
         $this->context = $context;
@@ -36,7 +39,17 @@ class McpServerMiddleware implements MiddlewareInterface
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
         $path = $request->getUri()->getPath();
-        
+
+        // Strip the site path prefix so routing works in subdirectory installations
+        $sitePath = $this->getRequestSitePath($request);
+        if ($sitePath !== '') {
+            if ($path === $sitePath) {
+                $path = '/';
+            } elseif (str_starts_with($path, $sitePath . '/')) {
+                $path = substr($path, strlen($sitePath));
+            }
+        }
+
         // Route to appropriate endpoint
         return match($path) {
             // Main MCP endpoint
@@ -98,7 +111,7 @@ class McpServerMiddleware implements MiddlewareInterface
             'state' => $oauthData['state'] ?? ''
         ]);
         
-        $oauthAuthorizeUrl = '/mcp_oauth/authorize?' . $queryParams;
+        $oauthAuthorizeUrl = $this->getRequestSitePath($request) . '/mcp_oauth/authorize?' . $queryParams;
         
         $stream = new Stream('php://temp', 'rw');
         $stream->write('');
