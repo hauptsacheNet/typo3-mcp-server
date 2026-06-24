@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\Http;
 
+use Hn\McpServer\Http\OAuthMetadataEndpoint;
 use Hn\McpServer\Http\OAuthResourceMetadataEndpoint;
 use Hn\McpServer\Middleware\McpServerMiddleware;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
@@ -47,6 +48,19 @@ class SubdirectoryRoutingTest extends AbstractFunctionalTest
         $this->assertSame('https://example.com/subfolder/mcp', $metadata['resource']);
         $this->assertSame('https://example.com/subfolder', $metadata['authorization_servers'][0]);
         $this->assertSame('https://example.com/subfolder/mcp_oauth/token', $metadata['revocation_endpoint']);
+    }
+
+    public function testOAuthMetadataEndpointGeneratesSubdirectoryAwareUrls(): void
+    {
+        $request = $this->createRequest('/subfolder/index.php', '/subfolder/mcp_oauth/metadata');
+
+        $response = (new OAuthMetadataEndpoint())($request);
+        $metadata = json_decode((string)$response->getBody(), true);
+
+        $this->assertSame('https://example.com/subfolder', $metadata['issuer']);
+        $this->assertSame('https://example.com/subfolder/mcp_oauth/authorize', $metadata['authorization_endpoint']);
+        $this->assertSame('https://example.com/subfolder/mcp_oauth/token', $metadata['token_endpoint']);
+        $this->assertSame('https://example.com/subfolder/mcp_oauth/register', $metadata['registration_endpoint']);
     }
 
     public function testMetadataEndpointRootInstallationUrls(): void
