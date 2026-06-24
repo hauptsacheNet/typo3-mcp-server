@@ -22,11 +22,12 @@ class OAuthManageCommand extends Command
     {
         $this->setDescription('Manage OAuth tokens for MCP server')
             ->setHelp('This command helps manage OAuth tokens and provides authorization URLs for MCP clients.')
-            ->addArgument('action', InputArgument::REQUIRED, 'Action to perform: url, list, revoke, cleanup')
-            ->addArgument('username', InputArgument::OPTIONAL, 'Backend username (required for url, list, revoke actions)')
+            ->addArgument('action', InputArgument::REQUIRED, 'Action to perform: url, create, list, revoke, cleanup')
+            ->addArgument('username', InputArgument::OPTIONAL, 'Backend username (required for url, create, list, revoke actions)')
             ->addOption('client-name', 'c', InputOption::VALUE_OPTIONAL, 'Client name for authorization URL', 'MCP Client')
             ->addOption('token-id', 't', InputOption::VALUE_OPTIONAL, 'Token ID to revoke (for revoke action)')
-            ->addOption('all', 'a', InputOption::VALUE_NONE, 'Revoke all tokens for user (for revoke action)');
+            ->addOption('all', 'a', InputOption::VALUE_NONE, 'Revoke all tokens for user (for revoke action)')
+            ->addOption('ttl-days', null, InputOption::VALUE_OPTIONAL, 'Token lifetime in days (for create action; default 30)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -38,6 +39,8 @@ class OAuthManageCommand extends Command
             switch ($action) {
                 case 'url':
                     return $this->generateAuthUrl($input, $output, $username);
+                case 'create':
+                    return $this->createToken($input, $output, $username);
                 case 'list':
                     return $this->listTokens($input, $output, $username);
                 case 'revoke':
@@ -45,7 +48,7 @@ class OAuthManageCommand extends Command
                 case 'cleanup':
                     return $this->cleanupTokens($input, $output);
                 default:
-                    $output->writeln("<error>Invalid action. Use: url, list, revoke, or cleanup</error>");
+                    $output->writeln("<error>Invalid action. Use: url, create, list, revoke, or cleanup</error>");
                     return Command::FAILURE;
             }
         } catch (\Throwable $e) {
@@ -82,6 +85,40 @@ class OAuthManageCommand extends Command
         $output->writeln("2. Log in to TYPO3 backend if not already logged in");
         $output->writeln("3. Authorize the MCP client access");
         $output->writeln("4. Use the generated token in your MCP client configuration");
+
+        return Command::SUCCESS;
+    }
+
+    private function createToken(InputInterface $input, OutputInterface $output, ?string $username): int
+    {
+        if (empty($username)) {
+            $output->writeln("<error>Username is required for token creation</error>");
+            return Command::FAILURE;
+        }
+
+        $user = $this->findUser($username);
+        if (!$user) {
+            $output->writeln("<error>User '$username' not found or disabled</error>");
+            return Command::FAILURE;
+        }
+
+        $clientName = $input->getOption('client-name');
+        $ttlDays = $input->getOption('ttl-days');
+        $ttlSeconds = $ttlDays !== null ? (int)$ttlDays * 86400 : null;
+
+        $oauthService = GeneralUtility::makeInstance(OAuthService::class);
+        $token = $oauthService->createToken((int)$user['uid'], $clientName, $ttlSeconds);
+
+        $output->writeln("<info>Access token created for user '$username':</info>");
+        $output->writeln("");
+        $output->writeln($token['access_token']);
+        $output->writeln("");
+        $output->writeln("Client: <info>$clientName</info>");
+        $output->writeln("Expires: <info>" . date('Y-m-d H:i:s', $token['expires']) . "</info>");
+        $output->writeln("");
+        $output->writeln("<comment>Store it now — it cannot be retrieved later (only a hash is kept).</comment>");
+        $output->writeln("Use it as a static Bearer header in your MCP client, e.g.:");
+        $output->writeln('  claude mcp add --transport http typo3 <server-url> --header "Authorization: Bearer <token>"');
 
         return Command::SUCCESS;
     }

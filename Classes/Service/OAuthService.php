@@ -441,6 +441,46 @@ class OAuthService
     }
 
     /**
+     * Create a long-lived access token for a backend user without the
+     * interactive OAuth flow. Intended for MCP clients that cannot perform
+     * OAuth discovery (e.g. subdirectory installs) and authenticate with a
+     * static Authorization header instead. Returns the plaintext token, which
+     * is only available at creation time (the database stores a hash).
+     */
+    public function createToken(int $beUserUid, string $clientName, ?int $ttlSeconds = null): array
+    {
+        $accessToken = $this->generateSecureToken();
+        $ttl = $ttlSeconds ?? self::TOKEN_EXPIRY_SECONDS;
+        $expires = time() + $ttl;
+
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->insert(
+                'tx_mcpserver_access_tokens',
+                [
+                    'pid' => 0,
+                    'tstamp' => time(),
+                    'crdate' => time(),
+                    'token' => $this->hashToken($accessToken),
+                    'be_user_uid' => $beUserUid,
+                    'client_name' => $clientName,
+                    'expires' => $expires,
+                    'last_used' => 0,
+                    'created_ip' => '',
+                    'last_used_ip' => '',
+                    'token_version' => 1,
+                ]
+            );
+
+        return [
+            'access_token' => $accessToken,
+            'token_type' => 'Bearer',
+            'expires' => $expires,
+            'expires_in' => $ttl,
+        ];
+    }
+
+    /**
      * Generate cryptographically secure token
      */
     private function generateSecureToken(): string
