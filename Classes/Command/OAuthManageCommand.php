@@ -104,6 +104,10 @@ class OAuthManageCommand extends Command
 
         $clientName = $input->getOption('client-name');
         $ttlDays = $input->getOption('ttl-days');
+        if ($ttlDays !== null && (!is_string($ttlDays) || !ctype_digit($ttlDays) || (int)$ttlDays < 1)) {
+            $output->writeln('<error>--ttl-days must be a positive integer</error>');
+            return Command::FAILURE;
+        }
         $ttlSeconds = $ttlDays !== null ? (int)$ttlDays * 86400 : null;
 
         $oauthService = GeneralUtility::makeInstance(OAuthService::class);
@@ -220,7 +224,8 @@ class OAuthManageCommand extends Command
             ->from('be_users')
             ->where(
                 $queryBuilder->expr()->eq('username', $queryBuilder->createNamedParameter($username)),
-                $queryBuilder->expr()->eq('disable', $queryBuilder->createNamedParameter(0))
+                $queryBuilder->expr()->eq('disable', $queryBuilder->createNamedParameter(0)),
+                $queryBuilder->expr()->eq('deleted', $queryBuilder->createNamedParameter(0))
             )
             ->executeQuery()
             ->fetchAssociative();

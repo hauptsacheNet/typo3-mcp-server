@@ -451,6 +451,9 @@ class OAuthService
     {
         $accessToken = $this->generateSecureToken();
         $ttl = $ttlSeconds ?? self::TOKEN_EXPIRY_SECONDS;
+        if ($ttl <= 0) {
+            throw new \InvalidArgumentException('Token TTL must be greater than zero seconds.');
+        }
         $expires = time() + $ttl;
 
         GeneralUtility::makeInstance(ConnectionPool::class)
