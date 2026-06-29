@@ -17,7 +17,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class OAuthAuthorizeEndpoint
 {
-    
+    use RequestUrlTrait;
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
@@ -129,7 +129,7 @@ class OAuthAuthorizeEndpoint
         ];
         
         $oauthDataEncoded = base64_encode(json_encode($oauthData));
-        $loginUrl = '/typo3/index.php?loginProvider=1450629977&login_status=login';
+        $loginUrl = $this->getRequestSitePath($request) . '/typo3/index.php?loginProvider=1450629977&login_status=login';
         
         // Build cookie string with environment-aware security flags
         $isHttps = $request->getUri()->getScheme() === 'https';
