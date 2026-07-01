@@ -67,7 +67,9 @@ class ResourceConstraintTest extends AbstractFunctionalTest
         // Test reading with no limit
         $result = $this->readTool->execute([
             'table' => 'tt_content',
-            'where' => 'pid = 1'
+            'filters' => [
+                ['field' => 'pid', 'operator' => 'eq', 'value' => 1],
+            ],
         ]);
         
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
@@ -92,7 +94,9 @@ class ResourceConstraintTest extends AbstractFunctionalTest
         // Try to read with huge IN clause
         $result = $this->readTool->execute([
             'table' => 'pages',
-            'where' => 'uid IN (' . implode(',', array_slice($uids, 0, 1000)) . ')' // Limit to 1000 to avoid SQL issues
+            'filters' => [
+                ['field' => 'uid', 'operator' => 'in', 'value' => array_slice($uids, 0, 1000)],
+            ],
         ]);
         
         // Should handle this gracefully (maybe by batching)
@@ -129,7 +133,9 @@ class ResourceConstraintTest extends AbstractFunctionalTest
         // Try to read pages with complex conditions
         $result = $this->readTool->execute([
             'table' => 'pages',
-            'where' => "title LIKE '%Level%'"
+            'filters' => [
+                ['field' => 'title', 'operator' => 'like', 'value' => '%Level%'],
+            ],
         ]);
         
         // Should handle deep structures without stack overflow
@@ -271,68 +277,25 @@ class ResourceConstraintTest extends AbstractFunctionalTest
             }
         }
     }
-    
+
+
     /**
-     * Helper method to build WHERE clause from array structure
+     * Test handling of many structured filters
      */
-    protected function buildWhereClause(array $where): string
+    public function testManyFiltersHandling(): void
     {
-        if (isset($where['type']) && $where['type'] === 'AND') {
-            $conditions = [];
-            foreach ($where['conditions'] as $condition) {
-                if (isset($condition['type']) && $condition['type'] === 'OR') {
-                    $orConditions = [];
-                    foreach ($condition['conditions'] as $orCond) {
-                        $orConditions[] = sprintf(
-                            "%s %s '%s'",
-                            $orCond['field'],
-                            $orCond['operator'],
-                            $orCond['value']
-                        );
-                    }
-                    $conditions[] = '(' . implode(' OR ', $orConditions) . ')';
-                }
-            }
-            return implode(' AND ', $conditions);
-        }
-        return '1=1';
-    }
-    
-    /**
-     * Test handling of query complexity limits
-     */
-    public function testQueryComplexityLimits(): void
-    {
-        // Build a very complex where clause
-        $complexWhere = [
-            'type' => 'AND',
-            'conditions' => []
-        ];
-        
-        // Add many conditions
+        // Build a large set of filters
+        $filters = [];
         for ($i = 0; $i < 50; $i++) {
-            $complexWhere['conditions'][] = [
-                'type' => 'OR',
-                'conditions' => [
-                    ['field' => 'title', 'operator' => 'like', 'value' => "%test$i%"],
-                    ['field' => 'description', 'operator' => 'like', 'value' => "%test$i%"],
-                ]
-            ];
+            $filters[] = ['field' => 'title', 'operator' => 'notLike', 'value' => "%nonexistent$i%"];
         }
-        
-        // Build SQL where clause from the complex structure
-        $whereClause = $this->buildWhereClause($complexWhere);
-        
+
         $result = $this->readTool->execute([
             'table' => 'pages',
-            'where' => $whereClause
+            'filters' => $filters,
         ]);
-        
-        // Should handle complex queries or fail gracefully
-        if ($result->isError) {
-            $this->assertStringContainsString('complex', $result->content[0]->text);
-        } else {
-            $this->assertIsArray(json_decode($result->content[0]->text, true));
-        }
+
+        // Should handle many filters gracefully
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
     }
 }
