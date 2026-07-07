@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\Http;
 
 use Hn\McpServer\Http\OAuthMetadataEndpoint;
 use Hn\McpServer\Http\OAuthResourceMetadataEndpoint;
+use Hn\McpServer\Http\RequestUrlTrait;
 use Hn\McpServer\Middleware\McpServerMiddleware;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Psr\Http\Message\ResponseInterface;
@@ -93,6 +94,53 @@ class SubdirectoryRoutingTest extends AbstractFunctionalTest
         $response = $middleware->process($request, $this->sentinelHandler());
 
         $this->assertSame(418, $response->getStatusCode(), 'Non-MCP paths must fall through to the next handler');
+    }
+
+    public function testHostUrlStripsSitePathForSubdirectoryInstall(): void
+    {
+        $request = $this->createRequest('/subfolder/index.php', '/subfolder/mcp');
+
+        $this->assertSame('https://example.com', $this->getHostUrl($request));
+    }
+
+    public function testHostUrlEqualsBaseUrlForRootInstall(): void
+    {
+        $request = $this->createRequest('/index.php', '/mcp');
+
+        $this->assertSame('https://example.com', $this->getHostUrl($request));
+    }
+
+    /**
+     * RFC 8414 / RFC 9728 well-known discovery URIs must live at the domain root
+     * (e.g. https://example.com/.well-known/oauth-protected-resource/subfolder/mcp),
+     * not under the site path this PR routes internally
+     * (https://example.com/subfolder/.well-known/oauth-protected-resource/mcp).
+     * A spec-compliant client requesting the former must still fall through, since
+     * this installation cannot serve paths outside its own site path — the backend
+     * module must warn about this rather than report the endpoint as working.
+     */
+    public function testMiddlewareDoesNotRouteRfcCompliantWellKnownPath(): void
+    {
+        $request = $this->createRequest('/subfolder/index.php', '/.well-known/oauth-protected-resource/subfolder/mcp');
+        $middleware = new McpServerMiddleware(GeneralUtility::makeInstance(Context::class));
+
+        $response = $middleware->process($request, $this->sentinelHandler());
+
+        $this->assertSame(418, $response->getStatusCode(), 'RFC-compliant discovery path outside the site path must fall through');
+    }
+
+    private function getHostUrl(ServerRequestInterface $request): string
+    {
+        $subject = new class () {
+            use RequestUrlTrait;
+
+            public function hostUrl(ServerRequestInterface $request): string
+            {
+                return $this->getRequestHostUrl($request);
+            }
+        };
+
+        return $subject->hostUrl($request);
     }
 
     private function createRequest(string $scriptName, string $requestUri): ServerRequestInterface

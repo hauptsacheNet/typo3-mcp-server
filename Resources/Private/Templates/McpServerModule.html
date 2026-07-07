@@ -38,6 +38,17 @@
                             </p>
                         </div>
                     </f:if>
+                    <f:if condition="{isSubdirectoryInstall}">
+                        <div class="alert alert-warning mb-3">
+                            <h6><strong>Subdirectory installation detected</strong></h6>
+                            <p class="mb-2">
+                                OAuth auto-discovery relies on <code>/.well-known/...</code> files served from your webserver's <strong>domain root</strong>. Since this TYPO3 lives under a subdirectory, it cannot serve those paths itself — the discovery checks below will likely show red, and MCP clients that rely on automatic discovery won't find this server.
+                            </p>
+                            <p class="mb-0">
+                                <strong>Workarounds:</strong> configure your webserver/proxy to serve <code>{wellKnownAuthServerUrl}</code> and <code>{wellKnownProtectedResourceUrl}</code> from the domain root, or skip auto-discovery and configure your MCP client manually with the Server URL and a token below.
+                            </p>
+                        </div>
+                    </f:if>
                     <!-- Authorization Header Warning (shown/hidden by JS after endpoint check) -->
                     <div class="alert alert-warning mb-3" id="auth-header-warning" style="display: none;">
                         <h6><strong>Authorization header issue detected</strong></h6>
@@ -105,14 +116,14 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                             <span class="status-tooltip"></span>
                                         </span>
                                         <br>
-                                        <code class="small">{baseUrl}/.well-known/oauth-authorization-server</code>
-                                        <span class="endpoint-status" data-endpoint="{baseUrl}/.well-known/oauth-authorization-server" data-check-content="true">
+                                        <code class="small">{wellKnownAuthServerUrl}</code>
+                                        <span class="endpoint-status" data-endpoint="{wellKnownAuthServerUrl}" data-check-content="true">
                                             <span class="status-icon"></span>
                                             <span class="status-tooltip"></span>
                                         </span>
                                         <br>
-                                        <code class="small">{baseUrl}/.well-known/oauth-protected-resource</code>
-                                        <span class="endpoint-status" data-endpoint="{baseUrl}/.well-known/oauth-protected-resource" data-check-content="true">
+                                        <code class="small">{wellKnownProtectedResourceUrl}</code>
+                                        <span class="endpoint-status" data-endpoint="{wellKnownProtectedResourceUrl}" data-check-content="true">
                                             <span class="status-icon"></span>
                                             <span class="status-tooltip"></span>
                                         </span>

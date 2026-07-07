@@ -58,4 +58,22 @@ trait RequestUrlTrait
 
         return '';
     }
+
+    /**
+     * Absolute origin (scheme + host, without any site path), without a trailing slash.
+     *
+     * RFC 8414 / RFC 9728 well-known discovery URIs must live at the webserver's
+     * domain root regardless of where TYPO3 itself is installed, so callers building
+     * those URIs need the origin separately from {@see getRequestBaseUrl()}.
+     */
+    protected function getRequestHostUrl(ServerRequestInterface $request): string
+    {
+        $baseUrl = $this->getRequestBaseUrl($request);
+        $sitePath = $this->getRequestSitePath($request);
+        if ($sitePath !== '' && str_ends_with($baseUrl, $sitePath)) {
+            return substr($baseUrl, 0, -strlen($sitePath));
+        }
+
+        return $baseUrl;
+    }
 }
