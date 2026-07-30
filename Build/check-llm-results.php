@@ -151,6 +151,37 @@ if (file_exists($retryLog) && filesize($retryLog) > 0) {
     echo "\n";
 }
 
+// Surface tool friction: errors the models ran into and usually recovered from.
+// A self-corrected mistake costs a full extra round trip but leaves the test
+// green, so without this section the cost is invisible. Recurring entries here
+// are the shortlist of tool descriptions / error messages worth improving.
+$friction = [];
+foreach ($testCases as $result) {
+    foreach ($result['stats'] ?? [] as $model => $stats) {
+        foreach ($stats['tool_error_messages'] ?? [] as $error) {
+            $key = ($error['tool'] ?? '?') . ': ' . ($error['message'] ?? '');
+            if (!isset($friction[$key])) {
+                $friction[$key] = ['count' => 0, 'models' => []];
+            }
+            $friction[$key]['count'] += (int)($error['count'] ?? 1);
+            $friction[$key]['models'][$model] = true;
+        }
+    }
+}
+
+if (!empty($friction)) {
+    uasort($friction, fn(array $a, array $b) => $b['count'] <=> $a['count']);
+    echo "\033[33mTool friction\033[0m (" . count($friction) . " distinct errors the models hit, including recovered ones)\n";
+    echo str_repeat('-', 80) . "\n";
+    foreach (array_slice($friction, 0, 20, true) as $message => $info) {
+        printf("  %2dx [%s] %s\n", $info['count'], implode(', ', array_keys($info['models'])), $message);
+    }
+    if (count($friction) > 20) {
+        echo '  … ' . (count($friction) - 20) . " more (see .Build/llm-tool-errors.log)\n";
+    }
+    echo "\n";
+}
+
 echo "LLM Test Results — Majority Pass Rule (min $minPass/" . count($testCases ? reset($testCases)['models'] : []) . " models)\n";
 echo str_repeat('=', 80) . "\n\n";
 

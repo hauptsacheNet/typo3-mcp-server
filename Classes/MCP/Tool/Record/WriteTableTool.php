@@ -9,6 +9,7 @@ use Hn\McpServer\Event\AfterRecordWriteEvent;
 use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
+use Hn\McpServer\Service\FieldNameSuggestionService;
 use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -25,11 +26,21 @@ use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 class WriteTableTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
+    protected ?FieldNameSuggestionService $fieldNameSuggestionService = null;
 
     public function __construct()
     {
         parent::__construct();
         $this->languageService = GeneralUtility::makeInstance(LanguageService::class);
+    }
+
+    /**
+     * Resolved lazily: it is only ever needed on the error path.
+     */
+    protected function getFieldNameSuggestionService(): FieldNameSuggestionService
+    {
+        return $this->fieldNameSuggestionService
+            ??= GeneralUtility::makeInstance(FieldNameSuggestionService::class);
     }
 
     /**
@@ -75,6 +86,8 @@ class WriteTableTool extends AbstractRecordTool
                         'type' => 'object',
                         'description' => 'Record data with field names as keys and their values (required for "create", "update", and "translate" actions). ' .
                             'Uses the same field syntax as ReadTable output. ' .
+                            'The record type is set through the table\'s own type field — "CType" (exactly that spelling) for tt_content content elements, ' .
+                            '"doktype" for pages; GetTableSchema names it as "Type field" for every other table. ' .
                             'The target page is also specified here as "pid" — required on "create" (the page the record is created on); ' .
                             'on "update" setting "pid" moves the record to that page (combine with "position" to control where on the new page it lands; e.g. data: {"pid": 1} moves the record to page 1). ' .
                             ($hasMultipleLanguages ? 'Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' : '') .
@@ -1021,7 +1034,8 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
             if (!$this->tableAccessService->getFieldConfig($table, $fieldName)) {
-                return "Field '{$fieldName}' does not exist in table '{$table}' and cannot be written";
+                return "Field '{$fieldName}' does not exist in table '{$table}' and cannot be written."
+                    . $this->getFieldNameSuggestionService()->getUnknownFieldHint($table, $fieldName);
             }
         }
 
@@ -1691,7 +1705,10 @@ class WriteTableTool extends AbstractRecordTool
         foreach ($fieldNames as $fieldName) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
             if (!$fieldConfig) {
-                throw new ValidationException(["search_replace field '{$fieldName}' does not exist in table '{$table}'"]);
+                throw new ValidationException([
+                    "search_replace field '{$fieldName}' does not exist in table '{$table}'."
+                    . $this->getFieldNameSuggestionService()->getUnknownFieldHint($table, $fieldName)
+                ]);
             }
             if (!$this->tableAccessService->canAccessField($table, $fieldName)) {
                 throw new ValidationException(["Field '{$fieldName}' is not accessible"]);

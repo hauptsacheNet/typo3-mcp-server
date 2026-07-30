@@ -300,6 +300,21 @@ Errors are designed to help AI assistants self-correct:
 }
 ```
 
+**Unknown field names get a suggestion.** Field names TYPO3 uses are not always
+the ones an LLM expects — `tt_content` stores the content type in `CType` and the
+headline in `header`. Rather than only rejecting the write, the error names the
+field that was probably meant:
+
+```
+Field 'tt_content_type' does not exist in table 'tt_content' and cannot be
+written. Did you mean 'CType'?
+```
+
+Matching runs in layers (case-insensitive match, normalization, semantic aliases
+resolved through TCA `ctrl`, then Levenshtein for plain typos), so it works for
+third-party tables too — see `FieldNameSuggestionService`. When nothing matches
+closely the error points at `GetTableSchema` instead of guessing.
+
 ### Permission Handling
 
 The MCP Server respects all TYPO3 permissions:

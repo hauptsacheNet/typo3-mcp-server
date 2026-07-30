@@ -174,21 +174,55 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         // Get the type label
         $typeLabel = $types[$filterType] ?? '';
-        
+
+        // Get available fields using TableAccessService (includes access control).
+        // Pass the pid so TCEFORM.[table].[field].disabled is resolved at the
+        // correct page context. Resolved before the type section is rendered
+        // because that section needs to know whether the type field is among
+        // the fields listed further down.
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $filterType, $pid);
+
         // Add current record type section
         $result .= "CURRENT RECORD TYPE:\n";
         $result .= "-------------------\n";
-        $result .= "Type: " . $filterType . " (" . $typeLabel . ")\n\n";
-        
+        $result .= "Type: " . $filterType . " (" . $typeLabel . ")\n";
+
+        // Name the type field explicitly. "type: CType" buried in CONTROL FIELDS
+        // was too cryptic to be picked up, and callers kept inventing names like
+        // "tt_content_type" instead of writing the real column.
+        $typeFieldName = $this->tableAccessService->getTypeFieldName($table);
+        if (!empty($typeFieldName)) {
+            $result .= "Type field: " . $typeFieldName
+                . " (set this field to the type value when writing records)\n";
+        }
+
+        // Point at the other types. Only one type's fields are ever shown, and
+        // the `type` parameter's description promises the list — without it a
+        // caller has to guess which types exist.
+        $selectableTypes = [];
+        foreach ($types as $typeValue => $unusedLabel) {
+            if ((string)$typeValue !== '--div--') {
+                $selectableTypes[] = (string)$typeValue;
+            }
+        }
+        if (count($selectableTypes) > 1) {
+            if (!empty($typeFieldName) && isset($availableFields[$typeFieldName])) {
+                // The values are already spelled out with labels in the type
+                // field's options below; repeating them here buys nothing.
+                $result .= "Available types: listed as the options of " . $typeFieldName
+                    . " below (call GetTableSchema again with \"type\" set to one of them to see that type's fields)\n";
+            } else {
+                $result .= "Available types: " . implode(', ', $selectableTypes) . "\n";
+                $result .= "  (call GetTableSchema again with \"type\" set to one of these to see its fields)\n";
+            }
+        }
+
+        $result .= "\n";
+
         // Add fields section
         $result .= "FIELDS:\n";
         $result .= "-------\n";
-        
-        // Get available fields using TableAccessService (includes access control).
-        // Pass the pid so TCEFORM.[table].[field].disabled is resolved at the
-        // correct page context.
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $filterType, $pid);
-        
+
         if (empty($availableFields)) {
             $result .= "No accessible fields defined for this type.\n";
             return $result;

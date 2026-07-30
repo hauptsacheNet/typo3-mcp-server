@@ -1350,7 +1350,13 @@ class TableAccessService implements SingletonInterface
     {
         $fieldConfig = $this->getFieldConfig($table, $fieldName);
         if (!$fieldConfig) {
-            return "Field '{$fieldName}' does not exist in table '{$table}'";
+            // Instantiated here rather than in the constructor: the suggestion
+            // service depends on this service, and it is only needed on the
+            // error path anyway.
+            $suggestions = GeneralUtility::makeInstance(FieldNameSuggestionService::class);
+
+            return "Field '{$fieldName}' does not exist in table '{$table}'."
+                . $suggestions->getUnknownFieldHint($table, $fieldName);
         }
 
         $config = $fieldConfig['config'] ?? [];

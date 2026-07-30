@@ -77,6 +77,21 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected int $cachedTokens = 0;
 
     /**
+     * Every failed tool call of the current attempt as
+     * ['tool' => string, 'message' => string, 'arguments' => array].
+     *
+     * A model that hallucinates a field name, gets an error and then corrects
+     * itself still passes the test — the extra round trip is invisible in the
+     * pass/fail result. Recording the errors makes that friction reviewable
+     * (failure messages, the stats artifact, and .Build/llm-tool-errors.log)
+     * instead of costing tokens silently on every run.
+     */
+    protected array $toolErrors = [];
+
+    /** Same, but across all attempts of this test+model (survives retries). */
+    protected array $totalToolErrors = [];
+
+    /**
      * Cumulative counters across all attempts (incl. silent retries) for the
      * same test+model. Live across the retry loop so the stats artifact
      * reflects the real wall-clock cost, not just the final passing attempt.
@@ -99,6 +114,7 @@ abstract class LlmTestCase extends FunctionalTestCase
         $this->toolErrorCount = 0;
         $this->promptTokens = 0;
         $this->cachedTokens = 0;
+        $this->toolErrors = [];
 
         $this->initializeLlmClient();
 
@@ -117,6 +133,8 @@ abstract class LlmTestCase extends FunctionalTestCase
         $this->totalLlmCallCount += $this->llmCallCount;
         $this->totalToolCallCount += $this->toolCallCount;
         $this->totalToolErrorCount += $this->toolErrorCount;
+        // $totalToolErrors is appended to as errors happen (it must outlive the
+        // per-attempt reset), so there is nothing to fold in here.
         $this->totalPromptTokens += $this->promptTokens;
         $this->totalCachedTokens += $this->cachedTokens;
 
@@ -140,9 +158,30 @@ abstract class LlmTestCase extends FunctionalTestCase
             'llm_calls' => $this->totalLlmCallCount,
             'tool_calls' => $this->totalToolCallCount,
             'tool_errors' => $this->totalToolErrorCount,
+            'tool_error_messages' => $this->summarizeToolErrors(),
             'prompt_tokens' => $this->totalPromptTokens,
             'cached_tokens' => $this->totalCachedTokens,
         ]));
+    }
+
+    /**
+     * Deduplicate the recorded tool errors so the stats artifact shows what
+     * went wrong (and how often) rather than a bare count.
+     *
+     * @return array<int, array{tool: string, message: string, count: int}>
+     */
+    private function summarizeToolErrors(): array
+    {
+        $grouped = [];
+        foreach ($this->totalToolErrors as $error) {
+            $key = $error['tool'] . '|' . $error['message'];
+            if (!isset($grouped[$key])) {
+                $grouped[$key] = ['tool' => $error['tool'], 'message' => $error['message'], 'count' => 0];
+            }
+            $grouped[$key]['count']++;
+        }
+
+        return array_values($grouped);
     }
 
     /**
@@ -352,6 +391,7 @@ abstract class LlmTestCase extends FunctionalTestCase
     {
         $context = "[Model: {$this->llmModel}]\n";
         $context .= "Prompt: {$this->lastPrompt}\n";
+        $context .= $this->toolErrorSummary();
         if ($response !== null) {
             $textResponse = $response->getContent();
             if (!empty($textResponse)) {
@@ -586,7 +626,7 @@ abstract class LlmTestCase extends FunctionalTestCase
         $tool = $toolRegistry->getTool($toolCall['name']);
 
         if (!$tool) {
-            $this->toolErrorCount++;
+            $this->recordToolError($toolCall, "Tool '{$toolCall['name']}' not found");
             return [
                 'error' => "Tool '{$toolCall['name']}' not found",
                 'content' => "Error: Tool not found"
@@ -613,7 +653,7 @@ abstract class LlmTestCase extends FunctionalTestCase
 
             $isError = $result->isError || $hasErrorContent;
             if ($isError) {
-                $this->toolErrorCount++;
+                $this->recordToolError($toolCall, $content);
             }
 
             return [
@@ -621,7 +661,7 @@ abstract class LlmTestCase extends FunctionalTestCase
                 'isError' => $isError
             ];
         } catch (\Exception $e) {
-            $this->toolErrorCount++;
+            $this->recordToolError($toolCall, $e->getMessage());
             return [
                 'error' => $e->getMessage(),
                 'content' => "Error: " . $e->getMessage()
@@ -630,8 +670,83 @@ abstract class LlmTestCase extends FunctionalTestCase
     }
 
     /**
+     * Record a failed tool call and append it to .Build/llm-tool-errors.log.
+     *
+     * @param array $toolCall The tool call that failed
+     * @param string $message The error text the model received back
+     */
+    protected function recordToolError(array $toolCall, string $message): void
+    {
+        $this->toolErrorCount++;
+
+        $entry = [
+            'tool' => (string)($toolCall['name'] ?? 'unknown'),
+            'message' => (string)preg_replace('/\s+/', ' ', trim(mb_substr($message, 0, 400))),
+            'arguments' => $toolCall['arguments'] ?? [],
+        ];
+
+        $this->toolErrors[] = $entry;
+        $this->totalToolErrors[] = $entry;
+
+        $this->logToolError($entry);
+    }
+
+    /**
+     * Human-readable list of the tool errors seen in the current attempt.
+     * Included in failure messages so a self-corrected mistake earlier in the
+     * conversation is visible when a later assertion fails.
+     */
+    protected function toolErrorSummary(): string
+    {
+        if (empty($this->toolErrors)) {
+            return '';
+        }
+
+        $summary = 'Tool errors during this attempt (' . count($this->toolErrors) . "):\n";
+        foreach ($this->toolErrors as $index => $error) {
+            $summary .= sprintf("  %d. %s: %s\n", $index + 1, $error['tool'], $error['message']);
+        }
+
+        return $summary;
+    }
+
+    /**
+     * Append one greppable line per failed tool call, mirroring
+     * logAttemptFailure(): paratest workers do not forward STDERR, so a file is
+     * the only place this survives. Passing tests write here too — that is the
+     * point, a self-corrected error costs a round trip either way.
+     * MCP_LLM_DEBUG=1 additionally logs the arguments that triggered it.
+     */
+    private function logToolError(array $entry): void
+    {
+        $modelKey = array_search($this->llmModel, static::MODELS, true);
+        $modelLabel = $modelKey !== false ? (string)$modelKey : $this->llmModel;
+        $shortClass = preg_replace('/^.*\\\\/', '', static::class);
+
+        $line = sprintf(
+            "[%s] [LLM-TOOL-ERROR] %s::%s#%s — %s: %s\n",
+            date('H:i:s'),
+            $shortClass,
+            $this->name(),
+            $modelLabel,
+            $entry['tool'],
+            $entry['message']
+        );
+
+        if (getenv('MCP_LLM_DEBUG')) {
+            $line .= '    arguments: ' . json_encode($entry['arguments']) . "\n";
+        }
+
+        $dir = __DIR__ . '/../../.Build';
+        if (!is_dir($dir) && !@mkdir($dir, 0777, true) && !is_dir($dir)) {
+            return;
+        }
+        @file_put_contents($dir . '/llm-tool-errors.log', $line, FILE_APPEND | LOCK_EX);
+    }
+
+    /**
      * Continue conversation with tool results
-     * 
+     *
      * @param LlmResponse $previousResponse Previous LLM response
      * @param array $toolResults Array of tool results (from executeToolCall)
      * @param array $options Additional options for the LLM call
