@@ -79,8 +79,8 @@ class McpEndpointUcPreservationTest extends AbstractFunctionalTest
         $endpoint = new McpEndpoint();
         $response = $endpoint($request);
 
-        // A 401 would mean the token authentication - and with it the
-        // impersonation path under test - never ran.
+        // A 401 means authentication failed before the impersonation
+        // path under test could run.
         $this->assertNotSame(401, $response->getStatusCode());
 
         // The impersonated backend user must carry the stored configuration
