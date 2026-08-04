@@ -79,12 +79,8 @@ class McpEndpointUcPreservationTest extends AbstractFunctionalTest
         $endpoint = new McpEndpoint();
         $response = $endpoint($request);
 
-        // The JSON-RPC processing itself cannot succeed in this environment:
-        // the SDK's StandardPhpAdapter builds its request via
-        // HttpMessage::fromGlobals(), and PHPUnit's CLI process provides
-        // neither REQUEST_METHOD nor a fillable php://input. A 401 however
-        // would mean the token authentication - and with it the impersonation
-        // path under test - never ran.
+        // A 401 would mean the token authentication - and with it the
+        // impersonation path under test - never ran.
         $this->assertNotSame(401, $response->getStatusCode());
 
         // The impersonated backend user must carry the stored configuration

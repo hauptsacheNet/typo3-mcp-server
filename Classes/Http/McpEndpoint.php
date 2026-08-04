@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Hn\McpServer\Http;
 
 use Mcp\Server\HttpServerRunner;
-use Mcp\Server\Transport\Http\StandardPhpAdapter;
 use Mcp\Server\Transport\Http\FileSessionStore;
+use Mcp\Server\Transport\Http\HttpMessage;
 use TYPO3\CMS\Core\Core\Environment;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -115,38 +115,33 @@ class McpEndpoint
                 $sessionStore
             );
 
-            // Handle the request and capture output
-            ob_start();
-
-            // Suppress warnings/notices from MCP SDK to prevent deprecation issues
-            $oldErrorReporting = error_reporting(E_ERROR | E_PARSE);
-
-            try {
-                $adapter = new StandardPhpAdapter($runner);
-                $adapter->handle();
-            } finally {
-                // Restore error reporting
-                error_reporting($oldErrorReporting);
+            // Convert the PSR-7 request into the SDK's HttpMessage and let the
+            // runner handle it directly. This keeps the whole request/response
+            // cycle inside PSR-7 (no superglobals, no output buffering), which
+            // also makes the endpoint testable in functional tests.
+            $mcpRequest = new HttpMessage((string)$request->getBody());
+            $mcpRequest->setMethod($request->getMethod());
+            $mcpRequest->setUri((string)$request->getUri());
+            $mcpRequest->setQueryParams($request->getQueryParams());
+            foreach ($request->getHeaders() as $name => $values) {
+                $mcpRequest->setHeader($name, implode(', ', $values));
             }
 
-            $output = ob_get_clean();
+            $mcpResponse = $runner->handleRequest($mcpRequest);
 
-            // Get the status code set by the adapter
-            $statusCode = http_response_code() ?: 200;
-
-            // Try to decode as JSON, fallback to plain text
-            $decodedOutput = json_decode($output, true);
-            $contentType = $decodedOutput !== null ? 'application/json' : 'text/plain';
-
-            // Create proper stream for response
             $stream = new Stream('php://temp', 'rw');
-            $stream->write($output);
+            $stream->write((string)($mcpResponse->getBody() ?? ''));
             $stream->rewind();
+
+            $headers = $mcpResponse->getHeaders();
+            if (!isset($headers['content-type'])) {
+                $headers['content-type'] = 'application/json';
+            }
 
             $response = new Response(
                 $stream,
-                $statusCode,
-                ['Content-Type' => $contentType]
+                $mcpResponse->getStatusCode(),
+                $headers
             );
 
             return $this->addCorsHeaders($response, $request);
