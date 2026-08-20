@@ -1248,7 +1248,7 @@ class WriteTableTool extends AbstractRecordTool
 
             if ($isHiddenTable) {
                 // Process embedded inline relations (e.g., tx_news_domain_model_link)
-                $this->processEmbeddedInlineRelations($dataMap, $foreignTable, $foreignField, $parentUid, $pid, $value, $config, $liveUid);
+                $this->processEmbeddedInlineRelations($dataMap, $foreignTable, $foreignField, $parentUid, $pid, $value, $config, $liveUid, $parentTable);
             } else {
                 // Process independent inline relations (e.g., tt_content)
                 $this->processIndependentInlineRelations($foreignTable, $foreignField, $parentUid, $value, $liveUid);
@@ -1267,13 +1267,19 @@ class WriteTableTool extends AbstractRecordTool
         int $pid,
         array $records,
         array $config,
-        ?int $liveUid = null
+        ?int $liveUid = null,
+        string $parentTable = ''
     ): void {
         $foreignMatchFields = $config['foreign_match_fields'] ?? [];
+        // Content Blocks "Collection" fields with shareAcrossTables use this TCA key
+        // (not foreign_match_fields) to record which table a shared child table
+        // row belongs to — e.g. sys_file_reference uses foreign_match_fields for
+        // its tablenames column, this uses a dedicated key instead.
+        $foreignTableField = $config['foreign_table_field'] ?? null;
 
         // Existing children of this parent (live uids). Empty for the create path.
         $existingChildUids = $liveUid !== null
-            ? $this->fetchEmbeddedRelationChildUids($foreignTable, $foreignField, $liveUid, $foreignMatchFields)
+            ? $this->fetchEmbeddedRelationChildUids($foreignTable, $foreignField, $liveUid, $foreignMatchFields, $foreignTableField, $parentTable)
             : [];
 
         // Reject any uid that does not currently belong to this parent. Otherwise a caller
@@ -1336,6 +1342,14 @@ class WriteTableTool extends AbstractRecordTool
                     foreach ($config['foreign_match_fields'] as $matchField => $matchValue) {
                         $recordData[$matchField] = $matchValue;
                     }
+                }
+
+                // Set foreign_table_field (e.g., "tablenames" for a Content Blocks
+                // Collection with shareAcrossTables) to the parent's own table name.
+                // Without this the row is written but TYPO3 can never find it again —
+                // it renders as an empty relation in both the backend and frontend.
+                if (!empty($foreignTableField) && $parentTable !== '') {
+                    $recordData[$foreignTableField] = $parentTable;
                 }
 
                 $key = 'NEW' . uniqid() . '_' . $index;
@@ -1457,7 +1471,9 @@ class WriteTableTool extends AbstractRecordTool
         string $foreignTable,
         string $foreignField,
         int $parentUid,
-        array $foreignMatchFields = []
+        array $foreignMatchFields = [],
+        ?string $foreignTableField = null,
+        string $parentTable = ''
     ): array {
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable($foreignTable);
@@ -1478,6 +1494,16 @@ class WriteTableTool extends AbstractRecordTool
         foreach ($foreignMatchFields as $matchField => $matchValue) {
             $queryBuilder->andWhere(
                 $queryBuilder->expr()->eq($matchField, $queryBuilder->createNamedParameter($matchValue))
+            );
+        }
+
+        // Scope to the owning parent table when the child table is shared across
+        // multiple parent tables (foreign_table_field, e.g. Content Blocks
+        // shareAcrossTables). Without this, two unrelated parents on different
+        // tables that happen to reuse the same uid could see each other's children.
+        if (!empty($foreignTableField) && $parentTable !== '') {
+            $queryBuilder->andWhere(
+                $queryBuilder->expr()->eq($foreignTableField, $queryBuilder->createNamedParameter($parentTable))
             );
         }
 
