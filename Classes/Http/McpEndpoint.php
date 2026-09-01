@@ -97,6 +97,14 @@ class McpEndpoint
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
         try {
+            // A browser-based MCP client preflights /mcp before its first POST.
+            // A preflight carries no credentials, so it must be answered before
+            // authentication - otherwise the browser gets a 401 and never sends
+            // the actual request. Every OAuth endpoint already does this.
+            if ($request->getMethod() === 'OPTIONS') {
+                return $this->handlePreflightRequest($request);
+            }
+
             // Get services through DI container
             $container = GeneralUtility::getContainer();
             $serverFactory = $container->get(McpServerFactory::class);

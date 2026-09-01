@@ -107,4 +107,71 @@ class CorsHeadersTest extends AbstractFunctionalTest
             'CORS origin must reflect the request Origin, not a wildcard'
         );
     }
+
+    /**
+     * A browser MCP client preflights /mcp before its first POST. The preflight
+     * carries no credentials, so the endpoint must answer OPTIONS with 200 and
+     * CORS headers instead of falling through to the 401 auth check. See #115.
+     */
+    public function testMcpEndpointAnswersPreflightWithoutAuth(): void
+    {
+        $endpoint = new McpEndpoint();
+
+        $request = new ServerRequest(
+            new Uri('https://example.com/mcp'),
+            'OPTIONS',
+            'php://input',
+            [
+                'Origin' => 'https://claude.ai',
+                'Access-Control-Request-Method' => 'POST',
+                'Access-Control-Request-Headers' => 'authorization, content-type, mcp-protocol-version',
+            ]
+        );
+        $GLOBALS['TYPO3_REQUEST'] = $request;
+
+        $response = $endpoint($request);
+
+        $this->assertEquals(
+            200,
+            $response->getStatusCode(),
+            'An unauthenticated OPTIONS preflight to /mcp must return 200, not 401'
+        );
+        $this->assertEquals(
+            'https://claude.ai',
+            $response->getHeaderLine('Access-Control-Allow-Origin'),
+            'Preflight response must reflect the request Origin'
+        );
+    }
+
+    /**
+     * The Streamable HTTP transport lets clients send Accept, MCP-Protocol-Version,
+     * Mcp-Session-Id and Last-Event-ID, use DELETE to terminate a session, and
+     * read Mcp-Session-Id off the response. A browser blocks all of that unless
+     * the CORS headers advertise it. See #115.
+     */
+    public function testMcpPreflightAdvertisesStreamableHttpCapabilities(): void
+    {
+        $endpoint = new McpEndpoint();
+
+        $request = new ServerRequest(
+            new Uri('https://example.com/mcp'),
+            'OPTIONS',
+            'php://input',
+            ['Origin' => 'https://claude.ai']
+        );
+        $GLOBALS['TYPO3_REQUEST'] = $request;
+
+        $response = $endpoint($request);
+
+        $allowMethods = $response->getHeaderLine('Access-Control-Allow-Methods');
+        $this->assertStringContainsStringIgnoringCase('DELETE', $allowMethods, 'DELETE must be allowed for session termination');
+
+        $allowHeaders = strtolower($response->getHeaderLine('Access-Control-Allow-Headers'));
+        foreach (['accept', 'mcp-protocol-version', 'mcp-session-id', 'last-event-id'] as $header) {
+            $this->assertStringContainsString($header, $allowHeaders, sprintf('CORS must allow the "%s" request header', $header));
+        }
+
+        $exposeHeaders = strtolower($response->getHeaderLine('Access-Control-Expose-Headers'));
+        $this->assertStringContainsString('mcp-session-id', $exposeHeaders, 'Browser clients must be able to read Mcp-Session-Id');
+    }
 }
