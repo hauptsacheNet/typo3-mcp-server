@@ -378,17 +378,18 @@ class InvalidDataTest extends AbstractFunctionalTest
                 'title' => ['array', 'not', 'allowed']
             ]
         ]);
-        
-        // TYPO3 might convert array to string
-        if ($result->isError) {
-            $this->assertStringContainsString('Invalid', $result->content[0]->text);
-        } else {
-            // If it succeeded, check what was stored
-            $data = json_decode($result->content[0]->text, true);
-            if (isset($data['title'])) {
-                $this->assertIsString($data['title']);
-            }
-        }
+
+        // An array in a scalar (input) field must be rejected with an actionable
+        // message rather than silently cast to the literal string "Array" — which
+        // corrupts the workspace history and breaks publishing (issue #114).
+        $this->assertTrue($result->isError, 'Array in a scalar field should be rejected');
+        $this->assertStringContainsString("Field 'title'", $result->content[0]->text);
+        $this->assertStringContainsString('plain text value', $result->content[0]->text);
+
+        // And the live record must be untouched.
+        $record = BackendUtility::getRecord('pages', 1, 'title');
+        $this->assertIsString($record['title']);
+        $this->assertNotSame('Array', $record['title']);
     }
     
     /**

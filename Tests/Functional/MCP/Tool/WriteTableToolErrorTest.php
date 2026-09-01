@@ -643,4 +643,94 @@ class WriteTableToolErrorTest extends FunctionalTestCase
         $this->assertTrue($result->isError, 'Should fail on non-existent field');
         $this->assertStringContainsString('does not exist', $result->content[0]->text);
     }
+
+    /**
+     * Writing an array/object into a scalar text field must be rejected, not
+     * silently cast to the string "Array". Left unchecked, the workspace history
+     * serializes the original PHP array and publishing later throws an
+     * "Array to string conversion" error in the backend (issue #114). The error
+     * must be actionable so the LLM can self-correct.
+     */
+    public function testCreateWithArrayValueForScalarTextFieldIsRejected(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => 'text',
+                'header' => 'JSON demo',
+                // An LLM fumble: the raw decoded object instead of a JSON string.
+                'bodytext' => ['foo' => 'bar', 'items' => [1, 2, 3]],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Should reject an array for a scalar text field');
+        $this->assertStringContainsString("Field 'bodytext'", $result->content[0]->text);
+        $this->assertStringContainsString('array/object', $result->content[0]->text);
+
+        // The bogus record must not have been created.
+        $count = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content')
+            ->count('uid', 'tt_content', ['header' => 'JSON demo']);
+        $this->assertSame(0, $count, 'No record should be created when validation fails');
+    }
+
+    /**
+     * Same guard on the update path.
+     */
+    public function testUpdateWithArrayValueForScalarTextFieldIsRejected(): void
+    {
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => [
+                'bodytext' => ['unescaped' => 'json', 'nested' => ['a', 'b']],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'Should reject an array for a scalar text field');
+        $this->assertStringContainsString("Field 'bodytext'", $result->content[0]->text);
+        $this->assertStringContainsString('array/object', $result->content[0]->text);
+
+        // The live value must be untouched (no "Array" string written).
+        $record = BackendUtility::getRecord('tt_content', 100, 'bodytext');
+        $this->assertSame('Welcome to our homepage', $record['bodytext']);
+    }
+
+    /**
+     * A JSON *string* in a text field is perfectly valid and must still pass —
+     * the guard only rejects non-scalar values, not strings that happen to
+     * contain JSON.
+     */
+    public function testUpdateWithJsonStringForScalarTextFieldIsAccepted(): void
+    {
+        $json = '{"foo":"bar","items":[1,2,3]}';
+        $result = $this->tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => [
+                'bodytext' => $json,
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Confirm the raw workspace value is the verbatim JSON *string*, not the
+        // literal "Array" cast that corrupts the history. Read the workspace
+        // overlay record directly from the DB (the write happens in a workspace).
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $workspaceRecord = $connection->select(
+            ['bodytext'],
+            'tt_content',
+            ['t3ver_oid' => 100],
+            [],
+            ['uid' => 'DESC']
+        )->fetchAssociative();
+        $this->assertNotFalse($workspaceRecord, 'A workspace overlay record should exist');
+        $this->assertSame($json, $workspaceRecord['bodytext']);
+    }
 }

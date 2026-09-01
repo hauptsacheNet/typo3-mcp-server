@@ -1356,6 +1356,28 @@ class TableAccessService implements SingletonInterface
         $config = $fieldConfig['config'] ?? [];
         $fieldType = $config['type'] ?? '';
 
+        // Reject non-scalar values for scalar (string-storable) field types.
+        //
+        // DataHandler casts an array passed to such a field to the literal string
+        // "Array" on its way to the DB, but the workspace history serializes the
+        // original PHP array. Publishing that history entry later throws an
+        // "Array to string conversion" error in the backend (see issue #114).
+        // Catch it here so the LLM gets an actionable error and can self-correct —
+        // e.g. by JSON-encoding structured data into a string instead of nesting it.
+        //
+        // Array-valued fields (select/category/group multiple, inline/file, flex,
+        // imageManipulation) are NOT in this list, and text-field search/replace
+        // operation arrays are extracted from the data before validation runs, so
+        // this guard only ever fires on a genuine scalar/array mismatch.
+        if (in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color', 'password', 'number'], true)
+            && !is_scalar($value) && $value !== null
+        ) {
+            $givenType = is_array($value) ? 'an array/object' : gettype($value);
+            return "Field '{$fieldName}' (type '{$fieldType}') expects a plain text value, but received {$givenType}. "
+                . "If you meant to store structured content such as JSON, provide it as a string "
+                . "(the JSON-encoded text), not as a nested object or array.";
+        }
+
         // Check max length for string fields
         if (in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color']) && is_string($value)) {
             $maxLength = $config['max'] ?? 0;
