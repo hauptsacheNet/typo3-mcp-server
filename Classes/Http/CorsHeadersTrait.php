@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Http;
 
+use Mcp\Shared\McpHeaders;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
@@ -13,15 +14,58 @@ use Psr\Http\Message\ServerRequestInterface;
 trait CorsHeadersTrait
 {
     /**
+     * Request headers a browser client may send when no preflight lists them
+     * explicitly. This is only a fallback: on a real preflight the requested
+     * headers are reflected instead, because the MCP Streamable HTTP transport
+     * also mirrors tool arguments as dynamic Mcp-Param-{name} headers
+     * (SEP-2243), which no static list can ever cover.
+     */
+    private function corsFallbackAllowHeaders(): string
+    {
+        return implode(', ', [
+            'Content-Type',
+            'Content-Disposition',
+            'Authorization',
+            'X-Requested-With',
+            'Accept',
+            McpHeaders::PROTOCOL_VERSION,
+            'Mcp-Session-Id',
+            McpHeaders::METHOD,
+            McpHeaders::NAME,
+            'Last-Event-ID',
+        ]);
+    }
+
+    /**
      * Add CORS headers to response for OAuth/API endpoints
      */
     private function addCorsHeaders(ResponseInterface $response, ServerRequestInterface $request): ResponseInterface
     {
-        $allowedOrigin = $request->hasHeader('Origin') ? $request->getHeaderLine('Origin') : '';
+        // The response content depends on these request headers, so shared
+        // caches must key on them - even when the current request carries no
+        // Origin at all, or a cached non-CORS response would later be served
+        // to a CORS request (and vice versa).
+        foreach (['Origin', 'Access-Control-Request-Headers'] as $varyOn) {
+            if (stripos($response->getHeaderLine('Vary'), $varyOn) === false) {
+                $response = $response->withAddedHeader('Vary', $varyOn);
+            }
+        }
+
+        $allowedOrigin = $request->getHeaderLine('Origin');
 
         // No CORS headers for non-CORS requests (no Origin header)
         if (empty($allowedOrigin)) {
             return $response;
+        }
+
+        // On a preflight the browser lists exactly the headers the client
+        // wants to send; reflecting that list keeps this trait free of
+        // transport knowledge and covers the dynamic Mcp-Param-* headers.
+        // Allow-Headers only gates the browser preflight - the server
+        // validates every actual request itself, so reflecting is safe.
+        $requestedHeaders = trim($request->getHeaderLine('Access-Control-Request-Headers'));
+        if ($requestedHeaders === '') {
+            $requestedHeaders = $this->corsFallbackAllowHeaders();
         }
 
         // Authentication uses Bearer tokens, not cookies, so credentialed CORS
@@ -32,19 +76,11 @@ trait CorsHeadersTrait
         return $response
             ->withHeader('Access-Control-Allow-Origin', $allowedOrigin)
             ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-            // The MCP Streamable HTTP transport requires several custom request
-            // headers (session id, protocol version, SSE resumption, routing
-            // headers) that are not CORS-safelisted and must be listed here or
-            // browsers reject the preflight.
-            ->withHeader(
-                'Access-Control-Allow-Headers',
-                'Content-Type, Content-Disposition, Authorization, X-Requested-With, Accept, '
-                . 'MCP-Protocol-Version, Mcp-Session-Id, Mcp-Method, Mcp-Name, Last-Event-ID'
-            )
+            ->withHeader('Access-Control-Allow-Headers', $requestedHeaders)
             // The server hands out the session id as a response header on
             // initialize; without exposing it, browser clients can never read
             // and echo it back on subsequent requests.
-            ->withHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, MCP-Protocol-Version')
+            ->withHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, ' . McpHeaders::PROTOCOL_VERSION)
             ->withHeader('Access-Control-Max-Age', '86400');
     }
 

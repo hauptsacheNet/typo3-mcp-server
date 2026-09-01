@@ -97,14 +97,51 @@ class CorsHeadersTest extends AbstractFunctionalTest
             'https://my-mcp-client.example.com',
             $response->getHeaderLine('Access-Control-Allow-Origin')
         );
+
+        // The preflight names exactly the headers the client wants to send;
+        // reflecting them covers dynamic headers (Mcp-Param-*) that no static
+        // allowlist could.
+        $this->assertEquals(
+            'authorization, content-type, mcp-protocol-version',
+            $response->getHeaderLine('Access-Control-Allow-Headers')
+        );
+    }
+
+    /**
+     * Reflecting the Origin makes the response origin-dependent, so shared
+     * caches must key on it - for CORS and non-CORS requests alike, or a
+     * cached response for one origin would be served to another.
+     */
+    public function testCorsResponsesVaryOnOrigin(): void
+    {
+        $endpoint = new OAuthTokenEndpoint();
+
+        foreach ([['Origin' => 'https://my-mcp-client.example.com'], []] as $headers) {
+            $request = new ServerRequest(
+                new Uri('https://example.com/mcp_oauth/token'),
+                'OPTIONS',
+                'php://input',
+                $headers
+            );
+            $GLOBALS['TYPO3_REQUEST'] = $request;
+
+            $response = $endpoint($request);
+
+            $this->assertStringContainsString(
+                'Origin',
+                $response->getHeaderLine('Vary'),
+                'Vary: Origin must be set regardless of whether the request is CORS'
+            );
+        }
     }
 
     /**
      * The MCP Streamable HTTP transport requires custom request headers that
      * are not CORS-safelisted, uses DELETE for session termination, and hands
      * the session id to the client as a response header. All three must be
-     * declared in the CORS headers or browser clients cannot connect.
-     * See issue #115.
+     * declared in the CORS headers or browser clients cannot connect. Without
+     * Access-Control-Request-Headers on the request, the fallback allowlist
+     * must cover the transport's static headers. See issue #115.
      */
     public function testCorsHeadersCoverMcpTransportRequirements(): void
     {
