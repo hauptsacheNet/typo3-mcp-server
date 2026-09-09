@@ -179,20 +179,25 @@ class ErrorHandlingTest extends AbstractFunctionalTest
     /**
      * Test that database exceptions are properly caught and converted
      */
-    public function testDatabaseExceptionHandling(): void
+    /**
+     * A condition can no longer reach the database, so it can no longer cause a
+     * database error there — this asserts the boundary that replaced it.
+     *
+     * "where" takes filter clauses; a string is refused before any query is
+     * built. The message names the shape that works and does not echo what was
+     * sent, so a condition does not travel on into logs and transcripts.
+     */
+    public function testSqlConditionNeverReachesTheDatabase(): void
     {
         $tool = new ReadTableTool();
-        
-        // Create a condition that would cause a database error
-        // Using invalid SQL syntax in where clause
+
         $result = $tool->execute([
             'table' => 'pages',
             'where' => 'invalid SQL syntax @@@ error'
         ]);
-        
-        // Should handle the database error gracefully
+
         $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
-        // The error message should be user-friendly, not exposing SQL details
+        $this->assertStringContainsString('not an SQL string', $result->content[0]->text);
         $this->assertStringNotContainsString('@@@ error', $result->content[0]->text);
     }
     
