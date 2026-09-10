@@ -325,10 +325,9 @@ class NewsLinkInlineTest extends FunctionalTestCase
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $newsUid = json_decode($result->content[0]->text, true)['uid'];
 
-        $news = json_decode(
-            $readTool->execute(['table' => 'tx_news_domain_model_news', 'uid' => $newsUid])->content[0]->text,
-            true
-        )['records'][0];
+        $result = $readTool->execute(['table' => 'tx_news_domain_model_news', 'uid' => $newsUid]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $news = json_decode($result->content[0]->text, true)['records'][0];
         $byTitle = [];
         foreach ($news['related_links'] as $link) {
             $byTitle[$link['title']] = (int)$link['uid'];
@@ -350,11 +349,20 @@ class NewsLinkInlineTest extends FunctionalTestCase
         ]);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
 
-        $news = json_decode(
-            $readTool->execute(['table' => 'tx_news_domain_model_news', 'uid' => $newsUid])->content[0]->text,
-            true
-        )['records'][0];
+        $result = $readTool->execute(['table' => 'tx_news_domain_model_news', 'uid' => $newsUid]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $news = json_decode($result->content[0]->text, true)['records'][0];
         $this->assertCount(3, $news['related_links'], 'No links should be lost during reorder');
+
+        // Assert the uids themselves, not just the titles — a delete-and-recreate
+        // implementation could pass a title-only check while discarding the
+        // original child records.
+        $this->assertSame(
+            [$byTitle['Third link'], $byTitle['First link'], $byTitle['Second link']],
+            array_map('intval', array_column($news['related_links'], 'uid')),
+            'Reordering must retain the existing child records, not delete and recreate them.'
+        );
+
         $titles = array_column($news['related_links'], 'title');
         $this->assertSame(
             ['Third link', 'First link', 'Second link'],

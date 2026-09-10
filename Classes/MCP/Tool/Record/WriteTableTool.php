@@ -492,7 +492,10 @@ class WriteTableTool extends AbstractRecordTool
                     );
                 }
 
-                $this->finalizeEmbeddedInlineRelations($embeddedRelations, $childDataHandler, $liveParentUid);
+                $finalizeResult = $this->finalizeEmbeddedInlineRelations($embeddedRelations, $childDataHandler, $liveParentUid);
+                if ($finalizeResult !== null) {
+                    return $finalizeResult;
+                }
             }
         }
 
@@ -586,7 +589,10 @@ class WriteTableTool extends AbstractRecordTool
 
             if (!empty($embeddedRelations)) {
                 // In update context, $uid is already the live UID
-                $this->finalizeEmbeddedInlineRelations($embeddedRelations, $childDataHandler, $uid);
+                $finalizeResult = $this->finalizeEmbeddedInlineRelations($embeddedRelations, $childDataHandler, $uid);
+                if ($finalizeResult !== null) {
+                    return $finalizeResult;
+                }
             }
         }
         
@@ -1390,12 +1396,13 @@ class WriteTableTool extends AbstractRecordTool
      *
      * @param array $embeddedRelations fieldName => ['foreignTable', 'foreignField', 'order'],
      *              as returned by processInlineRelations()
+     * @return CallToolResult|null an error result if TYPO3 rejected a reorder, null on success
      */
     protected function finalizeEmbeddedInlineRelations(
         array $embeddedRelations,
         DataHandler $childDataHandler,
         int $parentLiveUid
-    ): void {
+    ): ?CallToolResult {
         foreach ($embeddedRelations as $relation) {
             $foreignTable = $relation['foreignTable'];
             $foreignField = $relation['foreignField'];
@@ -1434,9 +1441,15 @@ class WriteTableTool extends AbstractRecordTool
                 }
             }
 
-            // Chain each child after its predecessor so the final order matches the
-            // array. Tables without a sortby field simply ignore the move (DataHandler
-            // logs it and no-ops), which is harmless since ordering isn't meaningful there.
+            // A table without its own sortby field has no order for DataHandler to
+            // move — issuing the command anyway would only produce the "table does
+            // not support sorting" log entry DataHandler always emits for that case
+            // (see DataHandler::moveRecord()), which is not a real failure.
+            if ($this->tableAccessService->getSortingFieldName($foreignTable) === null) {
+                continue;
+            }
+
+            // Chain each child after its predecessor so the final order matches the array.
             if (count($orderedUids) > 1) {
                 $cmdMap = [];
                 for ($i = 1, $total = count($orderedUids); $i < $total; $i++) {
@@ -1447,8 +1460,17 @@ class WriteTableTool extends AbstractRecordTool
                 $reorderDataHandler->BE_USER = $GLOBALS['BE_USER'];
                 $reorderDataHandler->start([], $cmdMap);
                 $reorderDataHandler->process_cmdmap();
+
+                if (!empty($reorderDataHandler->errorLog)) {
+                    return $this->createErrorResult(
+                        'Error reordering embedded relation ' . $foreignTable . ': ' .
+                        implode(', ', $reorderDataHandler->errorLog)
+                    );
+                }
             }
         }
+
+        return null;
     }
     
     /**
