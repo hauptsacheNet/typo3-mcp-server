@@ -1093,6 +1093,17 @@ class WriteTableTool extends AbstractRecordTool
             $effectivePid = $refRecord['pid'] ?? 0;
         }
 
+        // Page at which TCEFORM field visibility has to be resolved. For every table
+        // except `pages` that is the page the record lives on, so $effectivePid is
+        // right. For a page record it is that page itself: page TSconfig accumulates
+        // down the rootline, so a field the page re-enables for its own subtree still
+        // looks disabled when resolved at the parent. FormEngine makes the same
+        // distinction; BackendUtility::getTSCpid() encodes it but is deprecated as of
+        // TYPO3 14, so the one relevant line is inlined. (#120)
+        $tsConfigPid = ($table === 'pages' && $action === 'update' && $uid !== null)
+            ? $uid
+            : $effectivePid;
+
         // tt_content additionally honours TCEMAIN.table.tt_content.disableCTypes.
         // FormDataCompiler doesn't apply this — it's used by the New Content
         // Element Wizard — so reject those values explicitly so the LLM gets a
@@ -1116,7 +1127,7 @@ class WriteTableTool extends AbstractRecordTool
             }
 
             // Check if field is accessible (filters out inaccessible inline relations)
-            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $effectivePid)) {
+            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $tsConfigPid)) {
                 return "Field '{$fieldName}' is not accessible";
             }
 
@@ -1182,8 +1193,11 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         
-        // Get available fields for this record type
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        // Get available fields for this record type. Handed no page, this resolves
+        // TCEFORM at a fallback page, which drops fields that page TSconfig enables
+        // only where the record actually lives. Use the same page as the per-field
+        // check above so the two agree. (#120)
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType, $tsConfigPid ?: null);
         
         // The type field itself should always be available if it exists
         if ($typeField) {
@@ -1235,9 +1249,19 @@ class WriteTableTool extends AbstractRecordTool
                 }
                 
                 
-                // If we have available fields configured and this field is not in the list
+                // If we have available fields configured and this field is not in the list.
+                // Name both reasons it can be missing: the field is genuinely not part of
+                // the record type, or TCEFORM TSconfig disables it for this page. The old
+                // wording named only the first and sent readers hunting through the TCA.
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
-                    return "Field '{$fieldName}' is not available for this record type";
+                    return sprintf(
+                        "Field '%s' is not writable here: it is either not part of record type '%s' of table '%s', "
+                        . 'or disabled by TCEFORM TSconfig for page %d',
+                        $fieldName,
+                        $recordType,
+                        $table,
+                        $tsConfigPid
+                    );
                 }
             }
         }
