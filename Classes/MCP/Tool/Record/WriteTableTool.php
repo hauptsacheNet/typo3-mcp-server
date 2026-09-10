@@ -1251,12 +1251,14 @@ class WriteTableTool extends AbstractRecordTool
                 
                 // If we have available fields configured and this field is not in the list.
                 // Name both reasons it can be missing: the field is genuinely not part of
-                // the record type, or TCEFORM TSconfig disables it for this page. The old
-                // wording named only the first and sent readers hunting through the TCA.
+                // the record type, or TCEFORM TSconfig disables it for this page. Naming
+                // only the first sends readers hunting through the TCA, where nothing is
+                // wrong. The original phrase is kept verbatim so existing assertions on
+                // the message still hold.
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
                     return sprintf(
-                        "Field '%s' is not writable here: it is either not part of record type '%s' of table '%s', "
-                        . 'or disabled by TCEFORM TSconfig for page %d',
+                        "Field '%s' is not available for this record type ('%s' in table '%s'), "
+                        . 'or it is disabled by TCEFORM TSconfig for page %d',
                         $fieldName,
                         $recordType,
                         $table,
