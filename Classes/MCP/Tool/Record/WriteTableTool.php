@@ -474,64 +474,25 @@ class WriteTableTool extends AbstractRecordTool
         // Now process inline relations with the resolved parent UID
         if (!empty($inlineRelations)) {
             $childDataMap = [];
-            $this->processInlineRelations($childDataMap, $table, $parentUid, $pid, $inlineRelations);
-            
-            
+            $embeddedRelations = $this->processInlineRelations($childDataMap, $table, $parentUid, $pid, $inlineRelations);
+
             if (!empty($childDataMap)) {
                 // Create a new DataHandler instance for child records
                 $childDataHandler = GeneralUtility::makeInstance(DataHandler::class);
                 $childDataHandler->BE_USER = $GLOBALS['BE_USER'];
                 $childDataHandler->start($childDataMap, []);
                 $childDataHandler->process_datamap();
-                
-                
+
                 // Check for errors in child creation
                 if (!empty($childDataHandler->errorLog)) {
                     // Parent was created but children failed
                     return $this->createErrorResult(
-                        'Parent record created but error creating child records: ' . 
+                        'Parent record created but error creating child records: ' .
                         implode(', ', $childDataHandler->errorLog)
                     );
                 }
-                
-                // Update foreign fields for embedded relations
-                foreach ($inlineRelations as $fieldName => $relationData) {
-                    $config = $relationData['config'];
-                    $foreignTable = $config['foreign_table'] ?? '';
-                    $foreignField = $config['foreign_field'] ?? '';
-                    
-                    if (empty($foreignTable) || empty($foreignField)) {
-                        continue;
-                    }
-                    
-                    // Check if this is an embedded table
-                    $isHiddenTable = $this->tableAccessService->isEmbeddedChildTable($foreignTable);
 
-                    if ($isHiddenTable) {
-                        // Collect the UIDs of created child records
-                        $childUids = [];
-                        foreach ($childDataHandler->substNEWwithIDs as $newId => $realId) {
-                            if (strpos($newId, 'NEW') === 0 && isset($childDataMap[$foreignTable][$newId])) {
-                                $childUids[] = $realId;
-                            }
-                        }
-                        
-                        if (!empty($childUids)) {
-                            // Update foreign field directly in database
-                            // RelationHandler's writeForeignField is for MM relations, not direct foreign fields
-                            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-                                ->getConnectionForTable($foreignTable);
-                            
-                            foreach ($childUids as $childUid) {
-                                $connection->update(
-                                    $foreignTable,
-                                    [$foreignField => $liveParentUid],
-                                    ['uid' => $childUid]
-                                );
-                            }
-                        }
-                    }
-                }
+                $this->finalizeEmbeddedInlineRelations($embeddedRelations, $childDataHandler, $liveParentUid);
             }
         }
 
@@ -605,59 +566,27 @@ class WriteTableTool extends AbstractRecordTool
             $pid = $record['pid'] ?? 0;
             
             $childDataMap = [];
-            $this->processInlineRelations($childDataMap, $table, $workspaceUid, $pid, $inlineRelations, $uid);
-            
+            $embeddedRelations = $this->processInlineRelations($childDataMap, $table, $workspaceUid, $pid, $inlineRelations, $uid);
+
+            // A new DataHandler instance is needed even when $childDataMap ends up empty
+            // (a pure reorder of already-existing children has nothing to patch), since
+            // finalizeEmbeddedInlineRelations() still needs one to issue the reorder.
+            $childDataHandler = GeneralUtility::makeInstance(DataHandler::class);
+            $childDataHandler->BE_USER = $GLOBALS['BE_USER'];
+
             if (!empty($childDataMap)) {
-                // Create a new DataHandler instance for child records
-                $childDataHandler = GeneralUtility::makeInstance(DataHandler::class);
-                $childDataHandler->BE_USER = $GLOBALS['BE_USER'];
                 $childDataHandler->start($childDataMap, []);
                 $childDataHandler->process_datamap();
-                
+
                 // Check for errors in child processing
                 if (!empty($childDataHandler->errorLog)) {
                     return $this->createErrorResult('Error processing inline relations: ' . implode(', ', $childDataHandler->errorLog));
                 }
-                
-                // Update foreign fields for embedded relations
-                foreach ($inlineRelations as $fieldName => $relationData) {
-                    $config = $relationData['config'];
-                    $foreignTable = $config['foreign_table'] ?? '';
-                    $foreignField = $config['foreign_field'] ?? '';
-                    
-                    if (empty($foreignTable) || empty($foreignField)) {
-                        continue;
-                    }
-                    
-                    // Check if this is an embedded table
-                    $isHiddenTable = $this->tableAccessService->isEmbeddedChildTable($foreignTable);
+            }
 
-                    if ($isHiddenTable) {
-                        // Collect the UIDs of created child records
-                        $childUids = [];
-                        foreach ($childDataHandler->substNEWwithIDs as $newId => $realId) {
-                            if (strpos($newId, 'NEW') === 0 && isset($childDataMap[$foreignTable][$newId])) {
-                                $childUids[] = $realId;
-                            }
-                        }
-                        
-                        if (!empty($childUids)) {
-                            // Update foreign field directly in database
-                            // RelationHandler's writeForeignField is for MM relations, not direct foreign fields
-                            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-                                ->getConnectionForTable($foreignTable);
-                            
-                            // In update context, $uid is already the live UID
-                            foreach ($childUids as $childUid) {
-                                $connection->update(
-                                    $foreignTable,
-                                    [$foreignField => $uid],
-                                    ['uid' => $childUid]
-                                );
-                            }
-                        }
-                    }
-                }
+            if (!empty($embeddedRelations)) {
+                // In update context, $uid is already the live UID
+                $this->finalizeEmbeddedInlineRelations($embeddedRelations, $childDataHandler, $uid);
             }
         }
         
@@ -1274,7 +1203,13 @@ class WriteTableTool extends AbstractRecordTool
     }
 
     /**
-     * Process inline relations for DataHandler
+     * Process inline relations for DataHandler.
+     *
+     * @return array<string, array{foreignTable: string, foreignField: string, order: array<int, int|string>}>
+     *         Per-field ordering info for embedded relations only, keyed by field name.
+     *         Each `order` entry is an existing child's live uid (int) or a new child's
+     *         "NEW..." datamap key (string). Passed to finalizeEmbeddedInlineRelations()
+     *         once the child DataHandler run has resolved real uids for new children.
      */
     protected function processInlineRelations(
         array &$dataMap,
@@ -1283,28 +1218,37 @@ class WriteTableTool extends AbstractRecordTool
         int $pid,
         array $inlineRelations,
         ?int $liveUid = null
-    ): void {
+    ): array {
+        $embeddedRelations = [];
+
         foreach ($inlineRelations as $fieldName => $relationData) {
             $config = $relationData['config'];
             $value = $relationData['value'];
             $foreignTable = $config['foreign_table'] ?? '';
             $foreignField = $config['foreign_field'] ?? '';
-            
+
             if (empty($foreignTable) || empty($foreignField)) {
                 continue;
             }
-            
+
             // Check if foreign table is treated as embedded inline child
             $isHiddenTable = $this->tableAccessService->isEmbeddedChildTable($foreignTable);
 
             if ($isHiddenTable) {
                 // Process embedded inline relations (e.g., tx_news_domain_model_link)
-                $this->processEmbeddedInlineRelations($dataMap, $foreignTable, $foreignField, $parentUid, $pid, $value, $config, $liveUid);
+                $order = $this->processEmbeddedInlineRelations($dataMap, $foreignTable, $foreignField, $parentUid, $pid, $value, $config, $liveUid);
+                $embeddedRelations[$fieldName] = [
+                    'foreignTable' => $foreignTable,
+                    'foreignField' => $foreignField,
+                    'order' => $order,
+                ];
             } else {
                 // Process independent inline relations (e.g., tt_content)
                 $this->processIndependentInlineRelations($foreignTable, $foreignField, $parentUid, $value, $liveUid);
             }
         }
+
+        return $embeddedRelations;
     }
     
     /**
@@ -1319,7 +1263,7 @@ class WriteTableTool extends AbstractRecordTool
         array $records,
         array $config,
         ?int $liveUid = null
-    ): void {
+    ): array {
         $foreignMatchFields = $config['foreign_match_fields'] ?? [];
 
         // Existing children of this parent (live uids). Empty for the create path.
@@ -1356,6 +1300,17 @@ class WriteTableTool extends AbstractRecordTool
             $this->deleteOrphanedEmbeddedRelations($foreignTable, $existingChildUids, $records);
         }
 
+        // Array order drives display order (see the tool description). DataHandler manages
+        // a child table's own sortby field automatically though: on create it overwrites
+        // whatever value is written below with its own "insert at top" number, and on
+        // update it silently drops a value for a field that (e.g. for Content Blocks
+        // generated tables) isn't exposed as an editable TCA column at all. $order is
+        // therefore handed back to the caller, which enforces array order afterwards via
+        // finalizeEmbeddedInlineRelations() once real uids for new children are known.
+        // Existing children are recorded by their (int) uid, new ones by their (string)
+        // "NEW..." datamap key — the two are always distinguishable by type.
+        $order = [];
+
         foreach ($records as $index => $recordData) {
             if (!is_array($recordData)) {
                 continue;
@@ -1390,15 +1345,18 @@ class WriteTableTool extends AbstractRecordTool
                 }
 
                 $key = 'NEW' . uniqid() . '_' . $index;
+                $order[] = $key;
             } else {
                 // Update path: target the workspace version so DataHandler patches the existing
                 // reference instead of touching the live record outside the workspace overlay.
                 $key = $this->resolveToWorkspaceUid($foreignTable, $existingUid);
+                $order[] = $existingUid;
             }
 
-            // Drive sort order from array position for both new and existing records.
-            // foreign_sortby is hidden from the schema (auto-managed), so reordering is
-            // only possible via the order in which the caller lists the children here.
+            // Best-effort sort hint: effective for tables like sys_file_reference, where
+            // sorting_foreign is a plain TCA column DataHandler leaves alone, but a no-op
+            // where the table auto-manages this field. finalizeEmbeddedInlineRelations()
+            // is what actually guarantees array order in the general case.
             if (isset($config['foreign_sortby'])) {
                 $recordData[$config['foreign_sortby']] = ($index + 1) * 256;
             }
@@ -1414,6 +1372,82 @@ class WriteTableTool extends AbstractRecordTool
                 $dataMap[$foreignTable] = [];
             }
             $dataMap[$foreignTable][$key] = $recordData;
+        }
+
+        return $order;
+    }
+
+    /**
+     * Enforce the caller's array order among embedded children after the child
+     * DataHandler run, and point newly created children back at their parent.
+     *
+     * DataHandler manages a child table's own sortby field automatically: on create it
+     * overwrites any value passed in with its own "insert at top" number (producing
+     * reverse order when several children are created in one call), and on update it
+     * silently drops a value for a field that isn't an editable TCA column. Array order
+     * is therefore enforced the same way the TYPO3 backend itself reorders records: a
+     * chain of DataHandler "move after" commands.
+     *
+     * @param array $embeddedRelations fieldName => ['foreignTable', 'foreignField', 'order'],
+     *              as returned by processInlineRelations()
+     */
+    protected function finalizeEmbeddedInlineRelations(
+        array $embeddedRelations,
+        DataHandler $childDataHandler,
+        int $parentLiveUid
+    ): void {
+        foreach ($embeddedRelations as $relation) {
+            $foreignTable = $relation['foreignTable'];
+            $foreignField = $relation['foreignField'];
+
+            // Resolve every item to its final, real uid, in the caller's array order.
+            // An existing child is already its (int) live uid; a new one is its (string)
+            // "NEW..." datamap key, resolved to a real uid via substNEWwithIDs.
+            $orderedUids = [];
+            $newUids = [];
+            foreach ($relation['order'] as $item) {
+                if (is_int($item)) {
+                    $orderedUids[] = $item;
+                    continue;
+                }
+                $realUid = $childDataHandler->substNEWwithIDs[$item] ?? null;
+                if ($realUid === null) {
+                    continue;
+                }
+                $realUid = (int)$realUid;
+                $orderedUids[] = $realUid;
+                $newUids[] = $realUid;
+            }
+
+            // Point newly created children back at their parent. RelationHandler's
+            // writeForeignField is for MM relations, not direct foreign fields.
+            if (!empty($newUids)) {
+                $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getConnectionForTable($foreignTable);
+
+                foreach ($newUids as $childUid) {
+                    $connection->update(
+                        $foreignTable,
+                        [$foreignField => $parentLiveUid],
+                        ['uid' => $childUid]
+                    );
+                }
+            }
+
+            // Chain each child after its predecessor so the final order matches the
+            // array. Tables without a sortby field simply ignore the move (DataHandler
+            // logs it and no-ops), which is harmless since ordering isn't meaningful there.
+            if (count($orderedUids) > 1) {
+                $cmdMap = [];
+                for ($i = 1, $total = count($orderedUids); $i < $total; $i++) {
+                    $cmdMap[$foreignTable][$orderedUids[$i]]['move'] = -$orderedUids[$i - 1];
+                }
+
+                $reorderDataHandler = GeneralUtility::makeInstance(DataHandler::class);
+                $reorderDataHandler->BE_USER = $GLOBALS['BE_USER'];
+                $reorderDataHandler->start([], $cmdMap);
+                $reorderDataHandler->process_cmdmap();
+            }
         }
     }
     

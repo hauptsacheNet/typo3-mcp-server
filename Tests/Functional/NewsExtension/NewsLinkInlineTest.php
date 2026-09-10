@@ -230,12 +230,19 @@ class NewsLinkInlineTest extends FunctionalTestCase
     }
 
     /**
-     * Test embedded links respect sorting
+     * Embedded children must come out in the order they were passed in, not reversed.
+     *
+     * tx_news_domain_model_link declares `ctrl.sortby = 'sorting'` and isn't a
+     * `foreign_match_fields` relation (no tablenames/fieldname), making it the
+     * real-world case for the "embedded inline children created in reverse order" bug:
+     * DataHandler auto-manages that table's own sortby field, overwriting whatever
+     * WriteTableTool writes to it with its own "insert at top" number, so array order
+     * has to be enforced separately.
      */
     public function testEmbeddedLinksSorting(): void
     {
         $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
-        
+
         // Create news with links in specific order
         $result = $writeTool->execute([
             'table' => 'tx_news_domain_model_news',
@@ -250,23 +257,110 @@ class NewsLinkInlineTest extends FunctionalTestCase
                 ]
             ],
         ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $newsUid = json_decode($result->content[0]->text, true)['uid'];
-        
+
         // Read and verify order
         $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
         $result = $readTool->execute([
             'table' => 'tx_news_domain_model_news',
             'uid' => $newsUid,
         ]);
-        
+
         $news = json_decode($result->content[0]->text, true)['records'][0];
         $this->assertCount(3, $news['related_links']);
-        
-        // Verify all links are present (order may vary)
+
         $titles = array_column($news['related_links'], 'title');
-        $this->assertContains('First link', $titles);
-        $this->assertContains('Second link', $titles);
-        $this->assertContains('Third link', $titles);
+        $this->assertSame(
+            ['First link', 'Second link', 'Third link'],
+            $titles,
+            'Embedded links must be returned in the order they were passed in. Actual order: ' . json_encode($titles)
+        );
+
+        // The underlying "sorting" column (tx_news_domain_model_link.ctrl.sortby) must
+        // itself be ascending in array order, not just however ReadTableTool happens to
+        // return rows.
+        $queryBuilder = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_news_domain_model_link');
+        $queryBuilder->getRestrictions()->removeAll();
+        $rows = $queryBuilder->select('title', 'sorting')
+            ->from('tx_news_domain_model_link')
+            ->orderBy('sorting', 'ASC')
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        $this->assertSame(
+            ['First link', 'Second link', 'Third link'],
+            array_column($rows, 'title'),
+            'Sorting values must ascend in array order. Rows: ' . json_encode($rows)
+        );
+    }
+
+    /**
+     * Reordering existing embedded children by uid must actually take effect.
+     *
+     * Before the fix this had no effect for a table like tx_news_domain_model_link
+     * that manages its own sortby field: DataHandler::fillInFieldArray() silently
+     * drops a manually written value for a field that isn't a real TCA column, so
+     * the only way to reorder was to delete and recreate the children.
+     */
+    public function testReorderExistingLinksByArrayOrder(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        $result = $writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'title' => 'News for reorder',
+                'related_links' => [
+                    ['title' => 'First link', 'uri' => 'https://first.com'],
+                    ['title' => 'Second link', 'uri' => 'https://second.com'],
+                    ['title' => 'Third link', 'uri' => 'https://third.com'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $newsUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $news = json_decode(
+            $readTool->execute(['table' => 'tx_news_domain_model_news', 'uid' => $newsUid])->content[0]->text,
+            true
+        )['records'][0];
+        $byTitle = [];
+        foreach ($news['related_links'] as $link) {
+            $byTitle[$link['title']] = (int)$link['uid'];
+        }
+
+        // Reorder to Third, First, Second by passing back only the existing uids —
+        // no field changes, so this exercises the escape hatch that used to be a no-op.
+        $result = $writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => $newsUid,
+            'data' => [
+                'related_links' => [
+                    ['uid' => $byTitle['Third link']],
+                    ['uid' => $byTitle['First link']],
+                    ['uid' => $byTitle['Second link']],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $news = json_decode(
+            $readTool->execute(['table' => 'tx_news_domain_model_news', 'uid' => $newsUid])->content[0]->text,
+            true
+        )['records'][0];
+        $this->assertCount(3, $news['related_links'], 'No links should be lost during reorder');
+        $titles = array_column($news['related_links'], 'title');
+        $this->assertSame(
+            ['Third link', 'First link', 'Second link'],
+            $titles,
+            'Embedded children must follow the order supplied in the update payload. Actual order: ' . json_encode($titles)
+        );
     }
 
     /**
