@@ -1093,6 +1093,17 @@ class WriteTableTool extends AbstractRecordTool
             $effectivePid = $refRecord['pid'] ?? 0;
         }
 
+        // Page at which TCEFORM field visibility has to be resolved. For every table
+        // except `pages` that is the page the record lives on, so $effectivePid is
+        // right. For a page record it is that page itself: page TSconfig accumulates
+        // down the rootline, so a field the page re-enables for its own subtree still
+        // looks disabled when resolved at the parent. FormEngine makes the same
+        // distinction; BackendUtility::getTSCpid() encodes it but is deprecated as of
+        // TYPO3 14, so the one relevant line is inlined. (#120)
+        $tsConfigPid = ($table === 'pages' && $action === 'update' && $uid !== null)
+            ? $uid
+            : $effectivePid;
+
         // tt_content additionally honours TCEMAIN.table.tt_content.disableCTypes.
         // FormDataCompiler doesn't apply this — it's used by the New Content
         // Element Wizard — so reject those values explicitly so the LLM gets a
@@ -1116,7 +1127,7 @@ class WriteTableTool extends AbstractRecordTool
             }
 
             // Check if field is accessible (filters out inaccessible inline relations)
-            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $effectivePid)) {
+            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $tsConfigPid)) {
                 return "Field '{$fieldName}' is not accessible";
             }
 
@@ -1182,7 +1193,15 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         
-        // Get available fields for this record type
+        // Get available fields for this record type.
+        //
+        // Deliberately left without a page. Handing one in makes this resolve TCEFORM
+        // at that page, which reads as the tidier choice, but it also warms TYPO3's
+        // rootline cache for it. DataHandler spots an impossible move by walking the
+        // rootline, so the warmed entry hides the cycle and moving a page into itself
+        // then reports success (it broke InvalidDataTest::testCircularParentReference).
+        // The per-field canAccessField() check above already settles the TSconfig
+        // question and runs first, so nothing is lost here.
         $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
         
         // The type field itself should always be available if it exists
@@ -1235,9 +1254,20 @@ class WriteTableTool extends AbstractRecordTool
                 }
                 
                 
-                // If we have available fields configured and this field is not in the list
+                // If we have available fields configured and this field is not in the list.
+                // Name both reasons it can be missing: the field is genuinely not part of
+                // the record type, or TCEFORM TSconfig disables it. Naming only the first
+                // sends readers hunting through the TCA, where nothing is wrong. No page
+                // is named, because this field set is resolved without one. The original
+                // phrase is kept verbatim so existing assertions on the message hold.
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
-                    return "Field '{$fieldName}' is not available for this record type";
+                    return sprintf(
+                        "Field '%s' is not available for this record type ('%s' in table '%s'), "
+                        . 'or it is disabled by TCEFORM TSconfig',
+                        $fieldName,
+                        $recordType,
+                        $table
+                    );
                 }
             }
         }
