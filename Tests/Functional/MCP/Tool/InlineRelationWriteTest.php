@@ -809,6 +809,129 @@ class InlineRelationWriteTest extends FunctionalTestCase
     }
 
     /**
+     * Embedded children whose child table auto-manages its own sortby field
+     * (ctrl.sortby === foreign_sortby) must still be created in array order.
+     *
+     * Regression for #118: for such tables (e.g. tx_news_domain_model_link,
+     * shipped with georgringer/news, ctrl.sortby => 'sorting', related_links
+     * foreign_sortby => 'sorting') DataHandler overwrites the sortby value we
+     * write, inserting each new child "at the top", which reversed the whole
+     * collection. Unlike sys_file_reference (sorting_foreign is not the child's
+     * ctrl.sortby), the value we set was silently discarded.
+     */
+    public function testCreateEmbeddedRelationsWithAutoManagedSortbyKeepsArrayOrder(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => ['title' => 'Page for related links', 'doktype' => 1],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'title' => 'News with sorted links',
+                'related_links' => [
+                    ['title' => 'First link', 'uri' => 'https://first.example'],
+                    ['title' => 'Second link', 'uri' => 'https://second.example'],
+                    ['title' => 'Third link', 'uri' => 'https://third.example'],
+                    ['title' => 'Fourth link', 'uri' => 'https://fourth.example'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $newsUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $links = json_decode(
+            $readTool->execute(['table' => 'tx_news_domain_model_news', 'uid' => $newsUid])->content[0]->text,
+            true
+        )['records'][0]['related_links'];
+
+        $this->assertCount(4, $links, 'All four related links must be present');
+        $this->assertSame(
+            ['First link', 'Second link', 'Third link', 'Fourth link'],
+            array_column($links, 'title'),
+            'Related links must render in the order they were passed, not reversed'
+        );
+    }
+
+    /**
+     * Updating a full array of auto-managed-sortby children must re-apply the
+     * given array order (regression for #118, update path).
+     */
+    public function testReorderAutoManagedSortbyChildrenByArrayOrder(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => ['title' => 'Page for related link reorder', 'doktype' => 1],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'title' => 'News to reorder links',
+                'related_links' => [
+                    ['title' => 'A', 'uri' => 'https://a.example'],
+                    ['title' => 'B', 'uri' => 'https://b.example'],
+                    ['title' => 'C', 'uri' => 'https://c.example'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $newsUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $links = json_decode(
+            $readTool->execute(['table' => 'tx_news_domain_model_news', 'uid' => $newsUid])->content[0]->text,
+            true
+        )['records'][0]['related_links'];
+        $this->assertSame(['A', 'B', 'C'], array_column($links, 'title'));
+        $byTitle = [];
+        foreach ($links as $link) {
+            $byTitle[$link['title']] = (int)$link['uid'];
+        }
+
+        // Reorder to C, A, B by passing only the uids in the new desired order.
+        $result = $writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => $newsUid,
+            'data' => [
+                'related_links' => [
+                    ['uid' => $byTitle['C']],
+                    ['uid' => $byTitle['A']],
+                    ['uid' => $byTitle['B']],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $links = json_decode(
+            $readTool->execute(['table' => 'tx_news_domain_model_news', 'uid' => $newsUid])->content[0]->text,
+            true
+        )['records'][0]['related_links'];
+        $this->assertCount(3, $links, 'No links should be lost during reorder');
+        $this->assertSame(['C', 'A', 'B'], array_column($links, 'title'),
+            'Auto-managed-sortby children must follow the order supplied in the update payload');
+    }
+
+    /**
      * Reordering embedded children must follow array order.
      *
      * sorting_foreign is hidden from the write schema (auto-managed), so the only way
