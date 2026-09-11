@@ -28,17 +28,48 @@ abstract class AbstractRecordTool extends AbstractTool
     
     /**
      * Initialize workspace context before execution
-     * 
+     *
      * This method is called automatically by AbstractTool::execute()
      * before doExecute() is invoked.
      */
     protected function initialize(): void
     {
         parent::initialize();
-        
+
         if (isset($GLOBALS['BE_USER'])) {
             $this->workspaceContextService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
         }
+    }
+
+    /**
+     * Guard against write operations silently landing in the live workspace.
+     *
+     * switchToOptimalWorkspace() falls back to the live workspace (id 0) when the
+     * user has no writable workspace and none can be created. DataHandler would
+     * then modify live data directly, breaking the extension's core guarantee
+     * that changes are staged in a workspace and require publishing. Because the
+     * tool otherwise reports success, the assistant repeats the "staged as a
+     * draft" promise from its description even though the change is already
+     * public (see issue #122). Refuse the operation instead, unless an
+     * administrator has deliberately opted into live writes.
+     *
+     * @return CallToolResult|null Error result when the write must be refused, null when it may proceed
+     */
+    protected function assertWorkspaceForWriting(): ?CallToolResult
+    {
+        if ($this->workspaceContextService->getCurrentWorkspace() > 0) {
+            return null;
+        }
+        if ($this->workspaceContextService->isLiveWritingAllowed()) {
+            return null;
+        }
+
+        return $this->createErrorResult(
+            'No editable workspace is available for your backend user, so this change cannot be '
+            . 'staged for review. Writing directly to live data is disabled to protect the site. '
+            . 'Ask an administrator to add you as a member of a workspace (or grant access to the '
+            . 'Workspaces module so one can be created automatically for you).'
+        );
     }
     
     /**
@@ -175,13 +206,20 @@ abstract class AbstractRecordTool extends AbstractTool
 
     /**
      * Get workspace hint text to prepend to tool output.
-     * Returns empty string when in live workspace.
+     *
+     * In a real workspace the hint names it and states that edits are staged.
+     * In the live workspace (no editable workspace could be resolved) it used to
+     * return an empty string, which is indistinguishable from normal operation —
+     * so the assistant kept promising that changes were staged as drafts even
+     * though they were not (issue #122). Return an explicit LIVE warning instead
+     * so the absence of a workspace is always visible.
      */
     protected function getWorkspaceHint(): string
     {
         $info = $this->workspaceContextService->getWorkspaceInfo();
         if ($info['is_live']) {
-            return '';
+            return '[LIVE — no draft workspace is active; you are working directly on live data. '
+                . 'Changes cannot be staged for review.]' . "\n\n";
         }
         return '[WORKSPACE: "' . $info['title'] . '" — Edits are staged as drafts, not yet live.]' . "\n\n";
     }

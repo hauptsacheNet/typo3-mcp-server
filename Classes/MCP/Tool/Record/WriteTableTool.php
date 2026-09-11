@@ -114,7 +114,17 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function doExecute(array $params): CallToolResult
     {
-        
+        // Refuse the write if no editable workspace could be resolved. Without
+        // this guard the operation would silently modify live data (issue #122):
+        // initialize() falls back to the live workspace when the user has no
+        // workspace membership and none can be created, and every write path
+        // below would then run against workspace 0. Bail out before touching
+        // DataHandler so live content is never changed without review.
+        $workspaceError = $this->assertWorkspaceForWriting();
+        if ($workspaceError !== null) {
+            return $workspaceError;
+        }
+
         // Some models (e.g. OpenAI GPT) place record fields at the top level
         // instead of nesting them inside the 'data' parameter.
         // Collect any unknown top-level keys into 'data' so the tool works regardless.

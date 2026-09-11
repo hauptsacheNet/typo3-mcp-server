@@ -99,6 +99,7 @@ The defaults work out of the box. All settings live in the extension configurati
 | `maxFileSizeMb`              | `500`               | Upper limit in MiB for files fetched from a URL or received through an upload link |
 | `additionalReadOnlyTables`   | `sys_file`          | Non-workspace-capable tables exposed read-only — this is what lets the AI browse your files |
 | `additionalStandaloneTables` | `sys_file_metadata` | `hideTable` tables exposed as independent tables — this is what makes file metadata such as titles and alt texts editable |
+| `allowLiveWrites`            | `0` (off)           | **Dangerous.** Off by default: if a backend user has no editable workspace (no membership and no permission to create one), writes are refused instead of silently changing live data. Enable only to deliberately allow unreviewed changes straight to the live site |
 
 ## Usage
 

@@ -6,3 +6,6 @@ additionalStandaloneTables = sys_file_metadata
 
 # cat=mcp/files; type=int+; label=Maximum file size (MiB): Upper limit for files fetched from URLs or received through pre-signed uploads via the UploadFile tool. Default: 500
 maxFileSizeMb = 500
+
+# cat=mcp/workspace; type=boolean; label=Allow live writes: DANGEROUS. When enabled, WriteTable may modify live data directly if the backend user has no editable workspace (no workspace membership and no permission to create one). By default such writes are refused so changes can never bypass workspace review. Only enable this if you deliberately want unreviewed changes to go straight to the live site.
+allowLiveWrites = 0

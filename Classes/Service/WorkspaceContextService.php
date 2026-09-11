@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
+use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -238,6 +239,31 @@ class WorkspaceContextService
     public function getCurrentWorkspace(): int
     {
         return $GLOBALS['BE_USER']->workspace ?? 0;
+    }
+
+    /**
+     * Whether writing directly to the live workspace is explicitly allowed.
+     *
+     * By default the MCP tools refuse to modify live data when no editable
+     * workspace could be resolved (switchToOptimalWorkspace() falls back to the
+     * live workspace id 0). An administrator can opt into deliberate live writes
+     * via the extension configuration flag "allowLiveWrites". This is off by
+     * default so a missing workspace membership can never silently publish an
+     * unreviewed change.
+     */
+    public function isLiveWritingAllowed(): bool
+    {
+        try {
+            $value = GeneralUtility::makeInstance(ExtensionConfiguration::class)
+                ->get('mcp_server', 'allowLiveWrites');
+        } catch (\Throwable $e) {
+            // Setting not present (extension config never written) → stay safe.
+            return false;
+        }
+
+        // ExtensionConfiguration returns the checkbox as a string ("0"/"1");
+        // (bool) already treats "0" and "" as false.
+        return (bool)$value;
     }
     
     /**
