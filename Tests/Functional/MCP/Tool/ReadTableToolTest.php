@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Hn\McpServer\Tests\Functional\Fixtures\TestDataBuilder;
 use Hn\McpServer\Tests\Functional\Traits\McpAssertionsTrait;
@@ -207,42 +208,202 @@ class ReadTableToolTest extends AbstractFunctionalTest
     }
 
     /**
-     * Test reading with custom WHERE condition
+     * Test filtering with a typed clause
      */
-    public function testReadWithWhereCondition(): void
+    public function testReadWithFilterClause(): void
     {
         $tool = new ReadTableTool();
-        
+
         $result = $tool->execute([
             'table' => 'tt_content',
-            'where' => 'CType = "textmedia"',
-            'includeRelations' => false
+            'where' => [
+                ['field' => 'CType', 'operator' => '=', 'value' => 'textmedia'],
+            ],
+            'includeRelations' => false,
         ]);
-        
-        $this->assertFalse($result->isError);
+
+        $this->assertFalse($result->isError, $result->content[0]->text);
         $data = json_decode($result->content[0]->text, true);
-        
-        // All returned records should have CType = textmedia
+        $this->assertNotEmpty($data['records']);
         foreach ($data['records'] as $record) {
             $this->assertEquals('textmedia', $record['CType']);
         }
     }
 
     /**
-     * Test WHERE condition security (should block dangerous SQL)
+     * Several clauses narrow the result together, and the reported total
+     * respects them — the count query is built from the same clauses.
      */
-    public function testWhereConditionSecurity(): void
+    public function testFilterClausesCombineAndAreCounted(): void
     {
         $tool = new ReadTableTool();
-        
-        // Try to inject dangerous SQL
+
+        $single = json_decode($tool->execute([
+            'table' => 'tt_content',
+            'where' => [['field' => 'CType', 'operator' => '=', 'value' => 'textmedia']],
+            'includeRelations' => false,
+        ])->content[0]->text, true);
+
+        $both = json_decode($tool->execute([
+            'table' => 'tt_content',
+            'where' => [
+                ['field' => 'CType', 'operator' => '=', 'value' => 'textmedia'],
+                ['field' => 'pid', 'operator' => '=', 'value' => 1],
+            ],
+            'includeRelations' => false,
+        ])->content[0]->text, true);
+
+        $this->assertLessThanOrEqual($single['total'], $both['total']);
+        $this->assertSame(count($both['records']), min($both['total'], count($both['records'])));
+        foreach ($both['records'] as $record) {
+            $this->assertEquals('textmedia', $record['CType']);
+        }
+    }
+
+    /**
+     * A "%" in a value is a literal to match, not a wildcard: the value is
+     * escaped before the LIKE pattern is built around it.
+     */
+    public function testContainsEscapesWildcardsInTheValue(): void
+    {
+        $tool = new ReadTableTool();
+
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'where' => [['field' => 'header', 'operator' => 'contains', 'value' => '%']],
+            'includeRelations' => false,
+        ]);
+
+        $this->assertFalse($result->isError, $result->content[0]->text);
+        $data = json_decode($result->content[0]->text, true);
+        foreach ($data['records'] as $record) {
+            $this->assertStringContainsString('%', (string)$record['header']);
+        }
+    }
+
+    /**
+     * The parameter used to take a raw SQL condition. A string is refused with
+     * the shape that replaces it, so a caller sending the old form can fix the
+     * call from the error alone.
+     */
+    public function testSqlConditionStringIsRefusedWithTheNewShape(): void
+    {
+        $tool = new ReadTableTool();
+
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'where' => 'CType = "textmedia"',
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('not an SQL string', $result->content[0]->text);
+        $this->assertStringContainsString('"operator"', $result->content[0]->text);
+    }
+
+    /**
+     * The three exfiltration shapes the old keyword blocklist let through.
+     *
+     * It listed DROP/DELETE/UPDATE/INSERT/TRUNCATE/ALTER/CREATE and not SELECT,
+     * so a subquery against any table passed, and an EXISTS clause was a blind
+     * oracle over a column the tool never exposes. None of them can be
+     * expressed as a clause: an operator is picked from a fixed set and a value
+     * is bound as a parameter.
+     *
+     * @param mixed $where
+     */
+    #[DataProvider('sqlInjectionAttempts')]
+    public function testSqlInjectionShapesCannotBeExpressed($where): void
+    {
+        $tool = new ReadTableTool();
+
         $result = $tool->execute([
             'table' => 'pages',
-            'where' => 'uid = 1; DROP TABLE pages',
+            'where' => $where,
         ]);
-        
+
+        $this->assertTrue($result->isError, 'Expected a rejection, got: ' . $result->content[0]->text);
+    }
+
+    public static function sqlInjectionAttempts(): array
+    {
+        return [
+            'statement terminator' => ['uid = 1; DROP TABLE pages'],
+            'always-true tail' => ['uid = 1 OR 1=1'],
+            'subquery against be_users' => ['uid IN (SELECT uid FROM be_users WHERE admin = 1)'],
+            'blind oracle on a password hash' => ["EXISTS (SELECT 1 FROM be_users WHERE password LIKE 'x%')"],
+            'injection through a field name' => [[
+                ['field' => 'uid = 1 OR 1=1 -- ', 'operator' => '=', 'value' => 1],
+            ]],
+            'injection through an operator' => [[
+                ['field' => 'uid', 'operator' => '= 1 OR 1=1 -- ', 'value' => 1],
+            ]],
+        ];
+    }
+
+    /**
+     * A filter may only name a field the caller could also read. Otherwise a
+     * filter is a side channel: narrowing by a hidden column, or a LIKE on it,
+     * reveals content the result rows never carry.
+     */
+    public function testFilteringOnAnUnreadableFieldIsRefused(): void
+    {
+        $tool = new ReadTableTool();
+
+        $result = $tool->execute([
+            'table' => 'pages',
+            'where' => [['field' => 'perms_userid', 'operator' => '=', 'value' => 1]],
+        ]);
+
         $this->assertTrue($result->isError);
-        $this->assertStringContainsString('disallowed SQL keywords', $result->content[0]->text);
+        $this->assertStringContainsString('not a readable field', $result->content[0]->text);
+    }
+
+    /**
+     * An unknown operator names the supported set rather than failing vaguely.
+     */
+    public function testUnknownOperatorNamesTheSupportedSet(): void
+    {
+        $tool = new ReadTableTool();
+
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'where' => [['field' => 'CType', 'operator' => 'LIKE', 'value' => 'textmedia']],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('is not supported', $result->content[0]->text);
+        $this->assertStringContainsString('startsWith', $result->content[0]->text);
+    }
+
+    /**
+     * Values are typed after the field: a number field will not take text.
+     */
+    public function testTextValueOnANumericFieldIsRefused(): void
+    {
+        $tool = new ReadTableTool();
+
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'where' => [['field' => 'pid', 'operator' => '=', 'value' => 'one']],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('must be a number', $result->content[0]->text);
+    }
+
+    /**
+     * "in" needs a list, and an empty one is a caller mistake rather than a
+     * filter that matches nothing.
+     */
+    public function testInOperatorRequiresANonEmptyList(): void
+    {
+        $tool = new ReadTableTool();
+
+        foreach ([['field' => 'uid', 'operator' => 'in', 'value' => 5], ['field' => 'uid', 'operator' => 'in', 'value' => []]] as $clause) {
+            $result = $tool->execute(['table' => 'tt_content', 'where' => [$clause]]);
+            $this->assertTrue($result->isError, json_encode($clause));
+            $this->assertStringContainsString('non-empty array', $result->content[0]->text);
+        }
     }
 
     /**
