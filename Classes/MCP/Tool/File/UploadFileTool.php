@@ -230,15 +230,32 @@ class UploadFileTool extends AbstractRecordTool
     protected function tryCreateOnlineMedia(string $url, Folder $folder, FileUploadService $uploadService): ?CallToolResult
     {
         $registry = GeneralUtility::makeInstance(OnlineMediaHelperRegistry::class);
-        try {
-            $file = $registry->transformUrlToFile($url, $folder);
-        } catch (OnlineMediaAlreadyExistsException $e) {
-            return $this->buildResult($uploadService, $e->getOnlineMedia(), '', deduplicated: true, onlineMedia: true);
+
+        // Ask the helpers one by one instead of letting the registry loop over
+        // all of them: the interface says "return null for URLs you don't
+        // handle", but third-party helpers that only support other creation
+        // paths sometimes throw instead. In the registry loop such a helper
+        // aborts the whole upload for every URL that is not YouTube/Vimeo;
+        // here it is logged and skipped, and the URL falls through to the
+        // regular download.
+        $extensions = array_keys($GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers'] ?? []);
+        foreach ($extensions as $extension) {
+            try {
+                $file = $registry->transformUrlToFile($url, $folder, [$extension]);
+            } catch (OnlineMediaAlreadyExistsException $e) {
+                return $this->buildResult($uploadService, $e->getOnlineMedia(), '', deduplicated: true, onlineMedia: true);
+            } catch (\Throwable $e) {
+                $this->getLogger()->warning(
+                    'Online media helper for ".{extension}" threw for URL "{url}" and was skipped: {message}',
+                    ['extension' => $extension, 'url' => $url, 'message' => $e->getMessage(), 'exception' => $e]
+                );
+                continue;
+            }
+            if ($file !== null) {
+                return $this->buildResult($uploadService, $file, $file->getName(), deduplicated: false, onlineMedia: true);
+            }
         }
-        if ($file === null) {
-            return null;
-        }
-        return $this->buildResult($uploadService, $file, $file->getName(), deduplicated: false, onlineMedia: true);
+        return null;
     }
 
     /**
