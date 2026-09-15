@@ -254,9 +254,16 @@ class UploadFileTool extends AbstractRecordTool
             } catch (OnlineMediaAlreadyExistsException $e) {
                 return $this->buildResult($uploadService, $e->getOnlineMedia(), '', deduplicated: true, onlineMedia: true);
             } catch (\Throwable $e) {
+                // Query string and user info stay out of the log: download URLs
+                // regularly carry pre-signed tokens or credentials.
                 $this->getLogger()->warning(
-                    'Online media helper for ".{extension}" threw for URL "{url}" and was skipped: {message}',
-                    ['extension' => $extension, 'url' => $url, 'message' => $e->getMessage(), 'exception' => $e]
+                    'Online media helper for ".{extension}" threw {class} for URL "{url}" and was skipped: {message}',
+                    [
+                        'extension' => $extension,
+                        'class' => $e::class,
+                        'url' => $this->redactUrlForLog($url),
+                        'message' => $e->getMessage(),
+                    ]
                 );
                 $this->skippedOnlineMediaHelperFailures[$extension] = $e->getMessage();
                 continue;
@@ -266,6 +273,20 @@ class UploadFileTool extends AbstractRecordTool
             }
         }
         return null;
+    }
+
+    /**
+     * Scheme, host, port and path only - no user info, no query string.
+     */
+    protected function redactUrlForLog(string $url): string
+    {
+        $parts = parse_url($url);
+        if ($parts === false || empty($parts['host'])) {
+            return '[unparseable url]';
+        }
+        return ($parts['scheme'] ?? 'http') . '://' . $parts['host']
+            . (isset($parts['port']) ? ':' . $parts['port'] : '')
+            . ($parts['path'] ?? '');
     }
 
     /**
