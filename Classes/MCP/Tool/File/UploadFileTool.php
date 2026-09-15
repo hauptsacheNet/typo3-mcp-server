@@ -49,6 +49,14 @@ class UploadFileTool extends AbstractRecordTool
         '224.0.0.0/4',   // multicast
     ];
 
+    /**
+     * Online media helpers that threw during the last tryCreateOnlineMedia()
+     * call, keyed by file extension. See withSkippedOnlineMediaHelperFailures().
+     *
+     * @var array<string, string>
+     */
+    protected array $skippedOnlineMediaHelperFailures = [];
+
     public function getSchema(): array
     {
         $uploadService = GeneralUtility::makeInstance(FileUploadService::class);
@@ -147,7 +155,7 @@ class UploadFileTool extends AbstractRecordTool
             } catch (\Throwable $e) {
                 // A failed download must not leave a freshly created folder behind
                 $uploadService->removeFolderIfCreatedAndEmpty($folder);
-                throw $e;
+                throw $this->withSkippedOnlineMediaHelperFailures($e);
             }
         } else {
             if ($requestedFileName === '') {
@@ -230,6 +238,7 @@ class UploadFileTool extends AbstractRecordTool
     protected function tryCreateOnlineMedia(string $url, Folder $folder, FileUploadService $uploadService): ?CallToolResult
     {
         $registry = GeneralUtility::makeInstance(OnlineMediaHelperRegistry::class);
+        $this->skippedOnlineMediaHelperFailures = [];
 
         // Ask the helpers one by one instead of letting the registry loop over
         // all of them: the interface says "return null for URLs you don't
@@ -249,6 +258,7 @@ class UploadFileTool extends AbstractRecordTool
                     'Online media helper for ".{extension}" threw for URL "{url}" and was skipped: {message}',
                     ['extension' => $extension, 'url' => $url, 'message' => $e->getMessage(), 'exception' => $e]
                 );
+                $this->skippedOnlineMediaHelperFailures[$extension] = $e->getMessage();
                 continue;
             }
             if ($file !== null) {
@@ -256,6 +266,32 @@ class UploadFileTool extends AbstractRecordTool
             }
         }
         return null;
+    }
+
+    /**
+     * A helper that threw may have been the one responsible for this URL (a
+     * YouTube helper whose API call failed, say). We cannot tell that apart
+     * from a helper that merely misbehaves on foreign URLs, so the failure is
+     * not swallowed: if the fall-back download fails as well, the helper
+     * failures are attached to the error the caller sees.
+     */
+    protected function withSkippedOnlineMediaHelperFailures(\Throwable $e): \Throwable
+    {
+        if ($this->skippedOnlineMediaHelperFailures === []) {
+            return $e;
+        }
+        $notes = [];
+        foreach ($this->skippedOnlineMediaHelperFailures as $extension => $message) {
+            $notes[] = '".' . $extension . '": ' . $message;
+        }
+        return new \InvalidArgumentException(
+            $e->getMessage()
+            . ' Note: before falling back to a plain download, the online media helper(s) for '
+            . implode('; ', $notes)
+            . ' failed and were skipped. If the URL is meant to become an online media asset, that failure is the actual problem.',
+            0,
+            $e
+        );
     }
 
     /**
