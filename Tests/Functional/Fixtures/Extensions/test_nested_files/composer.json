@@ -1,0 +1,11 @@
+{
+    "name": "hn/test-nested-files",
+    "type": "typo3-cms-extension",
+    "description": "Fixture: collection items with a file field",
+    "license": "GPL-2.0-or-later",
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "test_nested_files"
+        }
+    }
+}
