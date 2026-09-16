@@ -733,6 +733,19 @@ class WriteTableTool extends AbstractRecordTool
             return null;
         }
 
+        // DataHandler refuses to move a page into its own rootline, but it compares
+        // the uid it is handed. In a workspace that is the version's uid, not the
+        // live one, so moving page N into page N reads to it as moving an unrelated
+        // record and passes. The version then really does end up below its own live
+        // page. Compare live uids before handing the command over.
+        if ($table === 'pages') {
+            $liveUid = $this->resolveLiveUid($table, $uid);
+            $refusal = $liveUid > 0 ? $this->checkMoveDestination($liveUid, $destination) : null;
+            if ($refusal !== null) {
+                return $this->createErrorResult('Error moving record: ' . $refusal);
+            }
+        }
+
         $cmdMap = [$table => [$uid => ['move' => $destination]]];
         $moveDataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $moveDataHandler->BE_USER = $GLOBALS['BE_USER'];
@@ -752,6 +765,100 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         return null;
+    }
+
+    /**
+     * The uid of the live record behind $uid, which is $uid itself outside a
+     * workspace and the t3ver_oid of a versioned record inside one.
+     */
+    protected function resolveLiveUid(string $table, int $uid): int
+    {
+        $record = BackendUtility::getRecord($table, $uid, 'uid,t3ver_oid');
+        if ($record === null) {
+            return 0;
+        }
+
+        return (int)($record['t3ver_oid'] ?? 0) ?: (int)$record['uid'];
+    }
+
+    /**
+     * Why the page $liveUid must not be moved to $destination, or null when it may.
+     *
+     * $destination follows DataHandler's cmdmap convention: positive is a target
+     * page id, negative means "after the record with that uid".
+     *
+     * @return string|null Reason, phrased to be appended to "Error moving record: "
+     */
+    protected function checkMoveDestination(int $liveUid, int $destination): ?string
+    {
+        if ($destination < 0) {
+            $pageId = $this->resolveParentPageId(abs($destination));
+        } else {
+            $pageId = $destination;
+        }
+
+        // Walking until the rootline runs out needs no depth limit, only a way to
+        // stop on a tree that is already circular somewhere above the destination.
+        // A counter does both at once but cannot tell the two apart, and on a deep
+        // tree it quietly reports "safe" after giving up. Remembering what has been
+        // seen terminates on the first repeat and leaves depth alone.
+        $seen = [];
+        while ($pageId > 0) {
+            if ($pageId === $liveUid) {
+                return sprintf(
+                    'cannot move pages:%d into itself or one of its own subpages',
+                    $liveUid
+                );
+            }
+            if (isset($seen[$pageId])) {
+                // The destination's own ancestry loops, independently of the page
+                // being moved. Nothing can be moved into a page whose rootline does
+                // not resolve, and reporting it here beats the exception DataHandler
+                // raises further in, which names a page nobody asked about.
+                return sprintf(
+                    'the rootline of destination pages:%d is circular, so it cannot receive pages:%d',
+                    $pageId,
+                    $liveUid
+                );
+            }
+            $seen[$pageId] = true;
+
+            $parentPageId = $this->resolveParentPageId($pageId);
+            if ($parentPageId === null) {
+                return null;
+            }
+            $pageId = $parentPageId;
+        }
+
+        return null;
+    }
+
+    /**
+     * The parent page of $pageId as the current workspace sees it.
+     *
+     * Walking live pids is not enough. A page moved inside a workspace keeps its
+     * live pid until the workspace is published, so a chain that is circular in
+     * the workspace still looks well-formed live, and the move is let through.
+     * The overlay reports the staged location in `pid` (the live one moves to
+     * `ORIG_pid`), which is what this check has to follow.
+     *
+     * @return int|null Null when the page does not exist
+     */
+    protected function resolveParentPageId(int $pageId): ?int
+    {
+        // workspaceOL() needs all four fields to recognise a versioned record;
+        // handed a pid-only row it silently leaves it alone.
+        $row = BackendUtility::getRecord('pages', $pageId, 'uid,pid,t3ver_oid,t3ver_state');
+        if ($row === null) {
+            return null;
+        }
+
+        BackendUtility::workspaceOL('pages', $row);
+        if (!is_array($row)) {
+            return null;
+        }
+
+        return (int)$row['pid'];
     }
 
     /**
@@ -1093,6 +1200,17 @@ class WriteTableTool extends AbstractRecordTool
             $effectivePid = $refRecord['pid'] ?? 0;
         }
 
+        // Page at which TCEFORM field visibility has to be resolved. For every table
+        // except `pages` that is the page the record lives on, so $effectivePid is
+        // right. For a page record it is that page itself: page TSconfig accumulates
+        // down the rootline, so a field the page re-enables for its own subtree still
+        // looks disabled when resolved at the parent. FormEngine makes the same
+        // distinction; BackendUtility::getTSCpid() encodes it but is deprecated as of
+        // TYPO3 14, so the one relevant line is inlined. (#120)
+        $tsConfigPid = ($table === 'pages' && $action === 'update' && $uid !== null)
+            ? $uid
+            : $effectivePid;
+
         // tt_content additionally honours TCEMAIN.table.tt_content.disableCTypes.
         // FormDataCompiler doesn't apply this — it's used by the New Content
         // Element Wizard — so reject those values explicitly so the LLM gets a
@@ -1116,7 +1234,7 @@ class WriteTableTool extends AbstractRecordTool
             }
 
             // Check if field is accessible (filters out inaccessible inline relations)
-            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $effectivePid)) {
+            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $tsConfigPid)) {
                 return "Field '{$fieldName}' is not accessible";
             }
 
@@ -1182,8 +1300,11 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         
-        // Get available fields for this record type
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        // Get available fields for this record type. Handed no page, this resolves
+        // TCEFORM at a fallback page, which drops fields that page TSconfig enables
+        // only where the record actually lives. Use the same page as the per-field
+        // check above so the two agree. (#120)
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType, $tsConfigPid ?: null);
         
         // The type field itself should always be available if it exists
         if ($typeField) {
@@ -1235,9 +1356,21 @@ class WriteTableTool extends AbstractRecordTool
                 }
                 
                 
-                // If we have available fields configured and this field is not in the list
+                // If we have available fields configured and this field is not in the list.
+                // Name both reasons it can be missing: the field is genuinely not part of
+                // the record type, or TCEFORM TSconfig disables it for this page. Naming
+                // only the first sends readers hunting through the TCA, where nothing is
+                // wrong. The original phrase is kept verbatim so existing assertions on
+                // the message still hold.
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
-                    return "Field '{$fieldName}' is not available for this record type";
+                    return sprintf(
+                        "Field '%s' is not available for this record type ('%s' in table '%s'), "
+                        . 'or it is disabled by TCEFORM TSconfig for page %d',
+                        $fieldName,
+                        $recordType,
+                        $table,
+                        $tsConfigPid
+                    );
                 }
             }
         }
