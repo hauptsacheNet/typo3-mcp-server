@@ -740,11 +740,9 @@ class WriteTableTool extends AbstractRecordTool
         // page. Compare live uids before handing the command over.
         if ($table === 'pages') {
             $liveUid = $this->resolveLiveUid($table, $uid);
-            if ($liveUid > 0 && $this->isInsideOwnSubtree($liveUid, $destination)) {
-                return $this->createErrorResult(sprintf(
-                    'Error moving record: cannot move pages:%d into itself or one of its own subpages',
-                    $liveUid
-                ));
+            $refusal = $liveUid > 0 ? $this->checkMoveDestination($liveUid, $destination) : null;
+            if ($refusal !== null) {
+                return $this->createErrorResult('Error moving record: ' . $refusal);
             }
         }
 
@@ -784,11 +782,14 @@ class WriteTableTool extends AbstractRecordTool
     }
 
     /**
-     * Whether a move destination lands inside the page $liveUid itself or anywhere
-     * below it. $destination follows DataHandler's cmdmap convention: positive is a
-     * target page id, negative means "after the record with that uid".
+     * Why the page $liveUid must not be moved to $destination, or null when it may.
+     *
+     * $destination follows DataHandler's cmdmap convention: positive is a target
+     * page id, negative means "after the record with that uid".
+     *
+     * @return string|null Reason, phrased to be appended to "Error moving record: "
      */
-    protected function isInsideOwnSubtree(int $liveUid, int $destination): bool
+    protected function checkMoveDestination(int $liveUid, int $destination): ?string
     {
         if ($destination < 0) {
             $pageId = $this->resolveParentPageId(abs($destination));
@@ -796,19 +797,40 @@ class WriteTableTool extends AbstractRecordTool
             $pageId = $destination;
         }
 
-        $loopCheck = 100;
-        while ($pageId > 0 && $loopCheck-- > 0) {
+        // Walking until the rootline runs out needs no depth limit, only a way to
+        // stop on a tree that is already circular somewhere above the destination.
+        // A counter does both at once but cannot tell the two apart, and on a deep
+        // tree it quietly reports "safe" after giving up. Remembering what has been
+        // seen terminates on the first repeat and leaves depth alone.
+        $seen = [];
+        while ($pageId > 0) {
             if ($pageId === $liveUid) {
-                return true;
+                return sprintf(
+                    'cannot move pages:%d into itself or one of its own subpages',
+                    $liveUid
+                );
             }
+            if (isset($seen[$pageId])) {
+                // The destination's own ancestry loops, independently of the page
+                // being moved. Nothing can be moved into a page whose rootline does
+                // not resolve, and reporting it here beats the exception DataHandler
+                // raises further in, which names a page nobody asked about.
+                return sprintf(
+                    'the rootline of destination pages:%d is circular, so it cannot receive pages:%d',
+                    $pageId,
+                    $liveUid
+                );
+            }
+            $seen[$pageId] = true;
+
             $parentPageId = $this->resolveParentPageId($pageId);
             if ($parentPageId === null) {
-                return false;
+                return null;
             }
             $pageId = $parentPageId;
         }
 
-        return false;
+        return null;
     }
 
     /**

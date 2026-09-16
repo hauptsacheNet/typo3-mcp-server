@@ -341,6 +341,40 @@ class InvalidDataTest extends AbstractFunctionalTest
     }
 
     /**
+     * A destination whose own ancestry already loops must not be walked forever,
+     * and must not be reported as a safe place to move a page into. Broken
+     * rootlines do occur, hand-edited pid values and botched imports both
+     * produce them.
+     */
+    public function testDestinationWithACircularAncestryIsRefused(): void
+    {
+        // Make 4 and 5, both live children of 2, each other's parent.
+        $connection = $this->getConnectionForTable('pages');
+        $connection->update('pages', ['pid' => 5], ['uid' => 4]);
+        $connection->update('pages', ['pid' => 4], ['uid' => 5]);
+
+        // Page 6 is unrelated to that loop, so this is no genuine self-move.
+        // The walk above page 4 still never terminates on its own.
+        $result = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 6,
+            'data' => ['pid' => 4],
+        ]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+
+        // Assert the guard's own message, not just that some error came back.
+        // Without the guard the move is let through and DataHandler raises a
+        // rootline exception a few frames deeper, which also produces an
+        // "Error moving record" result, naming a page the caller never mentioned.
+        $this->assertStringContainsString(
+            'rootline of destination pages:4 is circular',
+            $result->content[0]->text
+        );
+    }
+
+    /**
      * Test mass assignment protection
      */
     public function testMassAssignmentProtection(): void
