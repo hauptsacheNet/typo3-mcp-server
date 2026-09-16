@@ -26,6 +26,14 @@ class WriteTableTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
 
+    /**
+     * Foreign fields of nested embedded children that still need to be pointed at their
+     * parent once DataHandler has turned the NEW keys into real uids.
+     *
+     * @var array<int, array{table: string, key: int|string, foreignField: string, parentTable: string, parentKey: int|string}>
+     */
+    protected array $pendingNestedForeignFields = [];
+
     public function __construct()
     {
         parent::__construct();
@@ -493,6 +501,9 @@ class WriteTableTool extends AbstractRecordTool
                         implode(', ', $childDataHandler->errorLog)
                     );
                 }
+
+                // Children of children are linked here, once their NEW keys are resolved.
+                $this->writePendingNestedForeignFields($childDataHandler);
                 
                 // Update foreign fields for embedded relations
                 foreach ($inlineRelations as $fieldName => $relationData) {
@@ -618,6 +629,9 @@ class WriteTableTool extends AbstractRecordTool
                 if (!empty($childDataHandler->errorLog)) {
                     return $this->createErrorResult('Error processing inline relations: ' . implode(', ', $childDataHandler->errorLog));
                 }
+
+                // Children of children are linked here, once their NEW keys are resolved.
+                $this->writePendingNestedForeignFields($childDataHandler);
                 
                 // Update foreign fields for embedded relations
                 foreach ($inlineRelations as $fieldName => $relationData) {
@@ -1284,6 +1298,10 @@ class WriteTableTool extends AbstractRecordTool
         array $inlineRelations,
         ?int $liveUid = null
     ): void {
+        // One write, one collection: an earlier write that bailed out before its links were
+        // flushed must not leak entries into this one.
+        $this->pendingNestedForeignFields = [];
+
         foreach ($inlineRelations as $fieldName => $relationData) {
             $config = $relationData['config'];
             $value = $relationData['value'];
@@ -1409,11 +1427,177 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
 
+            // Relations that sit on the child itself (e.g. a file inside a Collection item)
+            // have to be resolved here - extractInlineRelations() only ever sees the top level.
+            $this->resolveNestedEmbeddedRelations($dataMap, $foreignTable, $key, $recordData, $pid);
+
             // Add to data map
             if (!isset($dataMap[$foreignTable])) {
                 $dataMap[$foreignTable] = [];
             }
             $dataMap[$foreignTable][$key] = $recordData;
+        }
+    }
+
+    /**
+     * Resolve inline and file relations that sit on an embedded child record.
+     *
+     * extractInlineRelations() only inspects the top level of the written record, so a file
+     * field inside a Collection item was previously handed to DataHandler as an array and
+     * ended up as the literal string "Array" - the reference was silently never created.
+     *
+     * The grandchildren go into the same datamap under NEW keys and the child field holds
+     * those keys, so DataHandler creates them in the same run. It does not set the foreign
+     * field of a child of a child though, so that pointer is written right afterwards -
+     * writePendingNestedForeignFields() does for this level what the caller already does
+     * for the top one.
+     *
+     * Nesting follows the payload, so a Collection inside a Collection resolves the same way.
+     */
+    protected function resolveNestedEmbeddedRelations(
+        array &$dataMap,
+        string $table,
+        int|string $recordKey,
+        array &$recordData,
+        int $pid
+    ): void {
+        // Removes the relation fields from $recordData, so anything left untouched below
+        // stays a plain scalar for DataHandler.
+        $nestedRelations = $this->extractInlineRelations($table, $recordData);
+
+        foreach ($nestedRelations as $fieldName => $relationData) {
+            $config = $relationData['config'];
+            $value = $relationData['value'];
+            $foreignTable = $config['foreign_table'] ?? '';
+
+            // Anything but a list of records is none of our business - hand it back
+            // untouched so DataHandler sees exactly what the caller sent.
+            if ($foreignTable === '' || !is_array($value)) {
+                $recordData[$fieldName] = $value;
+                continue;
+            }
+
+            if (!$this->tableAccessService->isEmbeddedChildTable($foreignTable)) {
+                // Independent records cannot be created implicitly at this depth - they need
+                // their own write so the caller gets their uids back.
+                throw new ValidationException([
+                    sprintf(
+                        'Field "%s" of the embedded table "%s" relates to the independent table "%s". '
+                        . 'Nested relations to independent tables are not supported: create those records '
+                        . 'first and reference them by uid.',
+                        $fieldName,
+                        $table,
+                        $foreignTable
+                    )
+                ]);
+            }
+
+            // Children of a record that does not exist yet cannot be claimed by uid.
+            $existingChildUids = [];
+            if (is_numeric($recordKey) && !empty($config['foreign_field'])) {
+                $existingChildUids = $this->fetchEmbeddedRelationChildUids(
+                    $foreignTable,
+                    $config['foreign_field'],
+                    $this->getLiveUid($table, (int)$recordKey),
+                    $config['foreign_match_fields'] ?? []
+                );
+            }
+
+            // Same guard the top level applies: without it a caller could patch a record
+            // belonging to someone else, and the cleanup below would delete the real one.
+            foreach (array_values($value) as $index => $childData) {
+                if (!is_array($childData) || !isset($childData['uid']) || !is_numeric($childData['uid'])) {
+                    continue;
+                }
+                if (!in_array((int)$childData['uid'], $existingChildUids, true)) {
+                    throw new ValidationException([
+                        sprintf(
+                            'Entry %d of field "%s" references uid %d of "%s", which does not belong to '
+                            . 'this record. Omit the uid to add a new entry.',
+                            $index,
+                            $fieldName,
+                            (int)$childData['uid'],
+                            $foreignTable
+                        )
+                    ]);
+                }
+            }
+
+            // Updating replaces the whole list, so whatever was there before and is not sent
+            // again has to go - otherwise a replaced file leaves its old reference behind.
+            if ($existingChildUids !== []) {
+                $this->deleteOrphanedEmbeddedRelations($foreignTable, $existingChildUids, $value);
+            }
+
+            $keys = [];
+            foreach (array_values($value) as $index => $childData) {
+                if (!is_array($childData)) {
+                    // Silently skipping would drop the entry and, on update, delete the
+                    // reference that is already there.
+                    throw new ValidationException([
+                        sprintf(
+                            'Entry %d of field "%s" must be an object with the fields of "%s", "%s" given.',
+                            $index,
+                            $fieldName,
+                            $foreignTable,
+                            get_debug_type($childData)
+                        )
+                    ]);
+                }
+
+                $existingUid = (isset($childData['uid']) && is_numeric($childData['uid']) && (int)$childData['uid'] > 0)
+                    ? (int)$childData['uid']
+                    : null;
+                unset($childData['uid']);
+
+                // Stripped here and written after the run - a value sent by the caller
+                // would point wherever they like.
+                if (!empty($config['foreign_field'])) {
+                    unset($childData[$config['foreign_field']]);
+                }
+
+                $childData = $this->convertDataForStorage($foreignTable, $childData);
+
+                if ($existingUid === null) {
+                    $childData['pid'] = $pid;
+
+                    // e.g. tablenames/fieldname for sys_file_reference
+                    foreach (($config['foreign_match_fields'] ?? []) as $matchField => $matchValue) {
+                        $childData[$matchField] = $matchValue;
+                    }
+
+                    $key = 'NEW' . uniqid() . '_' . $index;
+                } else {
+                    $key = $this->resolveToWorkspaceUid($foreignTable, $existingUid);
+                }
+
+                if (isset($config['foreign_sortby'])) {
+                    $childData[$config['foreign_sortby']] = ($index + 1) * 256;
+                }
+
+                $this->resolveNestedEmbeddedRelations($dataMap, $foreignTable, $key, $childData, $pid);
+
+                if (!isset($dataMap[$foreignTable])) {
+                    $dataMap[$foreignTable] = [];
+                }
+                $dataMap[$foreignTable][$key] = $childData;
+                $keys[] = $key;
+
+                // DataHandler leaves the foreign field of a nested child at 0 here, the same
+                // way it does for the top level - both are written directly after the run.
+                if (!empty($config['foreign_field'])) {
+                    $this->pendingNestedForeignFields[] = [
+                        'table' => $foreignTable,
+                        'key' => $key,
+                        'foreignField' => $config['foreign_field'],
+                        'parentTable' => $table,
+                        'parentKey' => $recordKey,
+                    ];
+                }
+            }
+
+            // DataHandler expects a comma separated list of keys here, never an array.
+            $recordData[$fieldName] = implode(',', $keys);
         }
     }
     
@@ -1966,6 +2150,53 @@ class WriteTableTool extends AbstractRecordTool
         
         // Default: return the workspace UID
         return $workspaceUid;
+    }
+
+    /**
+     * Write the foreign field of every nested embedded child collected during this write.
+     *
+     * DataHandler resolves relations of the record it writes, but a child of a child is
+     * linked through a field it never evaluates, so the pointer stays at 0. The top level
+     * has the same problem and solves it the same way, right after its own run.
+     */
+    protected function writePendingNestedForeignFields(DataHandler $dataHandler): void
+    {
+        $pending = $this->pendingNestedForeignFields;
+        $this->pendingNestedForeignFields = [];
+
+        foreach ($pending as $link) {
+            $childUid = $this->resolveWrittenUid($dataHandler, $link['key']);
+            $parentUid = $this->resolveWrittenUid($dataHandler, $link['parentKey']);
+
+            if ($childUid === null || $parentUid === null) {
+                continue;
+            }
+
+            // Point at the live uid the way the top level does, so workspace overlays resolve.
+            $parentUid = $this->getLiveUid($link['parentTable'], $parentUid);
+
+            GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable($link['table'])
+                ->update(
+                    $link['table'],
+                    [$link['foreignField'] => $parentUid],
+                    ['uid' => $childUid]
+                );
+        }
+    }
+
+    /**
+     * Turn a datamap key into the uid it ended up with - numeric keys are existing records.
+     */
+    protected function resolveWrittenUid(DataHandler $dataHandler, int|string $key): ?int
+    {
+        if (is_numeric($key)) {
+            return (int)$key;
+        }
+
+        $uid = $dataHandler->substNEWwithIDs[$key] ?? null;
+
+        return $uid ? (int)$uid : null;
     }
     
     /**
