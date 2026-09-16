@@ -7,6 +7,8 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
+use TYPO3\CMS\Core\Core\Environment;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * Page TSconfig commonly disables a field globally and re-enables it for selected
@@ -18,6 +20,13 @@ use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
  * disappears from the writable and readable set even though the backend form offers
  * it.
  *
+ * A site configuration is mandatory for these tests rather than incidental.
+ * TableAccessService::resolveTSconfigPid() falls back to the first site's root page,
+ * and with no site at all it falls back to page 0, whose empty rootline carries no
+ * TSconfig. The field set is then never filtered, every assertion below passes
+ * regardless of the code under test, and the bug this class exists for goes
+ * unnoticed.
+ *
  * @see https://github.com/hauptsacheNet/typo3-mcp-server/issues/120
  */
 class WriteTablePageTSconfigTest extends AbstractFunctionalTest
@@ -25,6 +34,8 @@ class WriteTablePageTSconfigTest extends AbstractFunctionalTest
     protected function setUp(): void
     {
         parent::setUp();
+
+        $this->writeSiteConfigurationForRootPage(1);
 
         $connection = $this->getConnectionForTable('pages');
 
@@ -45,9 +56,26 @@ class WriteTablePageTSconfigTest extends AbstractFunctionalTest
     }
 
     /**
+     * Guards the premise of every other test here: without a site the TSconfig
+     * fallback lands on page 0 and disables nothing, so the rest would pass on
+     * broken code.
+     */
+    public function testTheFallbackPageResolvesToTheSiteRoot(): void
+    {
+        $tableAccessService = GeneralUtility::makeInstance(\Hn\McpServer\Service\TableAccessService::class);
+
+        $this->assertSame(1, $tableAccessService->resolveTSconfigPid(null));
+        $this->assertArrayNotHasKey(
+            'nav_title',
+            $tableAccessService->getAvailableFields('pages', '1'),
+            'The site root disables nav_title, so the pid-less field set must not carry it.'
+        );
+    }
+
+    /**
      * The record being edited is page 2, which re-enables the field. Resolving
-     * TSconfig anywhere else, including at page 2's parent, reports it as disabled
-     * and rejects a write the backend form allows.
+     * TSconfig anywhere else, including at page 2's parent or at the site root,
+     * reports it as disabled and rejects a write the backend form allows.
      */
     public function testFieldReEnabledOnTheEditedPageIsWritable(): void
     {
@@ -98,5 +126,22 @@ class WriteTablePageTSconfigTest extends AbstractFunctionalTest
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringContainsString('nav_title', $result->content[0]->text);
         $this->assertStringContainsString('About us', $result->content[0]->text);
+    }
+
+    protected function writeSiteConfigurationForRootPage(int $rootPageId): void
+    {
+        $directory = Environment::getConfigPath() . '/sites/main';
+        GeneralUtility::mkdir_deep($directory);
+        file_put_contents($directory . '/config.yaml', implode("\n", [
+            'rootPageId: ' . $rootPageId,
+            "base: 'https://example.com/'",
+            'languages:',
+            '  -',
+            '    title: English',
+            '    languageId: 0',
+            "    base: '/'",
+            '    locale: en_US.UTF-8',
+            '',
+        ]));
     }
 }

@@ -1193,16 +1193,11 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         
-        // Get available fields for this record type.
-        //
-        // Deliberately left without a page. Handing one in makes this resolve TCEFORM
-        // at that page, which reads as the tidier choice, but it also warms TYPO3's
-        // rootline cache for it. DataHandler spots an impossible move by walking the
-        // rootline, so the warmed entry hides the cycle and moving a page into itself
-        // then reports success (it broke InvalidDataTest::testCircularParentReference).
-        // The per-field canAccessField() check above already settles the TSconfig
-        // question and runs first, so nothing is lost here.
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        // Get available fields for this record type. Handed no page, this resolves
+        // TCEFORM at a fallback page, which drops fields that page TSconfig enables
+        // only where the record actually lives. Use the same page as the per-field
+        // check above so the two agree. (#120)
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType, $tsConfigPid ?: null);
         
         // The type field itself should always be available if it exists
         if ($typeField) {
@@ -1256,17 +1251,18 @@ class WriteTableTool extends AbstractRecordTool
                 
                 // If we have available fields configured and this field is not in the list.
                 // Name both reasons it can be missing: the field is genuinely not part of
-                // the record type, or TCEFORM TSconfig disables it. Naming only the first
-                // sends readers hunting through the TCA, where nothing is wrong. No page
-                // is named, because this field set is resolved without one. The original
-                // phrase is kept verbatim so existing assertions on the message hold.
+                // the record type, or TCEFORM TSconfig disables it for this page. Naming
+                // only the first sends readers hunting through the TCA, where nothing is
+                // wrong. The original phrase is kept verbatim so existing assertions on
+                // the message still hold.
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
                     return sprintf(
                         "Field '%s' is not available for this record type ('%s' in table '%s'), "
-                        . 'or it is disabled by TCEFORM TSconfig',
+                        . 'or it is disabled by TCEFORM TSconfig for page %d',
                         $fieldName,
                         $recordType,
-                        $table
+                        $table,
+                        $tsConfigPid
                     );
                 }
             }

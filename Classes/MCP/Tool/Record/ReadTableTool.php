@@ -474,7 +474,19 @@ class ReadTableTool extends AbstractRecordTool
         $essentialFields = $this->tableAccessService->getEssentialFields($table);
         $typeField = $this->tableAccessService->getTypeFieldName($table);
         $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+
+        // Resolve TCEFORM visibility at the record's own page, the same rule the
+        // write side applies: for a page record that page itself, for anything else
+        // the page it lives on. Left to its default this resolves at the first
+        // site's root page instead, so a field an installation disables globally and
+        // re-enables further down the tree is dropped from the result without any
+        // error, and the caller sees a record that looks like it has no such value.
+        // uid has been mapped to the live uid above, which is the one TSconfig is
+        // defined against. (#120)
+        $tsConfigPid = $table === 'pages'
+            ? (int)($record['uid'] ?? 0)
+            : (int)($record['pid'] ?? 0);
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType, $tsConfigPid);
         $allowedFields = array_unique(array_merge(array_keys($availableFields), $essentialFields));
 
         // Process each field
