@@ -194,6 +194,38 @@ class NestedFileRelationTest extends FunctionalTestCase
     }
 
     /**
+     * A rejected payload must leave the record as it was. The whole list is validated
+     * before the first write, so a bad entry late in the list cannot delete what is
+     * already there and then bail out.
+     */
+    public function testRejectedPayloadLeavesExistingReferenceIntact(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $pageUid = $this->createPage($writeTool);
+
+        $contentUid = $this->createElementWithFile($writeTool, $pageUid, 'Element', 'Item', 1);
+        $itemUid = (int)$this->fetchItems($contentUid)[0]['uid'];
+        $referenceUid = $this->fetchReferenceUid($itemUid);
+
+        // The malformed entry sits behind a valid one, so the orphan cleanup would already
+        // have run if validation happened inside the write loop.
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => $contentUid,
+            'data' => [
+                'tx_testnestedfiles_items' => [
+                    ['uid' => $itemUid, 'file' => [['uid_local' => 2], 5]],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertSame($referenceUid, $this->fetchReferenceUid($itemUid), 'The existing reference survives');
+        $this->assertFileReference($itemUid, 1);
+    }
+
+    /**
      * A value that is not a list of records is passed on unchanged instead of being
      * swallowed by the relation handling.
      */

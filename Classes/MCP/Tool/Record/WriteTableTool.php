@@ -1503,12 +1503,29 @@ class WriteTableTool extends AbstractRecordTool
                 );
             }
 
-            // Same guard the top level applies: without it a caller could patch a record
-            // belonging to someone else, and the cleanup below would delete the real one.
+            // Everything is checked before the first write below, so a bad entry late in the
+            // list cannot leave the record with its previous entries already deleted.
             foreach (array_values($value) as $index => $childData) {
-                if (!is_array($childData) || !isset($childData['uid']) || !is_numeric($childData['uid'])) {
+                if (!is_array($childData)) {
+                    // Silently skipping would drop the entry and, on update, delete the
+                    // reference that is already there.
+                    throw new ValidationException([
+                        sprintf(
+                            'Entry %d of field "%s" must be an object with the fields of "%s", "%s" given.',
+                            $index,
+                            $fieldName,
+                            $foreignTable,
+                            get_debug_type($childData)
+                        )
+                    ]);
+                }
+
+                if (!isset($childData['uid']) || !is_numeric($childData['uid'])) {
                     continue;
                 }
+
+                // Same guard the top level applies: without it a caller could patch a record
+                // belonging to someone else, and the cleanup below would delete the real one.
                 if (!in_array((int)$childData['uid'], $existingChildUids, true)) {
                     throw new ValidationException([
                         sprintf(
@@ -1531,20 +1548,6 @@ class WriteTableTool extends AbstractRecordTool
 
             $keys = [];
             foreach (array_values($value) as $index => $childData) {
-                if (!is_array($childData)) {
-                    // Silently skipping would drop the entry and, on update, delete the
-                    // reference that is already there.
-                    throw new ValidationException([
-                        sprintf(
-                            'Entry %d of field "%s" must be an object with the fields of "%s", "%s" given.',
-                            $index,
-                            $fieldName,
-                            $foreignTable,
-                            get_debug_type($childData)
-                        )
-                    ]);
-                }
-
                 $existingUid = (isset($childData['uid']) && is_numeric($childData['uid']) && (int)$childData['uid'] > 0)
                     ? (int)$childData['uid']
                     : null;
