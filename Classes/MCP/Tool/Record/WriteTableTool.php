@@ -791,8 +791,7 @@ class WriteTableTool extends AbstractRecordTool
     protected function isInsideOwnSubtree(int $liveUid, int $destination): bool
     {
         if ($destination < 0) {
-            $sibling = BackendUtility::getRecord('pages', abs($destination), 'pid');
-            $pageId = (int)($sibling['pid'] ?? 0);
+            $pageId = $this->resolveParentPageId(abs($destination));
         } else {
             $pageId = $destination;
         }
@@ -802,14 +801,42 @@ class WriteTableTool extends AbstractRecordTool
             if ($pageId === $liveUid) {
                 return true;
             }
-            $parent = BackendUtility::getRecord('pages', $pageId, 'pid');
-            if ($parent === null) {
+            $parentPageId = $this->resolveParentPageId($pageId);
+            if ($parentPageId === null) {
                 return false;
             }
-            $pageId = (int)$parent['pid'];
+            $pageId = $parentPageId;
         }
 
         return false;
+    }
+
+    /**
+     * The parent page of $pageId as the current workspace sees it.
+     *
+     * Walking live pids is not enough. A page moved inside a workspace keeps its
+     * live pid until the workspace is published, so a chain that is circular in
+     * the workspace still looks well-formed live, and the move is let through.
+     * The overlay reports the staged location in `pid` (the live one moves to
+     * `ORIG_pid`), which is what this check has to follow.
+     *
+     * @return int|null Null when the page does not exist
+     */
+    protected function resolveParentPageId(int $pageId): ?int
+    {
+        // workspaceOL() needs all four fields to recognise a versioned record;
+        // handed a pid-only row it silently leaves it alone.
+        $row = BackendUtility::getRecord('pages', $pageId, 'uid,pid,t3ver_oid,t3ver_state');
+        if ($row === null) {
+            return null;
+        }
+
+        BackendUtility::workspaceOL('pages', $row);
+        if (!is_array($row)) {
+            return null;
+        }
+
+        return (int)$row['pid'];
     }
 
     /**

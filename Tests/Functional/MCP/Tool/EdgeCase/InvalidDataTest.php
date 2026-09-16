@@ -277,7 +277,69 @@ class InvalidDataTest extends AbstractFunctionalTest
             );
         }
     }
-    
+
+    /**
+     * A page moved inside a workspace keeps its live pid until the workspace is
+     * published. Following live pids alone therefore sees a well-formed tree
+     * where the workspace already holds a cycle.
+     *
+     * Fixture tree: 1 > {2 > {4, 5}, 3, 6, 7 > 8}
+     */
+    public function testCircularMoveThroughADescendantStagedInTheWorkspace(): void
+    {
+        // Page 6 lives under 1. Staged below 2, it becomes 2's child in the
+        // workspace while its live pid still reads 1.
+        $staged = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 6,
+            'data' => ['pid' => 2],
+        ]);
+        $this->assertFalse($staged->isError, json_encode($staged->jsonSerialize()));
+
+        // Moving 2 below 6 now closes the cycle 2 -> 6 -> 2, visible only in the
+        // workspace.
+        $result = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['pid' => 6],
+        ]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('Error moving record', $result->content[0]->text);
+
+        $versionsBelowSix = $this->getConnectionForTable('pages')->fetchAllAssociative(
+            'SELECT uid FROM pages WHERE pid = 6 AND t3ver_oid = 2'
+        );
+        $this->assertSame([], $versionsBelowSix, 'A version of page 2 was moved below page 6.');
+    }
+
+    /**
+     * The mirror case: a descendant staged out of the subtree makes a move that
+     * live pids would still reject a legitimate one.
+     */
+    public function testMoveIsAllowedWhenTheDescendantWasStagedOutOfTheSubtree(): void
+    {
+        // Page 4 lives under 2. Staged under 7, it leaves 2's subtree.
+        $staged = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 4,
+            'data' => ['pid' => 7],
+        ]);
+        $this->assertFalse($staged->isError, json_encode($staged->jsonSerialize()));
+
+        $result = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['pid' => 4],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
     /**
      * Test mass assignment protection
      */
