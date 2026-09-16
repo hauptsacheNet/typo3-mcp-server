@@ -733,6 +733,21 @@ class WriteTableTool extends AbstractRecordTool
             return null;
         }
 
+        // DataHandler refuses to move a page into its own rootline, but it compares
+        // the uid it is handed. In a workspace that is the version's uid, not the
+        // live one, so moving page N into page N reads to it as moving an unrelated
+        // record and passes. The version then really does end up below its own live
+        // page. Compare live uids before handing the command over.
+        if ($table === 'pages') {
+            $liveUid = $this->resolveLiveUid($table, $uid);
+            if ($liveUid > 0 && $this->isInsideOwnSubtree($liveUid, $destination)) {
+                return $this->createErrorResult(sprintf(
+                    'Error moving record: cannot move pages:%d into itself or one of its own subpages',
+                    $liveUid
+                ));
+            }
+        }
+
         $cmdMap = [$table => [$uid => ['move' => $destination]]];
         $moveDataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $moveDataHandler->BE_USER = $GLOBALS['BE_USER'];
@@ -752,6 +767,49 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         return null;
+    }
+
+    /**
+     * The uid of the live record behind $uid, which is $uid itself outside a
+     * workspace and the t3ver_oid of a versioned record inside one.
+     */
+    protected function resolveLiveUid(string $table, int $uid): int
+    {
+        $record = BackendUtility::getRecord($table, $uid, 'uid,t3ver_oid');
+        if ($record === null) {
+            return 0;
+        }
+
+        return (int)($record['t3ver_oid'] ?? 0) ?: (int)$record['uid'];
+    }
+
+    /**
+     * Whether a move destination lands inside the page $liveUid itself or anywhere
+     * below it. $destination follows DataHandler's cmdmap convention: positive is a
+     * target page id, negative means "after the record with that uid".
+     */
+    protected function isInsideOwnSubtree(int $liveUid, int $destination): bool
+    {
+        if ($destination < 0) {
+            $sibling = BackendUtility::getRecord('pages', abs($destination), 'pid');
+            $pageId = (int)($sibling['pid'] ?? 0);
+        } else {
+            $pageId = $destination;
+        }
+
+        $loopCheck = 100;
+        while ($pageId > 0 && $loopCheck-- > 0) {
+            if ($pageId === $liveUid) {
+                return true;
+            }
+            $parent = BackendUtility::getRecord('pages', $pageId, 'pid');
+            if ($parent === null) {
+                return false;
+            }
+            $pageId = (int)$parent['pid'];
+        }
+
+        return false;
     }
 
     /**

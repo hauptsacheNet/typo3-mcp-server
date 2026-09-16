@@ -240,11 +240,17 @@ class InvalidDataTest extends AbstractFunctionalTest
     
     /**
      * Test circular parent reference
+     *
+     * The error result is the lesser half of this. What matters is that no record
+     * ends up below itself, so the database is asserted too. An earlier version of
+     * this test checked only isError and passed while the move went through: the
+     * workspace version of page 1 really was written to pid 1, and the error came
+     * from a rootline exception raised afterwards, once the damage was done.
      */
     public function testCircularParentReference(): void
     {
         // Setting pid on update triggers a move; moving a page into itself
-        // must be rejected by DataHandler.
+        // must be rejected.
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
@@ -256,6 +262,20 @@ class InvalidDataTest extends AbstractFunctionalTest
 
         $this->assertTrue($result->isError);
         $this->assertStringContainsString('Error moving record', $result->content[0]->text);
+
+        // Neither page 1 nor any workspace version of it may sit below page 1.
+        // In a workspace the moved record carries its own uid, so filtering by
+        // uid alone would miss exactly the case this guards against.
+        $descendants = $this->getConnectionForTable('pages')->fetchAllAssociative(
+            'SELECT uid, t3ver_oid FROM pages WHERE pid = 1'
+        );
+        foreach ($descendants as $row) {
+            $this->assertNotSame(
+                1,
+                (int)$row['t3ver_oid'],
+                'A version of page 1 was moved below page 1 (uid ' . $row['uid'] . ').'
+            );
+        }
     }
     
     /**
