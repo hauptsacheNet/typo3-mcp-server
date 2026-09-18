@@ -27,17 +27,25 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class RequestGlobalTest extends AbstractFunctionalTest
 {
     private mixed $previousRequest;
+    private bool $hadPreviousRequest;
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->hadPreviousRequest = array_key_exists('TYPO3_REQUEST', $GLOBALS);
         $this->previousRequest = $GLOBALS['TYPO3_REQUEST'] ?? null;
         unset($GLOBALS['TYPO3_REQUEST']);
     }
 
     protected function tearDown(): void
     {
-        $GLOBALS['TYPO3_REQUEST'] = $this->previousRequest;
+        // Restore an absent global as absent: assigning null would leave a key
+        // that later tests can tell apart with array_key_exists().
+        if ($this->hadPreviousRequest) {
+            $GLOBALS['TYPO3_REQUEST'] = $this->previousRequest;
+        } else {
+            unset($GLOBALS['TYPO3_REQUEST']);
+        }
         parent::tearDown();
     }
 
