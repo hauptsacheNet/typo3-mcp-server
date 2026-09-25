@@ -412,6 +412,63 @@ class UploadFileToolTest extends FunctionalTestCase
         $this->assertEquals('final.png', $data['fileName']);
     }
 
+    /**
+     * Regression for #135: a hostname download must pin the validated IP without
+     * using the CURLOPT_RESOLVE request option. Guzzle selects the stream handler
+     * whenever "stream => true" is set, and that handler rejects any "curl"
+     * option ("Passing the curl request option to the stream handler is not
+     * supported"), so every hostname download failed. The pinning is now done by
+     * rewriting the URL to the IP while keeping the host for routing and TLS.
+     *
+     * All other url tests use IP literals, which skip the pinning branch entirely,
+     * so this is the only test that exercises it.
+     */
+    public function testHostnameDownloadPinsIpWithoutCurlOptionAndKeepsHostForTls(): void
+    {
+        $capturedOptions = null;
+        $capturedRequest = null;
+        $GLOBALS['TYPO3_CONF_VARS']['HTTP']['handler'] = [
+            'mcp_capture' => function (callable $handler) use (&$capturedOptions, &$capturedRequest) {
+                return function ($request, array $options) use (&$capturedOptions, &$capturedRequest) {
+                    $capturedRequest = $request;
+                    $capturedOptions = $options;
+                    return new FulfilledPromise(new Response(200, ['Content-Type' => 'image/png'], $this->pngBytes()));
+                };
+            },
+        ];
+
+        // Stub the SSRF check so a hostname "resolves" to a vetted public IP
+        // without touching real DNS; the pinning logic under test is untouched.
+        $tool = new class extends UploadFileTool {
+            protected function assertPublicHttpUrl(string $url): ?string
+            {
+                return '203.0.113.55';
+            }
+        };
+
+        $result = $tool->execute([
+            'url' => 'https://example.com/pictures/photo.png',
+            'targetFolder' => '/user_upload/',
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // The bug: a "curl" option alongside "stream => true" throws in the
+        // stream handler. Pinning must not reintroduce it, and streaming stays on.
+        $this->assertArrayNotHasKey('curl', $capturedOptions);
+        $this->assertTrue($capturedOptions['stream'] ?? false, 'The download must keep streaming to stay memory-efficient');
+
+        // The connection targets the validated IP (DNS-rebinding protection) ...
+        $this->assertEquals('203.0.113.55', $capturedRequest->getUri()->getHost());
+        $this->assertEquals('https', $capturedRequest->getUri()->getScheme());
+        $this->assertEquals('/pictures/photo.png', $capturedRequest->getUri()->getPath());
+        // ... while host routing and TLS still use the original hostname.
+        $this->assertEquals('example.com', $capturedRequest->getHeaderLine('Host'));
+        $this->assertEquals('example.com', $capturedOptions['stream_context']['ssl']['peer_name'] ?? null);
+
+        $data = json_decode($result->content[0]->text, true);
+        $this->assertStringEndsWith('.png', $data['fileName']);
+    }
+
     public function testRedirectToPrivateAddressIsRejected(): void
     {
         // Every redirect hop must pass the SSRF validation, not just the first URL.

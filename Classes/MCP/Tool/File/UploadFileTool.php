@@ -266,26 +266,39 @@ class UploadFileTool extends AbstractRecordTool
                 'headers' => ['User-Agent' => 'TYPO3-MCP-Server'],
             ];
             // Pin the vetted IP so the actual connect cannot be re-routed to an
-            // internal address via DNS rebinding (honored by the curl handler;
-            // harmless elsewhere). Skipped when TYPO3 routes HTTP through a
-            // proxy: the proxy resolves the host itself, pinning would break it.
+            // internal address via DNS rebinding: connect straight to the IP that
+            // assertPublicHttpUrl() validated, while keeping the original host for
+            // routing (Host header) and TLS (SNI + certificate name). Rewriting
+            // the URL like this works with every Guzzle handler - unlike
+            // CURLOPT_RESOLVE, which the stream handler selected by "stream => true"
+            // rejects outright ("Passing the curl request option to the stream
+            // handler is not supported"). Skipped when TYPO3 routes HTTP through a
+            // proxy: the proxy resolves the host itself, so pinning would break it.
             $parts = parse_url($currentUrl);
             $host = $parts['host'] ?? '';
+            $requestUrl = $currentUrl;
             $proxyConfigured = !empty($GLOBALS['TYPO3_CONF_VARS']['HTTP']['proxy']);
-            if (!$proxyConfigured && $resolvedIp !== null && !filter_var($host, FILTER_VALIDATE_IP) && defined('CURLOPT_RESOLVE')) {
-                $port = $parts['port'] ?? (($parts['scheme'] ?? 'https') === 'https' ? 443 : 80);
-                // CURLOPT_RESOLVE wants IPv6 addresses in brackets; a bare one
-                // makes the entry malformed, and curl then silently ignores the
-                // pin - which would drop the rebinding protection for
-                // IPv6-only hosts.
-                $pinnedIp = filter_var($resolvedIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false
-                    ? '[' . $resolvedIp . ']'
-                    : $resolvedIp;
-                $options['curl'] = [\CURLOPT_RESOLVE => [$host . ':' . $port . ':' . $pinnedIp]];
+            if (!$proxyConfigured && $resolvedIp !== null && !filter_var($host, FILTER_VALIDATE_IP)) {
+                $scheme = strtolower($parts['scheme'] ?? 'https');
+                $port = $parts['port'] ?? null;
+                // A literal IPv6 address needs brackets to sit in a URL authority.
+                $ipForUrl = str_contains($resolvedIp, ':') ? '[' . $resolvedIp . ']' : $resolvedIp;
+                $authority = $ipForUrl . ($port !== null ? ':' . $port : '');
+                $requestUrl = $scheme . '://' . $authority . ($parts['path'] ?? '')
+                    . (isset($parts['query']) ? '?' . $parts['query'] : '');
+                // Keep the Host header the target expects. Default ports are
+                // dropped, mirroring how the client would have sent it originally.
+                $defaultPort = $scheme === 'https' ? 443 : 80;
+                $options['headers']['Host'] = $host . ($port !== null && $port !== $defaultPort ? ':' . $port : '');
+                if ($scheme === 'https') {
+                    // Without this, SNI and the certificate check would use the
+                    // bare IP and every real HTTPS download would fail validation.
+                    $options['stream_context']['ssl']['peer_name'] = $host;
+                }
             }
 
             try {
-                $response = GeneralUtility::makeInstance(RequestFactory::class)->request($currentUrl, 'GET', $options);
+                $response = GeneralUtility::makeInstance(RequestFactory::class)->request($requestUrl, 'GET', $options);
             } catch (GuzzleException $e) {
                 throw new \InvalidArgumentException('Downloading the URL failed: ' . $e->getMessage(), 0, $e);
             }
