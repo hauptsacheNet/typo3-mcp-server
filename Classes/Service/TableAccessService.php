@@ -10,6 +10,7 @@ use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
+use TYPO3\CMS\Core\Database\Query\QueryHelper;
 use TYPO3\CMS\Core\Schema\Capability\TcaSchemaCapability;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
@@ -1213,24 +1214,25 @@ class TableAccessService implements SingletonInterface
         if (!$defaultSorting) {
             return [];
         }
-        
-        $sortParts = GeneralUtility::trimExplode(',', $defaultSorting, true);
+
         $sorting = [];
-        
-        foreach ($sortParts as $sortPart) {
-            $sortPart = trim($sortPart);
-            
-            // Extract field and direction
-            if (preg_match('/^(.*?)\s+(ASC|DESC)$/i', $sortPart, $matches)) {
-                $field = trim($matches[1]);
-                $direction = strtoupper($matches[2]);
-                $sorting[] = ['field' => $field, 'direction' => $direction];
-            } else {
-                // Default to ASC if no direction specified
-                $sorting[] = ['field' => $sortPart, 'direction' => 'ASC'];
+
+        // Use the TYPO3 core parser so we behave exactly like the framework:
+        // it strips a leading "ORDER BY" prefix (TCA in the wild still contains
+        // e.g. 'default_sortby' => 'ORDER BY title') and splits the expression
+        // into field/direction pairs. Parsing it ourselves would leave the
+        // prefix on the first field and produce invalid SQL.
+        foreach (QueryHelper::parseOrderBy($defaultSorting) as [$field, $direction]) {
+            $field = trim((string)($field ?? ''));
+            if ($field === '') {
+                continue;
             }
+
+            // Default to ASC if no (or an unexpected) direction was specified.
+            $direction = strtoupper(trim((string)($direction ?? ''))) === 'DESC' ? 'DESC' : 'ASC';
+            $sorting[] = ['field' => $field, 'direction' => $direction];
         }
-        
+
         return $sorting;
     }
     
