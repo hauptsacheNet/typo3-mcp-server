@@ -8,6 +8,7 @@ use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Service\SiteInformationService;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
@@ -150,6 +151,50 @@ class FileReferenceTest extends FunctionalTestCase
 
         // Verify file enrichment on the created reference
         $this->assertEquals('test.jpg', $ref['file_name']);
+    }
+
+    /**
+     * Regression test for issue #136: after creating a record with file references,
+     * the relation counter column on the parent (tt_content.assets) must hold the number
+     * of children. Otherwise the counter stays 0/NULL and Extbase/the frontend never
+     * loads the references, even though the sys_file_reference rows exist.
+     */
+    public function testCreateSetsParentRelationCounter(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'header' => 'Content with counted assets',
+                'CType' => 'textmedia',
+                'assets' => [
+                    ['uid_local' => 1, 'title' => 'First'],
+                    ['uid_local' => 1, 'title' => 'Second'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $contentUid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        // Read the raw parent record (the new workspace version carries the counter).
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $assetsCounter = $connection->createQueryBuilder()
+            ->select('assets')
+            ->from('tt_content')
+            ->where('uid = ' . $contentUid)
+            ->executeQuery()
+            ->fetchOne();
+
+        $this->assertSame(
+            2,
+            (int)$assetsCounter,
+            'Parent assets counter must equal the number of created file references (issue #136)'
+        );
     }
 
     /**

@@ -521,7 +521,7 @@ class WriteTableTool extends AbstractRecordTool
                             // RelationHandler's writeForeignField is for MM relations, not direct foreign fields
                             $connection = GeneralUtility::makeInstance(ConnectionPool::class)
                                 ->getConnectionForTable($foreignTable);
-                            
+
                             foreach ($childUids as $childUid) {
                                 $connection->update(
                                     $foreignTable,
@@ -530,6 +530,18 @@ class WriteTableTool extends AbstractRecordTool
                                 );
                             }
                         }
+
+                        // Persist the relation counter on the parent so Extbase/frontend
+                        // actually loads the children (see updateParentRelationCounter).
+                        $this->updateParentRelationCounter(
+                            $table,
+                            (int)$parentUid,
+                            $fieldName,
+                            $foreignTable,
+                            $foreignField,
+                            (int)$liveParentUid,
+                            $config['foreign_match_fields'] ?? []
+                        );
                     }
                 }
             }
@@ -656,11 +668,23 @@ class WriteTableTool extends AbstractRecordTool
                                 );
                             }
                         }
+
+                        // Recompute the relation counter on the parent (workspace version)
+                        // now that children were added/removed, so Extbase loads them.
+                        $this->updateParentRelationCounter(
+                            $table,
+                            (int)$workspaceUid,
+                            $fieldName,
+                            $foreignTable,
+                            $foreignField,
+                            (int)$uid,
+                            $config['foreign_match_fields'] ?? []
+                        );
                     }
                 }
             }
         }
-        
+
         // Handle pid change (move to another page) and/or position reordering.
         // pid is a special TYPO3 control field; setting it on update means "move
         // this record to that page". The position parameter (if given) refines
@@ -1496,6 +1520,51 @@ class WriteTableTool extends AbstractRecordTool
         }
     }
     
+    /**
+     * Write the relation counter on the parent record for an embedded inline/file field.
+     *
+     * For inline/file fields with a foreign_field, the parent column stores the number of
+     * attached children. DataHandler maintains this automatically when parent and children
+     * are processed in one datamap, but this tool deliberately creates the parent first and
+     * the children afterwards (setting foreign_field via direct SQL). That path never touches
+     * the counter, so it keeps its default (0 or NULL). A NULL/0 counter makes Extbase skip the
+     * relation, so the children exist but are never loaded in the frontend (even after publish)
+     * until the record is saved once in the backend. We therefore recompute and persist the
+     * counter ourselves after the children are in place.
+     *
+     * The counter is written on the record the children actually point at ($parentRecordUid):
+     * the workspace version in both the create path (new placeholder) and the update path.
+     */
+    protected function updateParentRelationCounter(
+        string $parentTable,
+        int $parentRecordUid,
+        string $parentField,
+        string $foreignTable,
+        string $foreignField,
+        int $relationParentUid,
+        array $foreignMatchFields = []
+    ): void {
+        if ($parentRecordUid <= 0) {
+            return;
+        }
+
+        $childCount = count($this->fetchEmbeddedRelationChildUids(
+            $foreignTable,
+            $foreignField,
+            $relationParentUid,
+            $foreignMatchFields
+        ));
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable($parentTable);
+
+        $connection->update(
+            $parentTable,
+            [$parentField => $childCount],
+            ['uid' => $parentRecordUid]
+        );
+    }
+
     /**
      * Fetch the live uids of embedded children currently attached to a parent.
      *
