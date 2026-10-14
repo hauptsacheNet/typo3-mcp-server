@@ -20,6 +20,10 @@ class OAuthAuthorizeEndpoint
 {
     use RequestUrlTrait;
 
+    public function __construct(
+        private readonly ModuleProvider $moduleProvider,
+    ) {}
+
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
         try {
@@ -41,7 +45,7 @@ class OAuthAuthorizeEndpoint
             // the backend module routes. A user who cannot open the user_mcp_server
             // module (and therefore cannot mint a Bearer token via the module UI)
             // must not be able to authorize an MCP client through OAuth either.
-            if (!GeneralUtility::makeInstance(ModuleProvider::class)->accessGranted('user_mcp_server', $beUser)) {
+            if (!$this->moduleProvider->accessGranted('user_mcp_server', $beUser)) {
                 return $this->createErrorResponse('access_denied', 'No access to the MCP module', 403);
             }
 

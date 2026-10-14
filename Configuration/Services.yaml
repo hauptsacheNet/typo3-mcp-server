@@ -42,6 +42,12 @@ services:
   # Make OAuthService public for eID access
   Hn\McpServer\Service\OAuthService:
     public: true
+
+  # The OAuth authorize endpoint is resolved via GeneralUtility::makeInstance()
+  # in McpServerMiddleware and needs ModuleProvider injected, so it must be a
+  # public, autowired service.
+  Hn\McpServer\Http\OAuthAuthorizeEndpoint:
+    public: true
     
   # Make SiteInformationService public for eID access
   Hn\McpServer\Service\SiteInformationService:
