@@ -7,6 +7,7 @@ namespace Hn\McpServer\Http;
 use Hn\McpServer\Service\OAuthService;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use TYPO3\CMS\Backend\Module\ModuleProvider;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Core\Http\Stream;
@@ -34,6 +35,16 @@ class OAuthAuthorizeEndpoint
             }
 
             $beUser = $GLOBALS['BE_USER'];
+
+            // Honor module access: the OAuth flow runs through the extension's own
+            // PSR-15 middleware and never passes BackendModuleValidator, which gates
+            // the backend module routes. A user who cannot open the user_mcp_server
+            // module (and therefore cannot mint a Bearer token via the module UI)
+            // must not be able to authorize an MCP client through OAuth either.
+            if (!GeneralUtility::makeInstance(ModuleProvider::class)->accessGranted('user_mcp_server', $beUser)) {
+                return $this->createErrorResponse('access_denied', 'No access to the MCP module', 403);
+            }
+
             $beUserId = (int)$beUser->user['uid'];
 
             // Handle authorization approval
@@ -357,7 +368,7 @@ class OAuthAuthorizeEndpoint
         }
     }
 
-    private function createErrorResponse(string $error, string $description = ''): ResponseInterface
+    private function createErrorResponse(string $error, string $description = '', int $statusCode = 400): ResponseInterface
     {
         $errorData = [
             'error' => $error,
@@ -370,7 +381,7 @@ class OAuthAuthorizeEndpoint
 
         return new Response(
             $stream,
-            400,
+            $statusCode,
             ['Content-Type' => 'application/json']
         );
     }
