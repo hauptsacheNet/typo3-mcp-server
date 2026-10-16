@@ -176,10 +176,12 @@ class ReadTableTool extends AbstractRecordTool
         if (is_string($filters)) {
             // Clients that still hold the earlier tool schema (where: string)
             // serialize the clause array into a JSON string; claude.ai caches
-            // connector schemas, so this happens after every deploy. A JSON
-            // list goes through exactly the same clause validation as an array.
+            // connector schemas, so this happens after every deploy. Decoded
+            // JSON goes through exactly the same validation as an array — a
+            // single JSON object included, which is then refused with the list
+            // shape instead of the SQL-string message.
             $decoded = json_decode($filters, true);
-            if (is_array($decoded) && array_is_list($decoded)) {
+            if (is_array($decoded)) {
                 $filters = $decoded;
             }
         }

@@ -328,6 +328,27 @@ class ReadTableToolTest extends AbstractFunctionalTest
     }
 
     /**
+     * A single filter object instead of a list of them is a likely slip. It is
+     * refused with the list shape rather than failing with a type error.
+     */
+    public function testSingleFilterObjectIsRefusedWithTheListShape(): void
+    {
+        $tool = new ReadTableTool();
+        $clause = ['field' => 'CType', 'operator' => '=', 'value' => 'textmedia'];
+
+        foreach ([$clause, json_encode($clause)] as $where) {
+            $result = $tool->execute([
+                'table' => 'tt_content',
+                'where' => $where,
+            ]);
+
+            $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+            $this->assertStringContainsString('must be a list of filter objects', $result->content[0]->text);
+            $this->assertStringContainsString('[{"field"', $result->content[0]->text);
+        }
+    }
+
+    /**
      * The parameter used to take a raw SQL condition. A string is refused with
      * the shape that replaces it, so a caller sending the old form can fix the
      * call from the error alone.

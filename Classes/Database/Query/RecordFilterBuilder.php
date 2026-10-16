@@ -100,6 +100,16 @@ final class RecordFilterBuilder
      */
     public function apply(QueryBuilder $queryBuilder, string $table, array $clauses, ?int $pid = null): void
     {
+        // A single clause object instead of a list of them is a likely slip.
+        // Its string keys would otherwise reach buildExpression()'s int index
+        // and fail as a TypeError rather than a message the caller can act on.
+        if (!array_is_list($clauses)) {
+            throw new ValidationException([
+                'The "where" parameter must be a list of filter objects, not a single object. '
+                . 'Wrap it in brackets, e.g. [{"field": "CType", "operator": "=", "value": "textmedia"}].',
+            ]);
+        }
+
         foreach ($clauses as $index => $clause) {
             $queryBuilder->andWhere($this->buildExpression($queryBuilder, $table, $clause, $index, $pid));
         }
