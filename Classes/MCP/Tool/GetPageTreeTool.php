@@ -20,6 +20,7 @@ use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
+use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
 
 /**
  * Tool for retrieving the TYPO3 page tree
@@ -138,12 +139,16 @@ class GetPageTreeTool extends AbstractRecordTool
         // WorkspaceRestriction: shows live records + workspace-new + move-pointer pages,
         // but NOT workspace overlays (t3ver_oid>0, t3ver_state≠4) — prevents duplicate
         // pages appearing for live records that have pending workspace modifications.
+        // WorkspaceDeletePlaceholderRestriction drops live pages that are deleted or
+        // moved in the workspace; a moved page is represented by its move pointer,
+        // which carries the new pid and sorting.
         // workspaceOL() is applied below to each record to replace live data with
         // its workspace-modified version where applicable.
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace));
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
 
         // Build the query
         $query = $queryBuilder->select('*')
@@ -200,9 +205,13 @@ class GetPageTreeTool extends AbstractRecordTool
                 }
             }
 
-            // After workspaceOL(): overlay records have uid swapped to the live record's uid
-            // (t3ver_oid). Workspace-new pages (t3ver_oid=0) keep their original uid.
-            // Either way, $page['uid'] is now the correct live-facing uid.
+            // After workspaceOL(): overlay records have uid swapped to the live record's uid.
+            // A move pointer selected directly (page moved here in the workspace) has no
+            // further version to overlay, so it still carries its own uid: map it back
+            // to the live uid via t3ver_oid. Workspace-new pages (t3ver_oid=0) keep theirs.
+            if ((int)($page['t3ver_oid'] ?? 0) > 0) {
+                $page['uid'] = (int)$page['t3ver_oid'];
+            }
             $displayUid = (int)$page['uid'];
 
             $pageData = [
@@ -259,7 +268,8 @@ class GetPageTreeTool extends AbstractRecordTool
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace));
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
 
         $query = $queryBuilder->count('uid')
             ->from('pages')

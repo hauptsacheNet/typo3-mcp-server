@@ -49,6 +49,8 @@ $constraints[] = $expressionBuilder->notIn(
 
 This ensures that when a record is deleted in a workspace (creating a delete placeholder), the live version is automatically excluded from query results.
 
+The same subquery also covers move pointers (`t3ver_state = 4`), which is how DataHandler stages both moves to another page/parent and reorders (e.g. `WriteTable` with `position` or a changed `pid`). `WorkspaceRestriction` admits the live row *and* the move pointer; without the exclusion a moved record shows up twice and keeps its live position. With the live row excluded, the move pointer represents the record, and since it carries the workspace `pid` and sorting, SQL filtering, ordering, counting and pagination are correct. This mirrors how core's `DataHandler::getSortNumber()` treats "live rows without move pointer + move pointers" as the sortable set in a workspace. Soft-deleted versions are ignored by the subquery.
+
 ### 2. UID Resolution System
 
 We implemented two key methods for UID transparency:
@@ -116,7 +118,7 @@ This didn't meet our needs because:
 
 2. **Complexity**: We handle more logic at the query level, making queries more complex
 
-3. **Edge Cases**: Some workspace scenarios (like move operations) still require special handling
+3. **Edge Cases**: Rows selected as move pointers keep their version uid until mapped back via `t3ver_oid`; every consumer must apply that mapping (ReadTable's `processRecord()`, GetPage, GetPageTree)
 
 ## Testing
 
