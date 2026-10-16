@@ -355,14 +355,24 @@ class UploadFileTool extends AbstractRecordTool
                     ? '[' . $resolvedIp . ']'
                     : $resolvedIp;
                 $options['curl'] = [\CURLOPT_RESOLVE => [$host . ':' . $port . ':' . $pinnedIp]];
+                // Without "stream" the handler buffers the whole body before the
+                // size check below runs, so abort the transfer as soon as the
+                // announced or received size exceeds the limit.
+                $options['progress'] = function ($downloadTotal, $downloaded) use ($maxBytes, &$sizeException): void {
+                    if ($downloadTotal > $maxBytes || $downloaded > $maxBytes) {
+                        throw $sizeException = $this->createFileTooLargeException($maxBytes);
+                    }
+                };
             } else {
                 $options['stream'] = true;
             }
 
+            $sizeException = null;
             try {
                 $response = GeneralUtility::makeInstance(RequestFactory::class)->request($currentUrl, 'GET', $options);
             } catch (GuzzleException $e) {
-                throw new \InvalidArgumentException('Downloading the URL failed: ' . $e->getMessage(), 0, $e);
+                // Guzzle 8 wraps an exception thrown by the progress callback
+                throw $sizeException ?? new \InvalidArgumentException('Downloading the URL failed: ' . $e->getMessage(), 0, $e);
             }
 
             if (!in_array($response->getStatusCode(), [301, 302, 303, 307, 308], true)) {
@@ -399,10 +409,7 @@ class UploadFileTool extends AbstractRecordTool
             if ($bytes > $maxBytes) {
                 fclose($handle);
                 @unlink($tempPath);
-                throw new \InvalidArgumentException(
-                    'The file exceeds the maximum size of ' . round($maxBytes / 1048576) . ' MiB '
-                    . '(configurable via the extension setting "maxFileSizeMb").'
-                );
+                throw $this->createFileTooLargeException($maxBytes);
             }
             fwrite($handle, $chunk);
         }
@@ -441,6 +448,14 @@ class UploadFileTool extends AbstractRecordTool
         }
 
         return [$tempPath, $fileName];
+    }
+
+    protected function createFileTooLargeException(int $maxBytes): \InvalidArgumentException
+    {
+        return new \InvalidArgumentException(
+            'The file exceeds the maximum size of ' . round($maxBytes / 1048576) . ' MiB '
+            . '(configurable via the extension setting "maxFileSizeMb").'
+        );
     }
 
     /**

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
+use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Promise\FulfilledPromise;
+use GuzzleHttp\Promise\RejectedPromise;
 use GuzzleHttp\Psr7\Response;
 use Hn\McpServer\MCP\Tool\File\UploadFileTool;
 use Hn\McpServer\Service\SiteInformationService;
@@ -48,6 +50,12 @@ class UploadFileToolTest extends FunctionalTestCase
      */
     protected array $recordedHttpOptions = [];
 
+    /**
+     * Body bytes the mocked HTTP layer had received when the last request
+     * completed or was aborted.
+     */
+    protected int $transferredBytes = 0;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -84,6 +92,14 @@ class UploadFileToolTest extends FunctionalTestCase
                     $url = (string)$request->getUri();
                     foreach ($responses as $prefix => $response) {
                         if (str_starts_with($url, $prefix)) {
+                            try {
+                                $this->simulateTransfer($response, $options);
+                            } catch (\Throwable $e) {
+                                // How Guzzle 8's curl handler reports a failing progress callback
+                                return new RejectedPromise(
+                                    new RequestException('An error was encountered during the progress event', $request, previous: $e)
+                                );
+                            }
                             return new FulfilledPromise($response);
                         }
                     }
@@ -91,6 +107,29 @@ class UploadFileToolTest extends FunctionalTestCase
                 };
             },
         ];
+    }
+
+    /**
+     * Report the transfer of the body in 64 KiB steps to a "progress" callback
+     * the way the curl handler does. An exception thrown by the callback
+     * aborts the transfer, like it does with curl.
+     *
+     * @param array<string, mixed> $options
+     */
+    protected function simulateTransfer(Response $response, array $options): void
+    {
+        $size = (int)$response->getBody()->getSize();
+        if (isset($options['progress'])) {
+            $announced = (int)$response->getHeaderLine('Content-Length');
+            for ($received = 0; ; $received = min($received + 65536, $size)) {
+                $this->transferredBytes = $received;
+                $options['progress']($announced, $received, 0, 0);
+                if ($received >= $size) {
+                    break;
+                }
+            }
+        }
+        $this->transferredBytes = $size;
     }
 
     /**
@@ -463,6 +502,46 @@ class UploadFileToolTest extends FunctionalTestCase
         $this->assertFalse(
             (bool)($options['stream'] ?? false),
             'A pinned download must not set "stream", which forces the StreamHandler and drops the curl pin'
+        );
+    }
+
+    /**
+     * @return array<string, array{0: array<string, string>}>
+     */
+    public static function oversizedResponseHeaderProvider(): array
+    {
+        return [
+            'announced via Content-Length' => [['Content-Length' => (string)(3 * 1048576)]],
+            'chunked, no Content-Length' => [[]],
+        ];
+    }
+
+    #[DataProvider('oversizedResponseHeaderProvider')]
+    public function testOversizedPinnedDownloadIsAbortedDuringTheTransfer(array $headers): void
+    {
+        // A pinned download is not streamed, so the size limit has to be
+        // enforced while the handler receives the body, not afterwards.
+        if (!defined('CURLOPT_RESOLVE')) {
+            $this->markTestSkipped('IP pinning requires ext-curl.');
+        }
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server']['maxFileSizeMb'] = 1;
+        $body = str_repeat('x', 3 * 1048576);
+        $this->mockHttpResponses([
+            'https://files.example.org/huge.bin' => new Response(200, ['Content-Type' => 'application/octet-stream'] + $headers, $body),
+        ]);
+
+        $result = $this->createToolResolvingHostsTo('203.0.113.10')->execute([
+            'url' => 'https://files.example.org/huge.bin',
+            'fileName' => 'huge.bin',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertTrue($result->isError, 'Expected an error result, got: ' . json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('exceeds the maximum size of 1 MiB', $result->content[0]->text);
+        $this->assertLessThanOrEqual(
+            1048576 + 65536,
+            $this->transferredBytes,
+            'The transfer must be aborted once it exceeds the size limit instead of buffering the whole body'
         );
     }
 
