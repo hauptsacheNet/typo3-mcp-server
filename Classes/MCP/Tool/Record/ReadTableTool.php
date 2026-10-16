@@ -172,6 +172,16 @@ class ReadTableTool extends AbstractRecordTool
         }
         $filters = $params['where'] ?? [];
         if (is_string($filters)) {
+            // Clients that still hold the earlier tool schema (where: string)
+            // serialize the clause array into a JSON string; claude.ai caches
+            // connector schemas, so this happens after every deploy. A JSON
+            // list goes through exactly the same clause validation as an array.
+            $decoded = json_decode($filters, true);
+            if (is_array($decoded) && array_is_list($decoded)) {
+                $filters = $decoded;
+            }
+        }
+        if (is_string($filters)) {
             // The parameter used to take a raw SQL condition, guarded by a
             // keyword blocklist that did not list SELECT and never checked
             // field access. Rejected rather than translated: a string cannot be

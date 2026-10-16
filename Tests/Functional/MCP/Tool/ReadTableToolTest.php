@@ -282,6 +282,52 @@ class ReadTableToolTest extends AbstractFunctionalTest
     }
 
     /**
+     * A client holding the old schema (where: string) sends the clause array
+     * JSON-encoded. It is decoded and validated like an array, so it filters
+     * the same way instead of failing until the client refreshes its schema.
+     */
+    public function testJsonEncodedClauseListIsAcceptedLikeAnArray(): void
+    {
+        $tool = new ReadTableTool();
+        $clauses = [['field' => 'CType', 'operator' => '=', 'value' => 'textmedia']];
+
+        $asArray = $tool->execute([
+            'table' => 'tt_content',
+            'where' => $clauses,
+            'includeRelations' => false,
+        ]);
+        $asJson = $tool->execute([
+            'table' => 'tt_content',
+            'where' => json_encode($clauses),
+            'includeRelations' => false,
+        ]);
+
+        $this->assertFalse($asArray->isError, json_encode($asArray->jsonSerialize()));
+        $this->assertFalse($asJson->isError, json_encode($asJson->jsonSerialize()));
+        $this->assertSame(
+            json_decode($asArray->content[0]->text, true),
+            json_decode($asJson->content[0]->text, true)
+        );
+    }
+
+    /**
+     * A JSON-encoded clause list is validated like an array: an operator
+     * outside the fixed set is refused the same way.
+     */
+    public function testJsonEncodedClauseListIsValidatedLikeAnArray(): void
+    {
+        $tool = new ReadTableTool();
+
+        $result = $tool->execute([
+            'table' => 'tt_content',
+            'where' => json_encode([['field' => 'CType', 'operator' => 'LIKE', 'value' => 'x']]),
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('is not supported', $result->content[0]->text);
+    }
+
+    /**
      * The parameter used to take a raw SQL condition. A string is refused with
      * the shape that replaces it, so a caller sending the old form can fix the
      * call from the error alone.
