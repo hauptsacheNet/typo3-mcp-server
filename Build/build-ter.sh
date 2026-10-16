@@ -46,7 +46,9 @@ for dir in Classes Configuration Documentation Resources; do
 done
 
 # Copy specific files from root
-for file in ext_emconf.php ext_localconf.php ext_tables.php ext_tables.sql composer.json README.md LICENSE; do
+# ext_conf_template.txt carries the extension settings (e.g. maxFileSizeMb) -
+# without it the Extension Configuration module shows nothing to configure.
+for file in ext_emconf.php ext_localconf.php ext_tables.php ext_tables.sql ext_conf_template.txt composer.json README.md LICENSE; do
     if [ -f "$PROJECT_DIR/$file" ]; then
         cp "$PROJECT_DIR/$file" "$EXTENSION_DIR/"
     fi

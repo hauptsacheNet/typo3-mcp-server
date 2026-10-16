@@ -20,6 +20,7 @@ class CreatePageTest extends LlmTestCase
 
         // Import test data with basic page structure
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/pages.csv');
+        $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/backend_layout.csv');
     }
 
     #[DataProvider('modelProvider')]

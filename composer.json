@@ -12,15 +12,16 @@
     ],
     "require": {
         "php": ">=8.2",
-        "logiscape/mcp-sdk-php": "^1.2",
-        "typo3/cms-backend": "^13.4",
-        "typo3/cms-core": "^13.4",
-        "typo3/cms-workspaces": "^13.4"
+        "logiscape/mcp-sdk-php": "^2.0",
+        "typo3/cms-backend": "^13.4 || ^14.3",
+        "typo3/cms-core": "^13.4 || ^14.3",
+        "typo3/cms-workspaces": "^13.4 || ^14.3"
     },
     "require-dev": {
         "typo3/testing-framework": "^8.2 || ^9.2",
-        "typo3/cms-install": "^13.4",
+        "typo3/cms-install": "^13.4 || ^14.3",
         "georgringer/news": "^14.0",
+        "b13/container": "^4.0",
         "brianium/paratest": "^7.4"
     },
     "autoload": {
@@ -55,6 +56,8 @@
             "paratest -c phpunit.xml.dist"
         ],
         "test:llm": [
+            "rm -rf .Build/llm-stats",
+            "rm -f .Build/llm-retries.log",
             "paratest -c Tests/Llm/phpunit-llm.xml --testdox --no-progress -p 5 --log-junit .Build/llm-results.xml || true",
             "php Build/check-llm-results.php --min-pass=3"
         ],

@@ -1,6 +1,6 @@
 - This project is about developing the mcp_server typo3 extension, that allows someone without technical knowledge to edit content using LLM's.
 - Run the tests using `composer test`. Test must cover the TYPO3 integration.
-- Run E2E (Playwright) tests using `Build/runTests.sh -s e2e`. This spins up MySQL, TYPO3, and Playwright in Docker containers automatically.
+- Run E2E (Playwright) tests using `Build/runTests.sh -s e2e`. This spins up MySQL, TYPO3, and Playwright in Docker containers automatically. If Docker is unavailable, the script falls back to a local mode (host PHP + SQLite + local Playwright); this can also be forced with `-n` / `--no-docker`.
 - Read the TECHNICAL_OVERVIEW.md and documentation in the Documentation/Architecture/ folder to understand important design decisions and implementation details.
 - The Tools for LLMs don't need backwards compatibility. We can completely change parameters or even their names if it better describes them without it being a breaking change.
 - Every Tool (that uses the database) must use TYPO3 Workspaces explicitly. Live data must never be directly edited. However: Ensure that the workspaces are invisible to the MCP client, for example, by only exposing the live id.

@@ -9,7 +9,9 @@ use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use Hn\McpServer\Service\BackendUserContextService;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\CallToolResult;
@@ -159,6 +161,8 @@ class McpTestCommand extends Command
             // Set admin flag directly since setTemporaryAdminFlag doesn't exist in TYPO3 v12
             $beUser->user['admin'] = 1;
             $beUser->user['uid'] = 1; // Add a UID for the fake user to prevent DataHandler errors
+            GeneralUtility::makeInstance(BackendUserContextService::class)
+                ->restoreStoredUserConfiguration($beUser);
             $GLOBALS['BE_USER'] = $beUser;
             
             // Set up workspace context
@@ -180,7 +184,8 @@ class McpTestCommand extends Command
             $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
         }
     }
-    
+
+
     /**
      * Ensure TCA is loaded
      */

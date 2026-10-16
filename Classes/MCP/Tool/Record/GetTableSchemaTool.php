@@ -6,7 +6,6 @@ namespace Hn\McpServer\MCP\Tool\Record;
 
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
-use TYPO3\CMS\Backend\Utility\BackendUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
 use Hn\McpServer\Service\TableAccessService;
 
@@ -41,6 +40,12 @@ class GetTableSchemaTool extends AbstractRecordTool
                             'If omitted, shows fields for the first available type and lists all available types. ' .
                             'Call again with a different type to see its fields. Types may be filtered by backend TSconfig (some types hidden from the list).',
                     ],
+                    'pid' => [
+                        'type' => 'integer',
+                        'description' => 'Page ID to resolve TSconfig context against. Different pages may allow different record types ' .
+                            'or hide different fields based on page TSconfig. Pass the page where the record will live to get an accurate schema. ' .
+                            'If omitted, the first configured site\'s root page is used so project-wide TSconfig is still applied.',
+                    ],
                 ],
                 'required' => ['table'],
             ],
@@ -57,24 +62,25 @@ class GetTableSchemaTool extends AbstractRecordTool
     protected function doExecute(array $params): CallToolResult
     {
         $table = $params['table'] ?? '';
-        
+
         if (empty($table)) {
             throw new \InvalidArgumentException('Table parameter is required');
         }
-        
+
         // Validate table access using TableAccessService
         $this->ensureTableAccess($table, 'read');
-        
+
         $filterType = $params['type'] ?? '';
-        
-        $result = $this->generateTableSchema($table, $filterType);
+        $pid = isset($params['pid']) ? (int)$params['pid'] : null;
+
+        $result = $this->generateTableSchema($table, $filterType, $pid);
         return $this->createSuccessResult($result);
     }
-    
+
     /**
      * Generate a table schema as text
      */
-    protected function generateTableSchema(string $table, string $filterType = ''): string
+    protected function generateTableSchema(string $table, string $filterType = '', ?int $pid = null): string
     {
         $result = "";
         
@@ -89,9 +95,6 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         $result .= "Type: content\n";
         $result .= "Read-Only: " . ($accessInfo['read_only'] ? "Yes" : "No") . "\n";
-        if (!empty($accessInfo['restrictions'])) {
-            $result .= "Restrictions: " . implode(', ', $accessInfo['restrictions']) . "\n";
-        }
         $result .= "\n";
         
         // Add control fields section - only the most important ones
@@ -121,24 +124,17 @@ class GetTableSchemaTool extends AbstractRecordTool
         
         $result .= "\n\n";
         
-        // Get the type field using TableAccessService
-        $typeField = $this->tableAccessService->getTypeFieldName($table);
-        $excludeTypes = !empty($typeField) ? $this->getRemovedTypesByTSconfig($table, $typeField) : [];
-        
-        // Get available types using TableAccessService
-        $types = $this->tableAccessService->getAvailableTypes($table);
-        
-        // Apply label translations and exclusions
+        // Get available types using TableAccessService. The service runs the
+        // FormDataCompiler pipeline internally so TCEFORM removeItems / addItems
+        // and TCEMAIN.disableCTypes are already applied at the resolved pid.
+        $types = $this->tableAccessService->getAvailableTypes($table, $pid);
+
+        // Apply label translations
         $processedTypes = [];
         foreach ($types as $value => $label) {
-            // Skip excluded types
-            if (in_array($value, $excludeTypes)) {
-                continue;
-            }
-            
             $processedTypes[$value] = TableAccessService::translateLabel($label);
         }
-        
+
         $types = $processedTypes;
         
         // If no types are available after filtering, show an error
@@ -151,13 +147,27 @@ class GetTableSchemaTool extends AbstractRecordTool
             return "ERROR: The requested type '$filterType' does not exist or has been excluded. Available types are: " . implode(', ', array_keys($types));
         }
         
-        // If no specific type is requested, use the first available type
+        // If no specific type is requested, use the first type that actually has a
+        // showitem layout. Some tables (e.g. sys_file) only define a layout for one
+        // type value while listing several in the type field's items list — picking
+        // the first item alphabetically would land on a type without a form.
         if (empty($filterType)) {
-            // Skip dividers when selecting the default type
+            $tcaTypes = $GLOBALS['TCA'][$table]['types'] ?? [];
             foreach ($types as $typeValue => $typeLabel) {
-                if ($typeValue !== '--div--') {
+                if ($typeValue === '--div--') {
+                    continue;
+                }
+                if (!empty($tcaTypes[$typeValue]['showitem'])) {
                     $filterType = (string)$typeValue;
                     break;
+                }
+            }
+            if (empty($filterType)) {
+                foreach ($types as $typeValue => $typeLabel) {
+                    if ($typeValue !== '--div--') {
+                        $filterType = (string)$typeValue;
+                        break;
+                    }
                 }
             }
         }
@@ -174,34 +184,35 @@ class GetTableSchemaTool extends AbstractRecordTool
         $result .= "FIELDS:\n";
         $result .= "-------\n";
         
-        // Get available fields using TableAccessService (includes access control)
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $filterType);
+        // Get available fields using TableAccessService (includes access control).
+        // Pass the pid so TCEFORM.[table].[field].disabled is resolved at the
+        // correct page context.
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $filterType, $pid);
         
         if (empty($availableFields)) {
             $result .= "No accessible fields defined for this type.\n";
             return $result;
         }
         
-        // Get the type configuration to understand field organization (tabs, palettes)
+        // Get the type configuration to understand field organization (tabs, palettes).
+        // showitem may be empty for tables where the chosen type has no backend form
+        // (e.g. sys_file's "unknown" type, or any read-only table). In that case we
+        // skip showitem-based grouping and let the "Additional Fields" section below
+        // emit every accessible field — readers still need to see what's available.
         $typeConfig = $GLOBALS['TCA'][$table]['types'][$filterType] ?? [];
         $showitem = $typeConfig['showitem'] ?? '';
-        
-        if (empty($showitem)) {
-            $result .= "No field layout defined for this type.\n";
-            return $result;
-        }
-        
-        // Parse the showitem string for organization info
+
+        // Parse the showitem string for organization info (empty showitem yields no items)
         $fields = GeneralUtility::trimExplode(',', $showitem, true);
-        
+
         // Group fields by tab
         $tabFields = [];
         $currentTab = 'General';
-        
+
         foreach ($fields as $item) {
             $itemParts = GeneralUtility::trimExplode(';', $item, true);
             $fieldName = $itemParts[0];
-            
+
             // Check if this is a tab
             if ($fieldName === '--div--') {
                 $tabLabel = $itemParts[1] ?? 'Tab';
@@ -211,128 +222,169 @@ class GetTableSchemaTool extends AbstractRecordTool
                 $tabFields[$currentTab][] = $item;
             }
         }
-        
+
         // Process each tab's fields
         $processedFields = [];
-        
+
         foreach ($tabFields as $tabName => $tabFieldsList) {
-            // Translate the tab name
-            $translatedTabName = TableAccessService::translateLabel($tabName);
-            $result .= "  (" . $translatedTabName . "):\n";
-            
+            $tabContent = '';
+
             foreach ($tabFieldsList as $item) {
                 $itemParts = GeneralUtility::trimExplode(';', $item, true);
                 $fieldName = $itemParts[0];
-                
+
                 // Check if this is a palette
                 if ($fieldName === '--palette--' || strpos($fieldName, '--palette--') === 0) {
                     // Extract palette name from the parts
                     $paletteParts = explode(';', $item);
                     $paletteName = $paletteParts[2] ?? '';
                     $paletteLabel = $paletteParts[1] ?? '';
-                    
+
                     // Translate the palette label if it's a language reference
                     if (!empty($paletteLabel)) {
                         $paletteLabel = TableAccessService::translateLabel($paletteLabel);
                     }
-                    
+
                     // Use palette name as fallback if label is empty
                     if (empty($paletteLabel)) {
                         $paletteLabel = ucfirst(str_replace('_', ' ', $paletteName));
                     }
-                    
+
                     if (!empty($paletteName) && isset($GLOBALS['TCA'][$table]['palettes'][$paletteName])) {
-                        // Add the palette to the current tab's fields
-                        $result .= "    ┌─ (" . $paletteLabel . ")\n";
-                        
                         // Get the palette fields
                         $paletteFields = $GLOBALS['TCA'][$table]['palettes'][$paletteName]['showitem'] ?? '';
                         $paletteFieldsList = GeneralUtility::trimExplode(',', $paletteFields, true);
-                        
-                        // Process each palette field
-                        $lastPaletteField = end($paletteFieldsList);
-                        reset($paletteFieldsList);
-                        
+
+                        // Pre-filter to only items whose fields are accessible so we
+                        // don't emit a palette header with no children.
+                        $accessiblePaletteItems = [];
                         foreach ($paletteFieldsList as $paletteItem) {
                             $paletteItemParts = GeneralUtility::trimExplode(';', $paletteItem, true);
                             $paletteFieldName = $paletteItemParts[0];
-                            
-                            // Skip special fields
                             if ($paletteFieldName === '--linebreak--') {
                                 continue;
                             }
-                            
-                            // Add the field to the result if it's accessible
                             if (isset($availableFields[$paletteFieldName])) {
-                                $fieldConfig = $availableFields[$paletteFieldName];
-                                
-                                // Mark as processed
-                                $processedFields[$paletteFieldName] = true;
-                                
-                                // Add the field to the result with proper indentation
-                                $prefix = ($paletteItem === $lastPaletteField) ? "└─ " : "├─ ";
-                                $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $paletteFieldName;
-                                // TcaSchemaFactory returns flattened config where type is at top level
-                                $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
-                                $result .= "    " . $prefix . $paletteFieldName . " (" . $fieldLabel . "): " . $fieldType;
-                                
-                                // Add field details inline
-                                $this->addFieldDetailsInline($result, $fieldConfig, $paletteFieldName, $table, $filterType);
-                                $result .= "\n";
+                                $accessiblePaletteItems[] = $paletteItem;
                             }
+                        }
+
+                        if (empty($accessiblePaletteItems)) {
+                            continue;
+                        }
+
+                        $tabContent .= "    ┌─ (" . $paletteLabel . ")\n";
+
+                        $lastPaletteField = end($accessiblePaletteItems);
+                        reset($accessiblePaletteItems);
+
+                        foreach ($accessiblePaletteItems as $paletteItem) {
+                            $paletteItemParts = GeneralUtility::trimExplode(';', $paletteItem, true);
+                            $paletteFieldName = $paletteItemParts[0];
+                            $fieldConfig = $availableFields[$paletteFieldName];
+
+                            // Mark as processed
+                            $processedFields[$paletteFieldName] = true;
+
+                            // Add the field to the result with proper indentation
+                            $prefix = ($paletteItem === $lastPaletteField) ? "└─ " : "├─ ";
+                            $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $paletteFieldName;
+                            // TcaSchemaFactory returns flattened config where type is at top level
+                            $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
+                            $tabContent .= "    " . $prefix . $paletteFieldName . " (" . $fieldLabel . "): " . $fieldType;
+
+                            // Add field details inline
+                            $this->addFieldDetailsInline($tabContent, $fieldConfig, $paletteFieldName, $table, $filterType, $pid);
+                            $tabContent .= "\n";
                         }
                     }
                 } else {
                     // Regular field
                     if (isset($availableFields[$fieldName])) {
                         $fieldConfig = $availableFields[$fieldName];
-                        
+
                         // Mark as processed
                         $processedFields[$fieldName] = true;
-                        
+
                         // Add the field to the result
                         $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                         // TcaSchemaFactory returns flattened config where type is at top level
                         $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
-                        $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
-                        
+                        $tabContent .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
+
                         // Add field details inline
-                        $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType);
-                        $result .= "\n";
+                        $this->addFieldDetailsInline($tabContent, $fieldConfig, $fieldName, $table, $filterType, $pid);
+                        $tabContent .= "\n";
                     }
                 }
             }
+
+            // Skip tabs that have no accessible fields after filtering.
+            if ($tabContent === '') {
+                continue;
+            }
+
+            $translatedTabName = TableAccessService::translateLabel($tabName);
+            $result .= "  (" . $translatedTabName . "):\n";
+            $result .= $tabContent;
         }
         
-        // Check for fields that are available but not in showitem (e.g., dynamically added fields like pi_flexform for plugins)
-        $unassignedFields = [];
+        // Fields advertised by the schema but not present in the type's showitem
+        // form layout fall here. Two real cases:
+        //   - Dynamically wired-in fields like pi_flexform on tt_content `list`
+        //     plugins, which the plugin registration adds outside the default
+        //     showitem string.
+        //   - Tables whose showitem is sparse (e.g. sys_file's only-defined type
+        //     lists three form fields while the LLM cares about a dozen columns).
+        // Computed read-only fields (mcp.computed=true) registered by
+        // AfterSchemaLoadEvent listeners get their own labelled section so the
+        // LLM knows they originate from outside the table and cannot be written.
+        $additionalFields = [];
+        $computedFields = [];
         foreach ($availableFields as $fieldName => $fieldConfig) {
-            if (!isset($processedFields[$fieldName])) {
-                $unassignedFields[$fieldName] = $fieldConfig;
+            if (isset($processedFields[$fieldName])) {
+                continue;
+            }
+            if (!empty($fieldConfig['mcp']['computed'])) {
+                $computedFields[$fieldName] = $fieldConfig;
+            } else {
+                $additionalFields[$fieldName] = $fieldConfig;
             }
         }
-        
-        // If there are unassigned fields, add them to a special section
-        if (!empty($unassignedFields)) {
+
+        if (!empty($additionalFields)) {
             $result .= "  (Additional Fields):\n";
-            foreach ($unassignedFields as $fieldName => $fieldConfig) {
+            foreach ($additionalFields as $fieldName => $fieldConfig) {
                 $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
                 $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
                 $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
-                
+
                 // Add field details inline
-                $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType);
+                $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType, $pid);
                 $result .= "\n";
             }
         }
-        
+
+        if (!empty($computedFields)) {
+            $result .= "  (Computed read-only — included by default, cannot be written):\n";
+            foreach ($computedFields as $fieldName => $fieldConfig) {
+                $fieldLabel = isset($fieldConfig['label']) ? TableAccessService::translateLabel($fieldConfig['label']) : $fieldName;
+                $fieldType = $fieldConfig['type'] ?? $fieldConfig['config']['type'] ?? 'unknown';
+                $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
+                if (!empty($fieldConfig['description'])) {
+                    $result .= " — " . TableAccessService::translateLabel($fieldConfig['description']);
+                }
+                $result .= "\n";
+            }
+        }
+
         return $result;
     }
     
     /**
      * Add field details inline
      */
-    protected function addFieldDetailsInline(string &$result, array $fieldConfig, string $fieldName, string $table, string $filterType = ''): void
+    protected function addFieldDetailsInline(string &$result, array $fieldConfig, string $fieldName, string $table, string $filterType = '', ?int $pid = null): void
     {
         // Handle both flattened (from TcaSchemaFactory) and nested (traditional TCA) structures
         $config = $fieldConfig['config'] ?? $fieldConfig;
@@ -344,7 +396,7 @@ class GetTableSchemaTool extends AbstractRecordTool
             $this->addFlexFormIdentifiers($result, $config, $table, $fieldName, $filterType);
         } else {
             // For other field types, use the TcaFormattingUtility
-            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName, $table);
+            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName, $table, $pid);
         }
     }
     
@@ -354,89 +406,56 @@ class GetTableSchemaTool extends AbstractRecordTool
     protected function addFlexFormIdentifiers(string &$result, array $config, string $table, string $fieldName, string $filterType = ''): void
     {
         $result .= " (FlexForm)";
-        
-        // Get available FlexForm identifiers
-        if (isset($config['ds']) && is_array($config['ds'])) {
-            $identifiers = array_keys($config['ds']);
-            
-            // Filter out default identifier
-            $identifiers = array_filter($identifiers, function($id) {
-                return $id !== 'default';
-            });
-            
-            // Filter identifiers based on the requested type
-            if (!empty($filterType) && !empty($config['ds_pointerField'])) {
-                $pointerFields = GeneralUtility::trimExplode(',', $config['ds_pointerField'], true);
-                
-                // Filter identifiers that match the current type
-                // Either directly or with a wildcard
-                $filteredIdentifiers = [];
-                foreach ($identifiers as $id) {
-                    if (strpos($id, ',') !== false) {
-                        $parts = explode(',', $id);
-                        // Check if the identifier matches the current type
-                        // Either directly or with a wildcard
-                        if (($parts[0] === '*' && $parts[1] === $filterType) || 
-                            ($parts[1] === '*' && $parts[0] === $filterType) ||
-                            ($parts[0] === $filterType) ||
-                            ($parts[1] === $filterType)) {
-                            $filteredIdentifiers[] = $id;
-                        }
-                    } elseif ($id === $filterType) {
-                        $filteredIdentifiers[] = $id;
-                    }
-                }
-                
-                // Use filtered identifiers if any were found
-                if (!empty($filteredIdentifiers)) {
-                    $identifiers = $filteredIdentifiers;
-                }
-            }
-            
-            if (!empty($identifiers)) {
-                $result .= " [Identifiers: " . implode(', ', $identifiers) . "]";
+
+        if (empty($config['ds'])) {
+            return;
+        }
+
+        // TYPO3 14: a single DataStructure is now stored as a string on the
+        // field's `ds` config (via columnsOverrides). Multiple DataStructures
+        // are still represented as an array keyed by identifier.
+        if (is_string($config['ds'])) {
+            // When resolved from a sub-schema's columnsOverrides, the DS
+            // applies to that record type. Use the filter type (the CType)
+            // as identifier so it can be fed into GetFlexFormSchema.
+            if (!empty($filterType)) {
+                $result .= " [Identifiers: " . $filterType . "]";
                 $result .= " (Use GetFlexFormSchema tool with these identifiers for details)";
+            } else {
+                $result .= " (Use GetFlexFormSchema tool with the record CType as identifier)";
+            }
+            return;
+        }
+
+        if (!is_array($config['ds'])) {
+            return;
+        }
+
+        $identifiers = array_values(array_filter(array_keys($config['ds']), fn($id) => $id !== 'default'));
+
+        if (!empty($filterType)) {
+            $filtered = array_values(array_filter(
+                $identifiers,
+                fn($id) => $id === $filterType
+                    || str_contains((string)$id, ',' . $filterType)
+                    || str_contains((string)$id, $filterType . ',')
+            ));
+            if (!empty($filtered)) {
+                $identifiers = $filtered;
             }
         }
-        
-        // Add ds_pointerField information if available
-        if (isset($config['ds_pointerField'])) {
+
+        if (!empty($identifiers)) {
+            $result .= " [Identifiers: " . implode(', ', $identifiers) . "]";
+            $result .= " (Use GetFlexFormSchema tool with these identifiers for details)";
+        }
+
+        // TYPO3 13: surface the ds_pointerField configuration so callers know
+        // which fields determine the DS lookup. Removed in TYPO3 14.
+        if (!empty($config['ds_pointerField'])) {
             $result .= " [ds_pointerField: " . $config['ds_pointerField'] . "]";
         }
     }
     
     
-    /**
-     * Get types that are removed by TSconfig
-     * This uses the same logic as TcaSelectItems to determine which types are restricted
-     */
-    protected function getRemovedTypesByTSconfig(string $table, string $typeField): array
-    {
-        if (empty($table) || empty($typeField)) {
-            return [];
-        }
-        
-        $removedTypes = [];
-        
-        // Get TSconfig for the current page
-        $TSconfig = BackendUtility::getPagesTSconfig(0);
-        
-        // Check TCEFORM.[table].[field].removeItems
-        $fieldTSconfig = $TSconfig['TCEFORM.'][$table . '.'][$typeField . '.']['removeItems'] ?? '';
-        if (!empty($fieldTSconfig)) {
-            $removedTypes = GeneralUtility::trimExplode(',', $fieldTSconfig, true);
-        }
-        
-        // For tt_content, also check TCEMAIN.table.tt_content.disableCTypes
-        if ($table === 'tt_content' && $typeField === 'CType') {
-            $disableCTypes = $TSconfig['TCEMAIN.']['table.']['tt_content.']['disableCTypes'] ?? '';
-            if (!empty($disableCTypes)) {
-                $disabledTypes = GeneralUtility::trimExplode(',', $disableCTypes, true);
-                $removedTypes = array_merge($removedTypes, $disabledTypes);
-            }
-        }
-        
-        return $removedTypes;
-    }
-
 }

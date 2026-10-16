@@ -14,7 +14,14 @@ use Psr\Http\Message\ServerRequestInterface;
  */
 class OAuthService
 {
-    private const CLIENT_ID = 'typo3-mcp-server';
+    public const WELL_KNOWN_CLIENT_ID = 'typo3-mcp-server';
+    /**
+     * Sentinel used only by the seeded well-known client to mean "accept any
+     * loopback URI" (RFC 8252 native app pattern). Dynamic registrations
+     * cannot store this value.
+     */
+    public const REDIRECT_URI_LOOPBACK_SENTINEL = 'loopback:*';
+    private const CLIENTS_TABLE = 'tx_mcpserver_oauth_clients';
     private const CODE_EXPIRY_SECONDS = 600; // 10 minutes
     private const TOKEN_EXPIRY_SECONDS = 2592000; // 30 days
 
@@ -24,7 +31,7 @@ class OAuthService
     public function generateAuthorizationUrl(string $baseUrl, string $clientName = '', string $redirectUri = '', string $codeChallenge = '', string $challengeMethod = 'S256', string $state = ''): string
     {
         $params = [
-            'client_id' => self::CLIENT_ID,
+            'client_id' => self::WELL_KNOWN_CLIENT_ID,
             'response_type' => 'code',
             'client_name' => $clientName,
         ];
@@ -46,9 +53,14 @@ class OAuthService
     }
 
     /**
-     * Create authorization code for authenticated user
+     * Create authorization code for authenticated user.
+     *
+     * The $clientId binds the issued code to the registered OAuth client per
+     * RFC 6749 §10.5; the token endpoint must reject any redemption by a
+     * different client. $clientName is the free-text display label kept for
+     * audit on the access token.
      */
-    public function createAuthorizationCode(int $beUserId, string $clientName, string $redirectUri = '', string $pkceChallenge = '', string $challengeMethod = 'S256'): string
+    public function createAuthorizationCode(int $beUserId, string $clientName, string $redirectUri = '', string $pkceChallenge = '', string $challengeMethod = 'S256', string $clientId = ''): string
     {
         $code = $this->generateSecureToken();
         $expires = time() + self::CODE_EXPIRY_SECONDS;
@@ -64,6 +76,7 @@ class OAuthService
                 'crdate' => time(),
                 'code' => $code,
                 'be_user_uid' => $beUserId,
+                'client_id' => $clientId,
                 'client_name' => $clientName,
                 'pkce_challenge' => $pkceChallenge,
                 'pkce_challenge_method' => $challengeMethod,
@@ -76,9 +89,14 @@ class OAuthService
     }
 
     /**
-     * Exchange authorization code for access token
+     * Exchange authorization code for access token.
+     *
+     * If $clientId is provided and the code was issued to a specific client,
+     * the two MUST match (RFC 6749 §10.5). A code without a stored client_id
+     * (legacy data from before code-to-client binding was introduced) is
+     * accepted regardless — those expire within {@see self::CODE_EXPIRY_SECONDS}.
      */
-    public function exchangeCodeForToken(string $code, ?string $codeVerifier = null, ?ServerRequestInterface $request = null): ?array
+    public function exchangeCodeForToken(string $code, ?string $codeVerifier = null, ?ServerRequestInterface $request = null, ?string $redirectUri = null, ?string $clientId = null): ?array
     {
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('tx_mcpserver_oauth_codes');
@@ -97,6 +115,23 @@ class OAuthService
 
         if (!$authCode) {
             return null;
+        }
+
+        // RFC 6749 §10.5: a code issued to one client must not be redeemable
+        // by a different client. Empty stored client_id means the code pre-dates
+        // binding (during the upgrade window) and is accepted.
+        if (!empty($authCode['client_id'])) {
+            if ($clientId === null || $clientId !== $authCode['client_id']) {
+                return null;
+            }
+        }
+
+        // RFC 6749 §4.1.3: if a redirect_uri was used in the auth request, the token
+        // request MUST include the same value. If none was used, accept missing.
+        if (!empty($authCode['redirect_uri'])) {
+            if ($redirectUri === null || $redirectUri !== $authCode['redirect_uri']) {
+                return null;
+            }
         }
 
         // Verify PKCE: if a challenge was set, the verifier is mandatory
@@ -124,6 +159,29 @@ class OAuthService
             $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
         }
 
+        // Atomically consume the authorization code BEFORE issuing the token, so
+        // concurrent redemption attempts with the same code can't both mint a
+        // token (RFC 6749 §4.1.2 one-time-use requirement). Only the request
+        // that actually removes the row proceeds.
+        $consumed = $connection->delete(
+            'tx_mcpserver_oauth_codes',
+            ['uid' => $authCode['uid']]
+        );
+        if ($consumed === 0) {
+            return null;
+        }
+
+        // Resolve the issuing client so the token is linked to it for cascade
+        // revocation and observability.
+        $clientUid = 0;
+        if (!empty($authCode['client_id'])) {
+            $boundClient = $this->getClient((string)$authCode['client_id']);
+            if ($boundClient !== null) {
+                $clientUid = (int)$boundClient['uid'];
+                $this->touchClient($clientUid);
+            }
+        }
+
         // Create access token
         $tokenConnection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('tx_mcpserver_access_tokens');
@@ -136,6 +194,7 @@ class OAuthService
                 'crdate' => time(),
                 'token' => $this->hashToken($accessToken),
                 'be_user_uid' => $authCode['be_user_uid'],
+                'client_uid' => $clientUid,
                 'client_name' => $authCode['client_name'],
                 'expires' => $expires,
                 'last_used' => time(),
@@ -143,12 +202,6 @@ class OAuthService
                 'last_used_ip' => $clientIp,
                 'token_version' => 1,
             ]
-        );
-
-        // Delete the authorization code (one-time use)
-        $connection->delete(
-            'tx_mcpserver_oauth_codes',
-            ['uid' => $authCode['uid']]
         );
 
         return [
@@ -199,6 +252,14 @@ class OAuthService
             return null;
         }
 
+        // Cascade revocation: a token whose issuing client has been removed
+        // is no longer valid. Tokens with client_uid=0 are legacy (pre-binding)
+        // and are accepted as before.
+        $clientUid = (int)($tokenRecord['client_uid'] ?? 0);
+        if ($clientUid > 0 && !$this->clientUidIsActive($clientUid)) {
+            return null;
+        }
+
         // Auto-upgrade version-0 (plaintext) tokens to hashed on successful validation.
         // Best-effort: if the upgrade fails, authentication still succeeds and the
         // upgrade will be retried on next validation or handled by the upgrade wizard.
@@ -239,6 +300,7 @@ class OAuthService
 
         return [
             'be_user_uid' => (int)$tokenRecord['be_user_uid'],
+            'client_uid' => (int)($tokenRecord['client_uid'] ?? 0),
             'client_name' => $tokenRecord['client_name'],
             'token_uid' => (int)$tokenRecord['uid'],
         ];
@@ -328,58 +390,465 @@ class OAuthService
             ['deleted' => 1, 'tstamp' => $currentTime],
             ['expires' => $tokenConnection->createQueryBuilder()->expr()->lt('expires', $currentTime)]
         );
+
+        $this->cleanupStaleClients($currentTime);
     }
 
     /**
-     * Register a new OAuth client dynamically
+     * Soft-delete stale dynamically registered clients.
+     *
+     * Some MCP clients (notably claude.ai) register a NEW client on every fresh
+     * connection, so tx_mcpserver_oauth_clients grows unboundedly without cleanup.
+     * A client is stale when it has seen no activity for a full token lifetime
+     * AND holds no live token — deleting a client cascade-revokes its tokens
+     * (see {@see self::validateToken()}), so active clients must be kept.
+     * The well-known client is never removed.
+     */
+    private function cleanupStaleClients(int $currentTime): void
+    {
+        $threshold = $currentTime - self::TOKEN_EXPIRY_SECONDS;
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable(self::CLIENTS_TABLE);
+        $qb = $connection->createQueryBuilder();
+        $candidateUids = $qb
+            ->select('uid')
+            ->from(self::CLIENTS_TABLE)
+            ->where(
+                $qb->expr()->neq('client_id', $qb->createNamedParameter(self::WELL_KNOWN_CLIENT_ID)),
+                $qb->expr()->eq('deleted', $qb->createNamedParameter(0)),
+                $qb->expr()->lt('crdate', $qb->createNamedParameter($threshold)),
+                $qb->expr()->lt('last_used', $qb->createNamedParameter($threshold))
+            )
+            ->executeQuery()
+            ->fetchFirstColumn();
+        $candidateUids = array_map('intval', $candidateUids);
+
+        if (empty($candidateUids)) {
+            return;
+        }
+
+        $tokenConnection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens');
+        $tqb = $tokenConnection->createQueryBuilder();
+        $activeUids = $tqb
+            ->select('client_uid')
+            ->distinct()
+            ->from('tx_mcpserver_access_tokens')
+            ->where(
+                $tqb->expr()->in('client_uid', $tqb->createNamedParameter($candidateUids, \Doctrine\DBAL\ArrayParameterType::INTEGER)),
+                $tqb->expr()->eq('deleted', $tqb->createNamedParameter(0)),
+                $tqb->expr()->gt('expires', $tqb->createNamedParameter($currentTime))
+            )
+            ->executeQuery()
+            ->fetchFirstColumn();
+        $activeUids = array_map('intval', $activeUids);
+
+        $staleUids = array_values(array_diff($candidateUids, $activeUids));
+        if (empty($staleUids)) {
+            return;
+        }
+
+        $updateQb = $connection->createQueryBuilder();
+        $updateQb
+            ->update(self::CLIENTS_TABLE)
+            ->where($updateQb->expr()->in('uid', $updateQb->createNamedParameter($staleUids, \Doctrine\DBAL\ArrayParameterType::INTEGER)))
+            ->set('deleted', 1)
+            ->set('tstamp', $currentTime)
+            ->executeStatement();
+    }
+
+    /**
+     * Record client activity so {@see self::cleanupStaleClients()} does not
+     * remove clients that are still in use. Best-effort.
+     */
+    private function touchClient(int $clientUid): void
+    {
+        if ($clientUid <= 0) {
+            return;
+        }
+        try {
+            GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable(self::CLIENTS_TABLE)
+                ->update(
+                    self::CLIENTS_TABLE,
+                    ['last_used' => time(), 'tstamp' => time()],
+                    ['uid' => $clientUid]
+                );
+        } catch (\Throwable $e) {
+            // Non-fatal: activity tracking must not break the token flow
+        }
+    }
+
+    /**
+     * Register a new OAuth client dynamically (RFC 7591).
+     *
+     * The plain client_secret (if any) is returned to the caller exactly once
+     * and only the SHA-256 hash is persisted. Public clients (the default for
+     * MCP, since they use PKCE) do not receive a secret.
      */
     public function registerClient(array $clientData): array
     {
-        // Generate client credentials
-        $clientId = 'mcp_client_' . bin2hex(random_bytes(16));
-        $clientSecret = bin2hex(random_bytes(32));
-        
-        // For now, store in database (could be enhanced later)
-        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('tx_mcpserver_oauth_clients');
+        $authMethod = $clientData['token_endpoint_auth_method'] ?? 'none';
+        if (!in_array($authMethod, ['none', 'client_secret_post', 'client_secret_basic'], true)) {
+            $authMethod = 'none';
+        }
 
-        // Check if table exists, if not create it on the fly
+        $redirectUris = $clientData['redirect_uris'] ?? [];
+        if (!is_array($redirectUris)) {
+            $redirectUris = [];
+        }
+        $redirectUris = array_values(array_filter(array_map(
+            fn($v) => is_string($v) ? trim($v) : '',
+            $redirectUris
+        )));
+        // Reject sentinels reserved for the seeded well-known client
+        $reserved = ['*', self::REDIRECT_URI_LOOPBACK_SENTINEL];
+        $redirectUris = array_values(array_filter($redirectUris, fn($v) => !in_array($v, $reserved, true)));
+        if (empty($redirectUris)) {
+            $redirectUris = ['http://localhost'];
+        }
+        foreach ($redirectUris as $uri) {
+            $parts = parse_url($uri);
+            if (!is_array($parts)
+                || empty($parts['scheme'])
+                || empty($parts['host'])
+                || !in_array(strtolower($parts['scheme']), ['http', 'https'], true)
+            ) {
+                throw new \InvalidArgumentException('Invalid redirect_uri: ' . $uri);
+            }
+        }
+
+        $grantTypes = $clientData['grant_types'] ?? ['authorization_code'];
+        if (!is_array($grantTypes) || empty($grantTypes)) {
+            $grantTypes = ['authorization_code'];
+        }
+
+        $clientId = 'mcp_' . bin2hex(random_bytes(16));
+        $plainSecret = '';
+        $storedSecret = '';
+        if ($authMethod !== 'none') {
+            $plainSecret = bin2hex(random_bytes(32));
+            $storedSecret = $this->hashToken($plainSecret);
+        }
+
+        $clientName = (string)($clientData['client_name'] ?? 'MCP Client');
+        $scope = (string)($clientData['scope'] ?? 'mcp_access');
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable(self::CLIENTS_TABLE);
+
+        $connection->insert(
+            self::CLIENTS_TABLE,
+            [
+                'pid' => 0,
+                'tstamp' => time(),
+                'crdate' => time(),
+                'client_id' => $clientId,
+                'client_secret' => $storedSecret,
+                'client_name' => $clientName,
+                'redirect_uris' => json_encode($redirectUris),
+                'grant_types' => json_encode($grantTypes),
+                'scope' => $scope,
+                'token_endpoint_auth_method' => $authMethod,
+            ]
+        );
+
+        $response = [
+            'client_id' => $clientId,
+            'client_id_issued_at' => time(),
+            'client_name' => $clientName,
+            'redirect_uris' => $redirectUris,
+            'grant_types' => $grantTypes,
+            'response_types' => ['code'],
+            'scope' => $scope,
+            'token_endpoint_auth_method' => $authMethod,
+        ];
+        if ($plainSecret !== '') {
+            $response['client_secret'] = $plainSecret;
+            // RFC 7591 §3.2.1: REQUIRED when a client_secret is issued; 0 = never expires
+            $response['client_secret_expires_at'] = 0;
+        }
+        return $response;
+    }
+
+    /**
+     * Look up a registered client by its public client_id.
+     * Returns a normalized array or null if no matching client is registered.
+     */
+    public function getClient(string $clientId): ?array
+    {
+        if ($clientId === '') {
+            return null;
+        }
+
+        $row = $this->fetchClientRow($clientId);
+        if (!$row && $clientId === self::WELL_KNOWN_CLIENT_ID) {
+            // Self-heal on installations that pre-date the clients table or upgrade wizard
+            $this->ensureWellKnownClient();
+            $row = $this->fetchClientRow($clientId);
+        }
+        if (!$row) {
+            return null;
+        }
+
+        $redirectUris = json_decode((string)($row['redirect_uris'] ?? ''), true);
+        $grantTypes = json_decode((string)($row['grant_types'] ?? ''), true);
+
+        return [
+            'uid' => (int)$row['uid'],
+            'client_id' => (string)$row['client_id'],
+            'client_name' => (string)$row['client_name'],
+            'redirect_uris' => is_array($redirectUris) ? $redirectUris : [],
+            'grant_types' => is_array($grantTypes) ? $grantTypes : ['authorization_code'],
+            'scope' => (string)$row['scope'],
+            'token_endpoint_auth_method' => (string)($row['token_endpoint_auth_method'] ?? 'none'),
+            'client_secret_hash' => (string)($row['client_secret'] ?? ''),
+        ];
+    }
+
+    private function clientUidIsActive(int $clientUid): bool
+    {
+        if ($clientUid <= 0) {
+            return false;
+        }
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable(self::CLIENTS_TABLE);
+        $qb = $connection->createQueryBuilder();
+        $count = (int)$qb
+            ->count('uid')
+            ->from(self::CLIENTS_TABLE)
+            ->where(
+                $qb->expr()->eq('uid', $qb->createNamedParameter($clientUid)),
+                $qb->expr()->eq('deleted', $qb->createNamedParameter(0))
+            )
+            ->executeQuery()
+            ->fetchOne();
+        return $count > 0;
+    }
+
+    private function fetchClientRow(string $clientId): ?array
+    {
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable(self::CLIENTS_TABLE);
+
+        $qb = $connection->createQueryBuilder();
+        $row = $qb
+            ->select('*')
+            ->from(self::CLIENTS_TABLE)
+            ->where(
+                $qb->expr()->eq('client_id', $qb->createNamedParameter($clientId)),
+                $qb->expr()->eq('deleted', $qb->createNamedParameter(0))
+            )
+            ->setMaxResults(1)
+            ->executeQuery()
+            ->fetchAssociative();
+
+        return $row ?: null;
+    }
+
+    /**
+     * Batch-load registered clients by their uids. Returns a map [uid => clientArray]
+     * with the same shape as {@see self::getClient()}. Missing or deleted clients
+     * are simply absent from the result.
+     */
+    public function getClientsByUids(array $uids): array
+    {
+        $uids = array_values(array_unique(array_filter(array_map('intval', $uids))));
+        if (empty($uids)) {
+            return [];
+        }
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable(self::CLIENTS_TABLE);
+        $qb = $connection->createQueryBuilder();
+        $rows = $qb
+            ->select('*')
+            ->from(self::CLIENTS_TABLE)
+            ->where(
+                $qb->expr()->in('uid', $qb->createNamedParameter($uids, \Doctrine\DBAL\ArrayParameterType::INTEGER)),
+                $qb->expr()->eq('deleted', $qb->createNamedParameter(0))
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        $result = [];
+        foreach ($rows as $row) {
+            $redirectUris = json_decode((string)($row['redirect_uris'] ?? ''), true);
+            $grantTypes = json_decode((string)($row['grant_types'] ?? ''), true);
+            $result[(int)$row['uid']] = [
+                'uid' => (int)$row['uid'],
+                'client_id' => (string)$row['client_id'],
+                'client_name' => (string)$row['client_name'],
+                'redirect_uris' => is_array($redirectUris) ? $redirectUris : [],
+                'grant_types' => is_array($grantTypes) ? $grantTypes : ['authorization_code'],
+                'scope' => (string)$row['scope'],
+                'token_endpoint_auth_method' => (string)($row['token_endpoint_auth_method'] ?? 'none'),
+                'client_secret_hash' => (string)($row['client_secret'] ?? ''),
+            ];
+        }
+        return $result;
+    }
+
+    /**
+     * Verify a redirect_uri against the URIs registered for a client.
+     *
+     * Exact match by default. The seeded well-known client may carry the
+     * {@see self::REDIRECT_URI_LOOPBACK_SENTINEL} sentinel meaning "any
+     * loopback URI" (RFC 8252 native-app pattern) — this keeps existing
+     * MCP clients working without making the well-known client an open
+     * redirector. Dynamic registrations cannot store the sentinel.
+     * Registered loopback URIs are additionally matched with port-agnostic
+     * comparison per RFC 8252 §7.3.
+     */
+    public function isRedirectUriAllowed(array $client, string $redirectUri): bool
+    {
+        if ($redirectUri === '') {
+            return false;
+        }
+
+        $registered = $client['redirect_uris'] ?? [];
+        if (!is_array($registered) || empty($registered)) {
+            return false;
+        }
+
+        if (in_array(self::REDIRECT_URI_LOOPBACK_SENTINEL, $registered, true)
+            && $this->isLoopbackUri($redirectUri)
+        ) {
+            return true;
+        }
+
+        if (in_array($redirectUri, $registered, true)) {
+            return true;
+        }
+
+        foreach ($registered as $candidate) {
+            if (is_string($candidate) && $this->isLoopbackUriMatch($candidate, $redirectUri)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isLoopbackUri(string $uri): bool
+    {
+        $parts = parse_url($uri);
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            return false;
+        }
+        if (!in_array(strtolower($parts['scheme']), ['http', 'https'], true)) {
+            return false;
+        }
+        $loopbackHosts = ['localhost', '127.0.0.1', '::1', '[::1]'];
+        return in_array($parts['host'], $loopbackHosts, true);
+    }
+
+    private function isLoopbackUriMatch(string $registered, string $requested): bool
+    {
+        $reg = parse_url($registered);
+        $req = parse_url($requested);
+        if (!is_array($reg) || !is_array($req)) {
+            return false;
+        }
+        $loopbackHosts = ['localhost', '127.0.0.1', '::1', '[::1]'];
+        $regHost = $reg['host'] ?? '';
+        $reqHost = $req['host'] ?? '';
+        if (!in_array($regHost, $loopbackHosts, true) || !in_array($reqHost, $loopbackHosts, true)) {
+            return false;
+        }
+        if (($reg['scheme'] ?? '') !== ($req['scheme'] ?? '')) {
+            return false;
+        }
+        if ($regHost !== $reqHost) {
+            return false;
+        }
+        if (($reg['path'] ?? '') !== ($req['path'] ?? '')) {
+            return false;
+        }
+        // RFC 8252 §7.3 only relaxes the port; query and fragment must still match
+        // exactly so an attacker cannot pass arbitrary parameters via the redirect.
+        if (($reg['query'] ?? '') !== ($req['query'] ?? '')) {
+            return false;
+        }
+        if (($reg['fragment'] ?? '') !== ($req['fragment'] ?? '')) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Verify the client_secret presented at the token endpoint.
+     * Returns true for public clients (no secret stored) — those are
+     * authenticated via PKCE, not a shared secret.
+     */
+    public function verifyClientSecret(array $client, ?string $providedSecret): bool
+    {
+        if (($client['token_endpoint_auth_method'] ?? 'none') === 'none' || empty($client['client_secret_hash'])) {
+            return true;
+        }
+        if ($providedSecret === null || $providedSecret === '') {
+            return false;
+        }
+        return hash_equals($client['client_secret_hash'], $this->hashToken($providedSecret));
+    }
+
+    /**
+     * Ensure the well-known 'typo3-mcp-server' client exists in the database.
+     * Idempotent and safe under concurrent calls; failures are swallowed because
+     * authentication can still proceed via the pre-table hardcoded behavior in
+     * older deployments.
+     */
+    public function ensureWellKnownClient(): void
+    {
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable(self::CLIENTS_TABLE);
+
         try {
+            // Look up including soft-deleted rows so we can undelete rather than
+            // fail to re-insert (client_id is intended to be unique).
+            $existing = $connection->createQueryBuilder()
+                ->select('uid', 'deleted')
+                ->from(self::CLIENTS_TABLE)
+                ->where('client_id = ' . $connection->quote(self::WELL_KNOWN_CLIENT_ID))
+                ->setMaxResults(1)
+                ->executeQuery()
+                ->fetchAssociative();
+
+            if (is_array($existing)) {
+                if ((int)($existing['deleted'] ?? 0) === 1) {
+                    $connection->update(
+                        self::CLIENTS_TABLE,
+                        ['deleted' => 0, 'tstamp' => time()],
+                        ['uid' => (int)$existing['uid']]
+                    );
+                }
+                return;
+            }
+
             $connection->insert(
-                'tx_mcpserver_oauth_clients',
+                self::CLIENTS_TABLE,
                 [
                     'pid' => 0,
                     'tstamp' => time(),
                     'crdate' => time(),
-                    'client_id' => $clientId,
-                    'client_secret' => $clientSecret,
-                    'client_name' => $clientData['client_name'] ?? 'MCP Client',
-                    'redirect_uris' => json_encode($clientData['redirect_uris'] ?? []),
-                    'grant_types' => json_encode($clientData['grant_types'] ?? ['authorization_code']),
-                    'scope' => $clientData['scope'] ?? 'mcp_access',
+                    'client_id' => self::WELL_KNOWN_CLIENT_ID,
+                    'client_secret' => '',
+                    'client_name' => 'TYPO3 MCP Server',
+                    // Legacy-compatibility sentinel: this client accepts any LOOPBACK
+                    // redirect_uri (any port, any path) — narrower than the previous
+                    // "accept any URI" behavior, so it's no longer an open redirector,
+                    // while still preserving native MCP clients that pinned to the
+                    // pre-DCR client_id.
+                    'redirect_uris' => json_encode([self::REDIRECT_URI_LOOPBACK_SENTINEL]),
+                    'grant_types' => json_encode(['authorization_code']),
+                    'scope' => 'mcp_access',
+                    'token_endpoint_auth_method' => 'none',
                 ]
             );
-        } catch (\Exception $e) {
-            // If table doesn't exist, we'll use the fixed client approach for now
-            return [
-                'client_id' => self::CLIENT_ID,
-                'client_name' => $clientData['client_name'] ?? 'MCP Client',
-                'grant_types' => ['authorization_code'],
-                'response_types' => ['code'],
-                'scope' => 'mcp_access',
-                'redirect_uris' => $clientData['redirect_uris'] ?? ['http://localhost'],
-            ];
+        } catch (\Throwable $e) {
+            // Non-fatal: lookup will simply return null and the endpoint will reject the request
         }
-
-        return [
-            'client_id' => $clientId,
-            'client_secret' => $clientSecret,
-            'client_name' => $clientData['client_name'] ?? 'MCP Client',
-            'grant_types' => $clientData['grant_types'] ?? ['authorization_code'],
-            'response_types' => ['code'],
-            'scope' => $clientData['scope'] ?? 'mcp_access',
-            'redirect_uris' => $clientData['redirect_uris'] ?? ['http://localhost'],
-        ];
     }
 
     /**
@@ -388,7 +857,7 @@ class OAuthService
     public function getMetadata(string $baseUrl): array
     {
         $baseUrl = rtrim($baseUrl, '/');
-        
+
         return [
             'issuer' => $baseUrl,
             'authorization_endpoint' => $baseUrl . '/mcp_oauth/authorize',
@@ -397,13 +866,17 @@ class OAuthService
             'response_types_supported' => ['code'],
             'grant_types_supported' => ['authorization_code'],
             'code_challenge_methods_supported' => ['S256'],
-            'token_endpoint_auth_methods_supported' => ['none', 'client_secret_post'],
+            'token_endpoint_auth_methods_supported' => ['none', 'client_secret_post', 'client_secret_basic'],
             'registration_endpoint_auth_methods_supported' => ['none'],
         ];
     }
 
     /**
-     * Create access token directly (bypassing authorization code flow)
+     * Create access token directly (bypassing authorization code flow).
+     *
+     * Used by the backend module for admin-issued tokens. These are bound to
+     * the well-known {@see self::WELL_KNOWN_CLIENT_ID} public client so they
+     * participate in cascade revocation and audit alongside OAuth-flow tokens.
      */
     public function createDirectAccessToken(int $beUserId, string $clientName, ?ServerRequestInterface $request = null): string
     {
@@ -415,6 +888,10 @@ class OAuthService
         if ($request !== null) {
             $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
         }
+
+        // Bind to the well-known client (auto-seeded if missing)
+        $wellKnown = $this->getClient(self::WELL_KNOWN_CLIENT_ID);
+        $clientUid = $wellKnown !== null ? (int)$wellKnown['uid'] : 0;
 
         // Create access token
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
@@ -428,6 +905,7 @@ class OAuthService
                 'crdate' => time(),
                 'token' => $this->hashToken($accessToken),
                 'be_user_uid' => $beUserId,
+                'client_uid' => $clientUid,
                 'client_name' => $clientName,
                 'expires' => $expires,
                 'last_used' => time(),
@@ -438,6 +916,49 @@ class OAuthService
         );
 
         return $accessToken;
+    }
+
+    /**
+     * Create a long-lived access token for a backend user without the
+     * interactive OAuth flow. Intended for MCP clients that cannot perform
+     * OAuth discovery (e.g. subdirectory installs) and authenticate with a
+     * static Authorization header instead. Returns the plaintext token, which
+     * is only available at creation time (the database stores a hash).
+     */
+    public function createToken(int $beUserUid, string $clientName, ?int $ttlSeconds = null): array
+    {
+        $accessToken = $this->generateSecureToken();
+        $ttl = $ttlSeconds ?? self::TOKEN_EXPIRY_SECONDS;
+        if ($ttl <= 0) {
+            throw new \InvalidArgumentException('Token TTL must be greater than zero seconds.');
+        }
+        $expires = time() + $ttl;
+
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->insert(
+                'tx_mcpserver_access_tokens',
+                [
+                    'pid' => 0,
+                    'tstamp' => time(),
+                    'crdate' => time(),
+                    'token' => $this->hashToken($accessToken),
+                    'be_user_uid' => $beUserUid,
+                    'client_name' => $clientName,
+                    'expires' => $expires,
+                    'last_used' => 0,
+                    'created_ip' => '',
+                    'last_used_ip' => '',
+                    'token_version' => 1,
+                ]
+            );
+
+        return [
+            'access_token' => $accessToken,
+            'token_type' => 'Bearer',
+            'expires' => $expires,
+            'expires_in' => $ttl,
+        ];
     }
 
     /**

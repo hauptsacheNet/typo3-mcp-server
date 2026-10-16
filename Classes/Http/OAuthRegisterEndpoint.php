@@ -35,7 +35,9 @@ class OAuthRegisterEndpoint
             $body = $request->getBody()->getContents();
             $clientData = json_decode($body, true);
 
-            if (!$clientData) {
+            // Note: an empty JSON object {} is a valid RFC 7591 request — every
+            // metadata field has a server-side default — so only reject non-objects.
+            if (!is_array($clientData)) {
                 return $this->createErrorResponse($request, 'invalid_request', 'Invalid JSON in request body');
             }
 
@@ -56,7 +58,11 @@ class OAuthRegisterEndpoint
 
             // Register the client
             $oauthService = GeneralUtility::makeInstance(OAuthService::class);
-            $clientInfo = $oauthService->registerClient($clientData);
+            try {
+                $clientInfo = $oauthService->registerClient($clientData);
+            } catch (\InvalidArgumentException $e) {
+                return $this->createErrorResponse($request, 'invalid_redirect_uri', $e->getMessage());
+            }
 
             // Return client registration response
             $stream = new Stream('php://temp', 'rw');

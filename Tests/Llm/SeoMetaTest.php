@@ -20,6 +20,7 @@ class SeoMetaTest extends LlmTestCase
 
         // Import test data with pages
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/pages.csv');
+        $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/backend_layout.csv');
     }
 
     #[DataProvider('modelProvider')]

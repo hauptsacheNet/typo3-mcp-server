@@ -23,6 +23,7 @@ class WriteTableSearchReplaceTest extends LlmTestCase
 
         // Import standard pages and the content with spelling errors
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/pages.csv');
+        $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/backend_layout.csv');
         $this->importCSVDataSet(__DIR__ . '/Fixtures/search_replace_content.csv');
     }
 

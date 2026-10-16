@@ -23,7 +23,6 @@ class WorkspaceBuilder
         'file_mountpoints' => '',
         'publish_time' => 0,
         'unpublish_time' => 0,
-        'freeze' => 0,
         'live_edit' => 0,
         'swap_modes' => 0,
         'publish_access' => 0,
@@ -97,15 +96,6 @@ class WorkspaceBuilder
     public function withLiveEdit(): self
     {
         $this->data['live_edit'] = 1;
-        return $this;
-    }
-    
-    /**
-     * Freeze workspace
-     */
-    public function frozen(): self
-    {
-        $this->data['freeze'] = 1;
         return $this;
     }
     

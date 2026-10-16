@@ -8,7 +8,9 @@ use Mcp\Server\Server;
 use Mcp\Server\InitializationOptions;
 use Mcp\Server\NotificationOptions;
 use Mcp\Types\CallToolResult;
+use Mcp\Types\ListToolsResult;
 use Mcp\Types\TextContent;
+use Mcp\Types\Tool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Utility\ExtensionManagementUtility;
 use TYPO3\CMS\Core\Information\Typo3Version;
@@ -85,14 +87,20 @@ class McpServerFactory
             $tools = [];
 
             foreach ($toolRegistry->getTools() as $tool) {
-                $schema = $tool->getSchema();
-                $tools[] = [
+                // Normalize to plain arrays first: getSchema() may hand back a
+                // \stdClass for an empty "properties" object, which
+                // ToolInputSchema::fromArray() rejects. The round trip preserves
+                // every JSON Schema keyword - unknown keys are carried through by
+                // the extraFields handling in Tool, ToolInputSchema and
+                // ToolInputProperties.
+                $schema = json_decode((string)json_encode($tool->getSchema()), true) ?? [];
+                $tools[] = Tool::fromArray([
                     'name' => $tool->getName(),
                     ...$schema
-                ];
+                ]);
             }
 
-            return ['tools' => $tools];
+            return new ListToolsResult($tools);
         });
 
         // Register tool/call handler

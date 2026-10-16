@@ -65,6 +65,10 @@ class OpenRouterClient implements LlmClientInterface
             $requestBody['reasoning'] = $options['reasoning'];
         }
 
+        if (isset($options['cache_control'])) {
+            $requestBody['cache_control'] = $options['cache_control'];
+        }
+
         return $this->sendRequest($requestBody);
     }
 
@@ -118,6 +122,10 @@ class OpenRouterClient implements LlmClientInterface
 
         if (isset($options['reasoning'])) {
             $requestBody['reasoning'] = $options['reasoning'];
+        }
+
+        if (isset($options['cache_control'])) {
+            $requestBody['cache_control'] = $options['cache_control'];
         }
 
         return $this->sendRequest($requestBody);

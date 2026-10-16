@@ -9,8 +9,10 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Configuration\Tca\TcaFactory;
+use Hn\McpServer\Service\BackendUserContextService;
 use Hn\McpServer\MCP\McpServerFactory;
 
 /**
@@ -80,6 +82,8 @@ class McpServerCommand extends Command
             $beUser->user['uid'] = 1; // Add a UID for the fake user to prevent DataHandler errors
             $beUser->user['workspace_id'] = 0; // Set workspace ID to live workspace
             $beUser->workspace = 0; // Set workspace to live workspace
+            GeneralUtility::makeInstance(BackendUserContextService::class)
+                ->restoreStoredUserConfiguration($beUser);
             $GLOBALS['BE_USER'] = $beUser;
         } elseif (!$beUser->isAdmin()) {
             // If user exists but is not admin, set admin flag directly
@@ -91,4 +95,5 @@ class McpServerCommand extends Command
             $beUser->workspace = 0; // Set workspace to live workspace
         }
     }
+
 }

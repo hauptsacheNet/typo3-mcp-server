@@ -121,6 +121,7 @@ The MCP Server provides these tools for interacting with TYPO3:
 
 ### Content Modification
 - **WriteTable** - Create, update, or delete records (safely in workspace)
+- **UploadFile** - Add new files to the file storage from a URL (including YouTube/Vimeo), from raw text content, or via a single-use upload token for local files (`/mcp_upload`, see below); never overwrites or deletes existing files
 
 > Each tool provides detailed schema information when called. See the Real-World Scenarios below for practical examples.
 
@@ -160,6 +161,38 @@ Here are practical examples of how the MCP Server enables AI-powered content man
     "sys_language_uid": "de",
     "header": "Über uns",
     "bodytext": "[translated content]"
+  }
+}}
+```
+
+### "Put this image on the homepage"
+
+**User says**: "Put this image on our homepage: https://example.org/press/team.jpg"
+
+**What happens**:
+1. AI uses `UploadFile` with the URL - the TYPO3 server downloads the file into the user's upload folder
+2. The response carries the new `sys_file` uid, its public URL, and a hint on how to reference it
+3. AI uses `GetPage` to find the homepage and its content area
+4. AI uses `WriteTable` to create a content element that references the file via `uid_local`
+
+**Tool calls**:
+```json
+// 1. Upload the file (targetFolder defaults to the user's upload folder)
+{"tool": "UploadFile", "params": {"url": "https://example.org/press/team.jpg"}}
+// -> {"uid": 42, "fileName": "team.jpg", "identifier": "1:/user_upload/team.jpg", ...}
+
+// 2. Find the homepage
+{"tool": "GetPage", "params": {"url": "/"}}
+
+// 3. Create the content element referencing the file
+{"tool": "WriteTable", "params": {
+  "table": "tt_content",
+  "action": "create",
+  "pid": 1,
+  "data": {
+    "CType": "image",
+    "header": "Our team",
+    "image": [{"uid_local": 42, "alternative": "The team in front of the office"}]
   }
 }}
 ```
@@ -253,7 +286,7 @@ Relations are transparently resolved and can be set using simple syntax:
 - **Select relations**: Use comma-separated IDs or arrays
 - **Inline relations**: Provide as nested objects
 - **MM relations**: Handled automatically
-- **File references**: Currently read-only
+- **File references**: Created and updated as embedded inline records (reference existing `sys_file` UIDs via `uid_local`)
 - **Bidirectional**: Updates both sides as needed
 
 ### Language Support
@@ -315,9 +348,11 @@ The MCP Server respects all TYPO3 permissions:
 While the MCP Server is powerful, some features are still in development:
 
 ### Image/File Handling
-- Currently read-only access to file references
-- Cannot upload new files or modify existing ones
-- Workaround: Reference existing files by ID
+- Files are create-only: `UploadFile` adds new files (from URL, YouTube/Vimeo URL, or text content), but existing files can never be overwritten or deleted through MCP. Physical files are not workspace-versioned in TYPO3, so any destructive file operation would be immediately live and irreversible — name conflicts are auto-renamed and identical content is deduplicated instead.
+- Local files on the MCP client's machine are uploaded out-of-band: calling `UploadFile` without `url`/`content` returns the upload endpoint (`/mcp_upload`) plus a single-use token (15-minute TTL, bound to the user and target folder) to be sent as `Authorization: Bearer` header. The client PUTs the raw bytes there — binary data never travels through the model's context — and receives the created `sys_file` as JSON. The token is consumed by the attempt, so a failed upload requires a fresh one.
+- The maximum accepted file size (URL downloads and pre-signed uploads) is configurable via the extension setting `maxFileSizeMb` (default 500).
+- File metadata (`sys_file_metadata`) remains editable through WriteTable (workspace-staged).
+- No visual/semantic image search yet — finding images relies on file names and metadata.
 
 ### Direct Workspace Management
 - Cannot create/delete workspaces

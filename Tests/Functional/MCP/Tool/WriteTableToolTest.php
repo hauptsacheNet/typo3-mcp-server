@@ -8,6 +8,7 @@ use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Hn\McpServer\Tests\Functional\Fixtures\TestDataBuilder;
 use Hn\McpServer\Tests\Functional\Traits\McpAssertionsTrait;
+use Hn\McpServer\Tests\Functional\Traits\PluginContentTrait;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -19,17 +20,26 @@ use Hn\McpServer\MCP\ToolRegistry;
 class WriteTableToolTest extends AbstractFunctionalTest
 {
     use McpAssertionsTrait;
-    
+    use PluginContentTrait;
+
+    // Extend the default extension load list with `news` so plugin-style
+    // tests have a real plugin CType available on TYPO3 14 (the built-in
+    // `list` CType is gone in v14 because list_type was removed).
+    protected array $testExtensionsToLoad = [
+        'mcp_server',
+        'news',
+    ];
+
     private WriteTableTool $tool;
     private TestDataBuilder $data;
-    
+
     protected function setUp(): void
     {
         parent::setUp();
-        
+
         // Import additional fixtures needed for this test
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
-        
+
         $this->tool = new WriteTableTool();
         $this->data = new TestDataBuilder();
     }
@@ -200,6 +210,49 @@ class WriteTableToolTest extends AbstractFunctionalTest
         
         // Verify page is in workspace, not live
         $this->assertRecordNotInLive('pages', $newPageUid);
+    }
+
+    /**
+     * Regression test for #94: creating a page with an explicit language field
+     * value must be accepted even though sys_language_uid is not part of the
+     * `pages` showitem (and therefore not reported by getAvailableFields()).
+     * The language field is a control field the MCP manages itself, so it must
+     * always be treated as available during validation.
+     */
+    public function testCreatePageWithExplicitLanguageField(): void
+    {
+        $tableAccessService = GeneralUtility::makeInstance(\Hn\McpServer\Service\TableAccessService::class);
+
+        // Document the premise: sys_language_uid is NOT an editable showitem
+        // field for pages, so getAvailableFields() does not list it.
+        $availableFields = $tableAccessService->getAvailableFields('pages', '1');
+        $this->assertArrayNotHasKey(
+            'sys_language_uid',
+            $availableFields,
+            'Premise of #94: sys_language_uid is not part of the pages showitem'
+        );
+
+        $result = $this->tool->execute([
+            'action' => 'create',
+            'table' => 'pages',
+            'pid' => $this->getRootPageUid(),
+            'data' => [
+                'title' => 'Page With Explicit Language',
+                'slug' => '/page-with-explicit-language',
+                'doktype' => 1,
+                'sys_language_uid' => 0,
+            ]
+        ]);
+
+        $this->assertFalse(
+            $result->isError,
+            'Creating a page with explicit sys_language_uid must not be rejected. Error: '
+            . json_encode($result->jsonSerialize(), JSON_PRETTY_PRINT)
+        );
+
+        $pageData = $this->extractJsonFromResult($result);
+        $this->assertEquals('create', $pageData['action']);
+        $this->assertIsInt($pageData['uid']);
     }
 
     /**
@@ -1198,14 +1251,15 @@ class WriteTableToolTest extends AbstractFunctionalTest
     {
         $tool = new WriteTableTool();
         
-        // Test creating content with FlexForm data
-        // Use list content element which has a pi_flexform field
+        // Test creating content with FlexForm data on a plugin element. The
+        // plugin shape differs between TYPO3 13 (CType=list+list_type) and
+        // TYPO3 14 (CType=plugin), so resolve via the version-aware helper.
         $result = $tool->execute([
             'action' => 'create',
             'table' => 'tt_content',
             'pid' => 1,
             'data' => [
-                'CType' => 'list',
+                ...$this->buildPluginContentRow('news_pi1'),
                 'header' => 'Plugin with FlexForm',
                 'pi_flexform' => [
                     'settings' => [
@@ -1441,10 +1495,12 @@ class WriteTableToolTest extends AbstractFunctionalTest
         $properties = $schema['inputSchema']['properties'];
         $this->assertArrayHasKey('action', $properties);
         $this->assertArrayHasKey('table', $properties);
-        $this->assertArrayHasKey('pid', $properties);
         $this->assertArrayHasKey('uid', $properties);
         $this->assertArrayHasKey('data', $properties);
         $this->assertArrayHasKey('position', $properties);
+        // pid is a record column expressed inside `data`, not a top-level
+        // parameter — confirm we don't accidentally re-introduce it.
+        $this->assertArrayNotHasKey('pid', $properties);
         
         // Check required fields
         $this->assertArrayHasKey('required', $schema['inputSchema']);

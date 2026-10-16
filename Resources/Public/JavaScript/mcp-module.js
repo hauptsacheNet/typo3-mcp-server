@@ -518,7 +518,10 @@ class McpModule {
                         <tbody>
                             ${tokens.map(token => `
                                 <tr data-token-id="${esc(token.uid)}">
-                                    <td><strong>${esc(token.client_name)}</strong></td>
+                                    <td>
+                                        <strong>${esc(token.client_name)}</strong>
+                                        ${token.token_label ? `<br><small class="text-muted">as &quot;${esc(token.token_label)}&quot;</small>` : ''}
+                                    </td>
                                     <td><small class="text-muted">${esc(token.created)}</small></td>
                                     <td><small class="text-muted">${esc(token.last_used)}</small></td>
                                     <td><small class="text-muted">${esc(token.expires)}</small></td>
@@ -622,7 +625,7 @@ class McpModule {
                         const warningDiv = document.getElementById('auth-header-warning');
                         if (warningDiv) warningDiv.style.display = 'none';
                     } else {
-                        this.setEndpointStatus(element, 'error', 'MCP endpoint cannot receive Authorization headers - see warning below');
+                        this.setEndpointStatus(element, 'error', 'MCP endpoint cannot receive Authorization headers - see warning above');
                         const warningDiv = document.getElementById('auth-header-warning');
                         if (warningDiv) warningDiv.style.display = 'block';
                     }

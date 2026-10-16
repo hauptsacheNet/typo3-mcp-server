@@ -25,6 +25,7 @@ class FileReferenceTest extends LlmTestCase
 
         // Import test data
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/pages.csv');
+        $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/backend_layout.csv');
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/tt_content.csv');
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/sys_file.csv');
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/sys_file_reference.csv');

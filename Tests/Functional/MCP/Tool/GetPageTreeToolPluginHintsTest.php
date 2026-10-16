@@ -7,17 +7,20 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\GetPageTreeTool;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
+use Hn\McpServer\Tests\Functional\Traits\PluginContentTrait;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 class GetPageTreeToolPluginHintsTest extends FunctionalTestCase
 {
+    use PluginContentTrait;
+
     protected array $coreExtensionsToLoad = [
         'workspaces',
         'frontend',
     ];
-    
+
     protected array $testExtensionsToLoad = [
         'mcp_server',
     ];
@@ -25,12 +28,24 @@ class GetPageTreeToolPluginHintsTest extends FunctionalTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        
-        // Import LLM test fixtures that include pages with storage folders and news plugin
+
+        // Import LLM test fixtures that include pages with storage folders.
         $this->importCSVDataSet(__DIR__ . '/../../../Llm/Fixtures/news_pages.csv');
-        $this->importCSVDataSet(__DIR__ . '/../../../Llm/Fixtures/news_plugin.csv');
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
-        
+
+        // News plugin row at uid=100, pid=12. The shape differs between
+        // TYPO3 13 (CType=list+list_type) and TYPO3 14 (CType=plugin), so
+        // insert it programmatically.
+        $this->insertPluginContentElement(
+            uid: 100,
+            pid: 12,
+            pluginIdentifier: 'news_pi1',
+            extra: [
+                'header' => 'Recent Updates',
+                'pi_flexform' => '<?xml version="1.0" encoding="utf-8" standalone="yes" ?><T3FlexForms><data><sheet index="sDEF"><language index="lDEF"><field index="settings.startingpoint"><value index="vDEF">30</value></field></language></sheet></data></T3FlexForms>',
+            ]
+        );
+
         // Set up backend user for DataHandler and TableAccessService
         $this->setUpBackendUser(1);
     }

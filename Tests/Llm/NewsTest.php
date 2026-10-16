@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Llm;
 
+use Hn\McpServer\Tests\Functional\Traits\PluginContentTrait;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\TestDox;
 
@@ -14,6 +15,8 @@ use PHPUnit\Framework\Attributes\TestDox;
  */
 class NewsTest extends LlmTestCase
 {
+    use PluginContentTrait;
+
     protected array $testExtensionsToLoad = [
         'mcp_server',
         'news',
@@ -26,8 +29,20 @@ class NewsTest extends LlmTestCase
         // Import test data with pages, news storage, and categories
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_pages.csv');
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_categories.csv');
-        $this->importCSVDataSet(__DIR__ . '/Fixtures/news_plugin.csv');
         $this->importCSVDataSet(__DIR__ . '/Fixtures/news_records.csv');
+
+        // Plugin row inserted programmatically because the tt_content shape
+        // differs between TYPO3 13 (CType=list+list_type) and TYPO3 14
+        // (CType=plugin).
+        $this->insertPluginContentElement(
+            uid: 100,
+            pid: 12,
+            pluginIdentifier: 'news_pi1',
+            extra: [
+                'header' => 'Recent Updates',
+                'pi_flexform' => '<?xml version="1.0" encoding="utf-8" standalone="yes" ?><T3FlexForms><data><sheet index="sDEF"><language index="lDEF"><field index="settings.startingpoint"><value index="vDEF">30</value></field></language></sheet></data></T3FlexForms>',
+            ]
+        );
     }
 
     #[DataProvider('modelProvider')]
@@ -63,14 +78,15 @@ class NewsTest extends LlmTestCase
             "Expected news record creation when asked for a news article");
 
         $acceptablePids = [8, 12, 30];
-        $this->assertContains($writeCall['arguments']['pid'], $acceptablePids,
-            "News articles should be created on Blog (8), Press (12), or in the storage folder (30)");
+        $data = $this->extractWriteData($writeCall['arguments']);
+        $newsPid = $this->extractWritePid($writeCall['arguments']);
+        $this->assertContains($newsPid, $acceptablePids,
+            "News articles should be created on Blog (8), Press (12), or in the storage folder (30). "
+            . "Got pid=" . var_export($newsPid, true) . ", arguments=" . json_encode($writeCall['arguments'], JSON_PRETTY_PRINT));
 
         $writeResult = $this->executeToolCall($writeCall);
         $this->assertFalse($writeResult['isError'] ?? false,
             'WriteTable failed: ' . $writeResult['content']);
-
-        $data = $this->extractWriteData($writeCall['arguments']);
 
         $allContent = ($data['title'] ?? '') . ' ' .
                      ($data['teaser'] ?? '') . ' ' .
@@ -124,8 +140,10 @@ class NewsTest extends LlmTestCase
             "\nAll WriteTable calls: " . json_encode(array_map(fn($c) => $c['arguments']['table'] ?? 'unknown', $writeCalls)));
         $this->assertEquals('create', $newsWriteCall['arguments']['action']);
         $acceptablePids = [8, 12, 30];
-        $this->assertContains($newsWriteCall['arguments']['pid'], $acceptablePids,
-            "News articles should be created on Blog (8), Press (12), or in the storage folder (30)");
+        $newsPid = $this->extractWritePid($newsWriteCall['arguments']);
+        $this->assertContains($newsPid, $acceptablePids,
+            "News articles should be created on Blog (8), Press (12), or in the storage folder (30). "
+            . "Got pid=" . var_export($newsPid, true) . ", arguments=" . json_encode($newsWriteCall['arguments'], JSON_PRETTY_PRINT));
 
         $writeResult = $this->executeToolCall($newsWriteCall);
         $this->assertFalse($writeResult['isError'] ?? false,
@@ -188,8 +206,10 @@ class NewsTest extends LlmTestCase
             "\nAll WriteTable calls: " . json_encode(array_map(fn($c) => $c['arguments']['table'] ?? 'unknown', $writeCalls)));
         $this->assertEquals('create', $newsWriteCall['arguments']['action']);
         $acceptablePids = [8, 12, 30];
-        $this->assertContains($newsWriteCall['arguments']['pid'], $acceptablePids,
-            "News articles should be created on Blog (8), Press (12), or in the storage folder (30)");
+        $newsPid = $this->extractWritePid($newsWriteCall['arguments']);
+        $this->assertContains($newsPid, $acceptablePids,
+            "News articles should be created on Blog (8), Press (12), or in the storage folder (30). "
+            . "Got pid=" . var_export($newsPid, true) . ", arguments=" . json_encode($newsWriteCall['arguments'], JSON_PRETTY_PRINT));
 
         $writeResult = $this->executeToolCall($newsWriteCall);
         $this->assertFalse($writeResult['isError'] ?? false,

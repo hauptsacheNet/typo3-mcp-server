@@ -20,6 +20,7 @@ class ContentElementTest extends LlmTestCase
 
         // Import test data with pages and content
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/pages.csv');
+        $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/backend_layout.csv');
         $this->importCSVDataSet(__DIR__ . '/../Functional/Fixtures/tt_content.csv');
     }
 

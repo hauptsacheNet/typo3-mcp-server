@@ -14,6 +14,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Page\PageRenderer;
 use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\HtmlResponse;
+use Hn\McpServer\Http\RequestUrlTrait;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Service\WorkspaceContextService;
@@ -23,6 +24,8 @@ use Hn\McpServer\Service\WorkspaceContextService;
  */
 class McpServerModuleController
 {
+    use RequestUrlTrait;
+
     public function __construct(
         private readonly ModuleTemplateFactory $moduleTemplateFactory,
         private readonly ToolRegistry $toolRegistry,
@@ -47,10 +50,18 @@ class McpServerModuleController
         $tokens = $this->oauthService->getUserTokens($userId);
         
         // Get base URL for endpoint
-        $baseUrl = $this->getBaseUrl($request);
-        
+        $baseUrl = $this->getRequestBaseUrl($request);
+
         // Generate OAuth authorization URL
         $authUrl = $this->oauthService->generateAuthorizationUrl($baseUrl, 'Claude Desktop');
+
+        // RFC 8414 / RFC 9728 well-known discovery URLs must live at the domain root,
+        // not under the TYPO3 site path, so they need the request origin separately.
+        $sitePath = $this->getRequestSitePath($request);
+        $isSubdirectoryInstall = $sitePath !== '';
+        $hostUrl = $this->getRequestHostUrl($request);
+        $wellKnownAuthServerUrl = $hostUrl . '/.well-known/oauth-authorization-server' . $sitePath;
+        $wellKnownProtectedResourceUrl = $hostUrl . '/.well-known/oauth-protected-resource' . $sitePath . '/mcp';
         
         // Get available tools
         $tools = [];
@@ -77,15 +88,7 @@ class McpServerModuleController
         ]);
 
         // Format tokens for template display (same shape as AJAX response)
-        $formattedTokens = array_map(function ($token) {
-            return [
-                'uid' => $token['uid'],
-                'client_name' => $token['client_name'],
-                'created' => date('Y-m-d H:i:s', $token['crdate']),
-                'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
-                'expires' => date('Y-m-d H:i:s', $token['expires']),
-            ];
-        }, $tokens);
+        $formattedTokens = $this->formatTokensForDisplay($tokens);
 
         // Prepare template variables
         $templateVariables = [
@@ -98,6 +101,9 @@ class McpServerModuleController
             'siteName' => $this->getSiteName(),
             'hasWorkspace' => $hasWorkspace,
             'isLocalhost' => $isLocalhost,
+            'isSubdirectoryInstall' => $isSubdirectoryInstall,
+            'wellKnownAuthServerUrl' => $wellKnownAuthServerUrl,
+            'wellKnownProtectedResourceUrl' => $wellKnownProtectedResourceUrl,
             'createWorkspaceUrl' => $createWorkspaceUrl,
         ];
         
@@ -200,27 +206,6 @@ class McpServerModuleController
         }
     }
     
-    private function getBaseUrl(ServerRequestInterface $request): string
-    {
-        // Try to get from TYPO3 configuration first
-        $baseUrl = $GLOBALS['TYPO3_CONF_VARS']['SYS']['reverseProxyBaseUrl'] ?? '';
-        
-        if (empty($baseUrl)) {
-            // Fallback to request-based detection
-            $scheme = $request->getUri()->getScheme();
-            $host = $request->getUri()->getHost();
-            $port = $request->getUri()->getPort();
-            
-            $baseUrl = $scheme . '://' . $host;
-            if ($port && !in_array($port, [80, 443])) {
-                $baseUrl .= ':' . $port;
-            }
-        }
-        
-        return rtrim($baseUrl, '/');
-    }
-    
-    
     private function getSiteName(): string
     {
         return $GLOBALS['TYPO3_CONF_VARS']['SYS']['sitename'] ?? 'TYPO3 MCP Server';
@@ -229,6 +214,43 @@ class McpServerModuleController
     private function getBackendUser(): ?BackendUserAuthentication
     {
         return $GLOBALS['BE_USER'] ?? null;
+    }
+
+    /**
+     * Enrich raw token rows with the registered client's name so the UI can show
+     * "Claude" (registered) instead of just whatever free-text label was put on
+     * the token. For tokens bound to the well-known public client (manual tokens
+     * issued from this module) the registered name is generic, so we keep showing
+     * the user-entered token label as the primary name.
+     */
+    private function formatTokensForDisplay(array $tokens): array
+    {
+        $clientUids = array_filter(array_map(fn($t) => (int)($t['client_uid'] ?? 0), $tokens));
+        $clients = $this->oauthService->getClientsByUids($clientUids);
+
+        return array_map(function ($token) use ($clients) {
+            $clientUid = (int)($token['client_uid'] ?? 0);
+            $client = $clients[$clientUid] ?? null;
+            $isWellKnown = $client !== null && $client['client_id'] === OAuthService::WELL_KNOWN_CLIENT_ID;
+            $tokenLabel = (string)($token['client_name'] ?? '');
+
+            if ($client !== null && !$isWellKnown) {
+                $primary = $client['client_name'] !== '' ? $client['client_name'] : $tokenLabel;
+                $secondary = ($tokenLabel !== '' && $tokenLabel !== $primary) ? $tokenLabel : null;
+            } else {
+                $primary = $tokenLabel;
+                $secondary = null;
+            }
+
+            return [
+                'uid' => $token['uid'],
+                'client_name' => $primary,
+                'token_label' => $secondary,
+                'created' => date('Y-m-d H:i:s', $token['crdate']),
+                'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
+                'expires' => date('Y-m-d H:i:s', $token['expires']),
+            ];
+        }, $tokens);
     }
 
     /**
@@ -246,15 +268,7 @@ class McpServerModuleController
             $tokens = $this->oauthService->getUserTokens($userId);
             
             // Format tokens for frontend display
-            $formattedTokens = array_map(function($token) {
-                return [
-                    'uid' => $token['uid'],
-                    'client_name' => $token['client_name'],
-                    'created' => date('Y-m-d H:i:s', $token['crdate']),
-                    'expires' => date('Y-m-d H:i:s', $token['expires']),
-                    'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
-                ];
-            }, $tokens);
+            $formattedTokens = $this->formatTokensForDisplay($tokens);
             
             return new JsonResponse([
                 'success' => true,

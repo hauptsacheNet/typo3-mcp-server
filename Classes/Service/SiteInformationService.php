@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Service;
 
+use Hn\McpServer\Http\RequestUrlTrait;
 use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Core\Exception\SiteNotFoundException;
 use TYPO3\CMS\Core\Site\Entity\Site;
@@ -15,6 +16,8 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class SiteInformationService
 {
+    use RequestUrlTrait;
+
     protected SiteFinder $siteFinder;
     protected ?ServerRequestInterface $currentRequest = null;
 
@@ -32,8 +35,81 @@ class SiteInformationService
     }
 
     /**
+     * Turn a possibly-relative URL into an absolute one.
+     *
+     * Order of preference: scheme/host of the active HTTP request, then the
+     * first configured site whose base carries a host, then TYPO3's
+     * TYPO3_REQUEST_HOST environment value. Returns the input unchanged when
+     * none of those resolve a host (e.g. CLI/stdio without a configured site)
+     * — better an honest relative URL than an invented one.
+     *
+     * @param string|null $url Anything from a relative path ("fileadmin/x.jpg")
+     *                         to a leading-slash path ("/x.jpg") to an already
+     *                         absolute URL.
+     */
+    public function makeAbsoluteUrl(?string $url): ?string
+    {
+        if ($url === null || $url === '') {
+            return $url;
+        }
+        // Already absolute (http://, https://, data:, etc.)
+        if (preg_match('#^[a-z][a-z0-9+\-.]*://#i', $url) || str_starts_with($url, '//')) {
+            return $url;
+        }
+
+        $base = $this->resolveRequestOrSiteBase();
+        if ($base === null) {
+            return $url;
+        }
+
+        return $base . '/' . ltrim($url, '/');
+    }
+
+    /**
+     * Returns "<scheme>://<host>" from the active request, or the first site
+     * whose base has a host, or TYPO3_REQUEST_HOST as a last resort.
+     */
+    protected function resolveRequestOrSiteBase(): ?string
+    {
+        if ($this->currentRequest !== null) {
+            // Same resolution as the HTTP endpoints: NormalizedParams-based,
+            // which keeps non-standard ports, reverse proxy configuration and
+            // subdirectory installations intact.
+            $base = $this->getRequestBaseUrl($this->currentRequest);
+            if (parse_url($base, PHP_URL_HOST) !== null) {
+                return $base;
+            }
+        }
+
+        try {
+            foreach ($this->siteFinder->getAllSites() as $site) {
+                $siteBase = $site->getBase();
+                if ($siteBase->getHost() !== '') {
+                    $scheme = $siteBase->getScheme() ?: 'https';
+                    $port = $siteBase->getPort();
+                    return $scheme . '://' . $siteBase->getHost() . ($port ? ':' . $port : '');
+                }
+            }
+        } catch (\Throwable) {
+            // Ignore and fall through to the env-based fallback
+        }
+
+        $envHost = GeneralUtility::getIndpEnv('TYPO3_REQUEST_HOST');
+        if (is_string($envHost) && $envHost !== '') {
+            // TYPO3_REQUEST_HOST is "<scheme>://<host>" — accept only when the host
+            // segment is actually populated, otherwise we'd build URLs like
+            // "http:///fileadmin/x.jpg" in CLI/test contexts without a server name.
+            $parts = parse_url($envHost);
+            if (!empty($parts['host'])) {
+                return $envHost;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Get all configured domains from TYPO3 sites
-     * 
+     *
      * @return array Array of unique domain names
      */
     public function getAllDomains(): array

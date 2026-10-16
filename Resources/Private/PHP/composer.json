@@ -2,7 +2,7 @@
     "name": "hn/mcp-server-libraries",
     "description": "Bundled libraries for mcp_server extension in non-composer TYPO3 installations",
     "require": {
-        "logiscape/mcp-sdk-php": "^1.2"
+        "logiscape/mcp-sdk-php": "^2.0"
     },
     "replace": {
         "psr/log": "*"

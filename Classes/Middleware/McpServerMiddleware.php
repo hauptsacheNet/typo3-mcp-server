@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Hn\McpServer\Middleware;
 
 use Hn\McpServer\Http\CorsHeadersTrait;
+use Hn\McpServer\Http\FileUploadEndpoint;
+use Hn\McpServer\Http\RequestUrlTrait;
 use Hn\McpServer\Http\McpEndpoint;
 use Hn\McpServer\Http\OAuthAuthorizeEndpoint;
 use Hn\McpServer\Http\OAuthTokenEndpoint;
@@ -27,8 +29,10 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class McpServerMiddleware implements MiddlewareInterface
 {
+    use RequestUrlTrait;
+
     private Context $context;
-    
+
     public function __construct(Context $context)
     {
         $this->context = $context;
@@ -36,12 +40,38 @@ class McpServerMiddleware implements MiddlewareInterface
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
         $path = $request->getUri()->getPath();
-        
+
+        // Strip the site path prefix so routing works in subdirectory installations
+        $sitePath = $this->getRequestSitePath($request);
+        if ($sitePath !== '') {
+            if ($path === $sitePath) {
+                $path = '/';
+            } elseif (str_starts_with($path, $sitePath . '/')) {
+                $path = substr($path, strlen($sitePath));
+            }
+        }
+
+        // Both endpoints below run MCP tools, and those reach into core APIs that
+        // still read $GLOBALS['TYPO3_REQUEST']: DataHandler's RTE transformation,
+        // for instance, validates href values through DefaultSanitizerBuilder,
+        // whose closure throws a RuntimeException (1775675289) without an active
+        // request - saving a bodytext that contains a t3:// link fails because of
+        // it. This middleware answers the routes itself, so the core
+        // RequestHandler that usually publishes the request never runs for them.
+        // It is registered after normalized-params-attribute, so the request
+        // carries the attributes those APIs expect.
+        if ($path === '/mcp' || $path === '/mcp_upload') {
+            $GLOBALS['TYPO3_REQUEST'] = $request;
+        }
+
         // Route to appropriate endpoint
         return match($path) {
             // Main MCP endpoint
             '/mcp' => GeneralUtility::makeInstance(McpEndpoint::class)($request),
-            
+
+            // Pre-signed file upload target (UploadFile tool)
+            '/mcp_upload' => GeneralUtility::makeInstance(FileUploadEndpoint::class)($request),
+
             // OAuth endpoints
             '/mcp_oauth/authorize' => GeneralUtility::makeInstance(OAuthAuthorizeEndpoint::class)($request),
             '/mcp_oauth/token' => GeneralUtility::makeInstance(OAuthTokenEndpoint::class)($request),
@@ -98,7 +128,7 @@ class McpServerMiddleware implements MiddlewareInterface
             'state' => $oauthData['state'] ?? ''
         ]);
         
-        $oauthAuthorizeUrl = '/mcp_oauth/authorize?' . $queryParams;
+        $oauthAuthorizeUrl = $this->getRequestSitePath($request) . '/mcp_oauth/authorize?' . $queryParams;
         
         $stream = new Stream('php://temp', 'rw');
         $stream->write('');

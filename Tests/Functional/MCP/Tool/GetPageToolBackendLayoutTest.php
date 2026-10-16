@@ -7,6 +7,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\GetPageTool;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
 use Hn\McpServer\Service\SiteInformationService;
+use Hn\McpServer\Tests\Functional\Traits\PluginContentTrait;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Site\Entity\Site;
@@ -19,6 +20,8 @@ use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
  */
 class GetPageToolBackendLayoutTest extends FunctionalTestCase
 {
+    use PluginContentTrait;
+
     protected array $coreExtensionsToLoad = [
         'install',
         'workspaces',
@@ -41,7 +44,16 @@ class GetPageToolBackendLayoutTest extends FunctionalTestCase
         
         // Import content elements
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
-        
+
+        // Plugin row whose shape depends on the running TYPO3 version
+        // (CType=list+list_type on v13, CType=plugin on v14).
+        $this->insertPluginContentElement(
+            uid: 105,
+            pid: 6,
+            pluginIdentifier: 'news_pi1',
+            extra: ['header' => 'Contact Form', 'bodytext' => 'Get in touch']
+        );
+
         // Import backend user for permissions
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/be_users.csv');
         

@@ -57,7 +57,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $content = $result->content[0]->text;
         
         // Verify error message
-        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $content);
+        $this->assertStringContainsString('FlexForm schema not found for identifier: form_formframework', $content);
     }
 
     /**
@@ -79,7 +79,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $content = $result->content[0]->text;
         
         // Verify error message contains transformed identifier
-        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $content);
+        $this->assertStringContainsString('FlexForm schema not found for identifier: form_formframework', $content);
     }
 
     /**
@@ -217,7 +217,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $content = $result->content[0]->text;
         
         // Verify error message
-        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $content);
+        $this->assertStringContainsString('FlexForm schema not found for identifier: form_formframework', $content);
     }
 
     /**
@@ -260,7 +260,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $content = $result->content[0]->text;
         
         // Verify error message
-        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $content);
+        $this->assertStringContainsString('FlexForm schema not found for identifier: form_formframework', $content);
     }
 
     /**
@@ -277,7 +277,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         
         $this->assertTrue($result->isError);
         $this->assertCount(1, $result->content);
-        $this->assertStringContainsString('FlexForm schema not found for identifier: *,form_formframework', $result->content[0]->text);
+        $this->assertStringContainsString('FlexForm schema not found for identifier: form_formframework', $result->content[0]->text);
     }
 
     /**
@@ -316,7 +316,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $result = $tool->execute([
             'table' => 'tt_content',
             'field' => 'pi_flexform',
-            'identifier' => '*,news_pi1'
+            'identifier' => 'news_pi1'
         ]);
         
         // Should succeed with News extension loaded
@@ -327,7 +327,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $content = $result->content[0]->text;
         
         // Verify schema structure
-        $this->assertStringContainsString('FLEXFORM SCHEMA: *,news_pi1', $content);
+        $this->assertStringContainsString('FLEXFORM SCHEMA: news_pi1', $content);
         $this->assertStringContainsString('Table: tt_content', $content);
         $this->assertStringContainsString('Field: pi_flexform', $content);
         $this->assertStringContainsString('Schema defined in file:', $content);
@@ -365,24 +365,24 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         
         // Test category list FlexForm
         $result = $tool->execute([
-            'identifier' => '*,news_categorylist'
+            'identifier' => 'news_categorylist'
         ]);
         
         $this->assertFalse($result->isError, 'Should successfully retrieve News category list FlexForm schema');
         $content = $result->content[0]->text;
         
-        $this->assertStringContainsString('FLEXFORM SCHEMA: *,news_categorylist', $content);
+        $this->assertStringContainsString('FLEXFORM SCHEMA: news_categorylist', $content);
         $this->assertStringContainsString('flexform_category_list.xml', $content);
         
         // Test detail view FlexForm
         $result = $tool->execute([
-            'identifier' => '*,news_newsdetail'
+            'identifier' => 'news_newsdetail'
         ]);
         
         $this->assertFalse($result->isError, 'Should successfully retrieve News detail FlexForm schema');
         $content = $result->content[0]->text;
         
-        $this->assertStringContainsString('FLEXFORM SCHEMA: *,news_newsdetail', $content);
+        $this->assertStringContainsString('FLEXFORM SCHEMA: news_newsdetail', $content);
         $this->assertStringContainsString('flexform_news_detail.xml', $content);
     }
     
@@ -395,7 +395,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         
         // recordUid parameter is accepted but not used for schema retrieval
         $result = $tool->execute([
-            'identifier' => '*,news_pi1',
+            'identifier' => 'news_pi1',
             'recordUid' => 123  // This parameter is ignored for schema
         ]);
         
@@ -403,7 +403,7 @@ class GetFlexFormSchemaToolTest extends FunctionalTestCase
         $content = $result->content[0]->text;
         
         // Should still retrieve the schema successfully
-        $this->assertStringContainsString('FLEXFORM SCHEMA: *,news_pi1', $content);
+        $this->assertStringContainsString('FLEXFORM SCHEMA: news_pi1', $content);
         $this->assertStringContainsString('flexform_news_list.xml', $content);
     }
 

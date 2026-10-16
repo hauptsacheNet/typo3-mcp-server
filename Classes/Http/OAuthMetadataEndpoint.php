@@ -17,6 +17,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class OAuthMetadataEndpoint
 {
     use CorsHeadersTrait;
+    use RequestUrlTrait;
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
@@ -26,17 +27,7 @@ class OAuthMetadataEndpoint
         }
 
         try {
-            // Get base URL from request
-            $uri = $request->getUri();
-            $baseUrl = $uri->getScheme() . '://' . $uri->getHost();
-            if ($uri->getPort() && !in_array($uri->getPort(), [80, 443])) {
-                $baseUrl .= ':' . $uri->getPort();
-            }
-
-            // Override base URL for development if needed
-            if (isset($GLOBALS['TYPO3_CONF_VARS']['SYS']['reverseProxyBaseUrl'])) {
-                $baseUrl = rtrim($GLOBALS['TYPO3_CONF_VARS']['SYS']['reverseProxyBaseUrl'], '/');
-            }
+            $baseUrl = $this->getRequestBaseUrl($request);
 
             $oauthService = GeneralUtility::makeInstance(OAuthService::class);
             $metadata = $oauthService->getMetadata($baseUrl);

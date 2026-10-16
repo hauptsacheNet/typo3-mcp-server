@@ -17,7 +17,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class OAuthAuthorizeEndpoint
 {
-    
+    use RequestUrlTrait;
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
@@ -129,7 +129,7 @@ class OAuthAuthorizeEndpoint
         ];
         
         $oauthDataEncoded = base64_encode(json_encode($oauthData));
-        $loginUrl = '/typo3/index.php?loginProvider=1450629977&login_status=login';
+        $loginUrl = $this->getRequestSitePath($request) . '/typo3/index.php?loginProvider=1450629977&login_status=login';
         
         // Build cookie string with environment-aware security flags
         $isHttps = $request->getUri()->getScheme() === 'https';
@@ -157,24 +157,55 @@ class OAuthAuthorizeEndpoint
         $queryParams = $request->getQueryParams();
         $postParams = $request->getParsedBody() ?: [];
 
+        // CSRF: the POST must carry a token that matches what showConsentForm stored
+        // in the backend user's session. This defends against a logged-in BE user
+        // being tricked into auto-submitting approve=1 from an attacker page.
+        $providedCsrf = (string)($postParams['csrf_token'] ?? '');
+        if (!$this->verifyCsrfToken($providedCsrf)) {
+            return $this->createErrorResponse('invalid_request', 'Invalid or missing CSRF token');
+        }
+
+        $clientId = $queryParams['client_id'] ?? $postParams['client_id'] ?? '';
         $clientName = $postParams['client_name'] ?? $this->resolveClientName($request);
         $redirectUri = $queryParams['redirect_uri'] ?? '';
         $pkceChallenge = $queryParams['code_challenge'] ?? '';
         $challengeMethod = $queryParams['code_challenge_method'] ?? 'S256';
         $state = $postParams['state'] ?? $queryParams['state'] ?? '';
 
+        $oauthService = GeneralUtility::makeInstance(OAuthService::class);
+
+        // Re-validate the client and redirect_uri so an attacker cannot skip the consent
+        // form's checks by POSTing directly to this endpoint.
+        $client = $oauthService->getClient((string)$clientId);
+        if ($client === null) {
+            return $this->createErrorResponse('invalid_client', 'Unknown client_id');
+        }
+        if ($redirectUri !== '' && !$oauthService->isRedirectUriAllowed($client, $redirectUri)) {
+            return $this->createErrorResponse('invalid_request', 'redirect_uri is not registered for this client');
+        }
+
         // Only S256 is supported for PKCE
         if (!empty($pkceChallenge) && $challengeMethod !== 'S256') {
             return $this->createErrorResponse('invalid_request', 'Only S256 code_challenge_method is supported');
         }
 
-        $oauthService = GeneralUtility::makeInstance(OAuthService::class);
+        // MCP authorization spec: public clients (no client_secret) MUST use PKCE.
+        // Without a challenge, mere possession of the code would be enough to mint
+        // a token, since verifyClientSecret() short-circuits for public clients.
+        if (($client['token_endpoint_auth_method'] ?? 'none') === 'none' && $pkceChallenge === '') {
+            return $this->createErrorResponse('invalid_request', 'Public clients must use PKCE (code_challenge is required)');
+        }
+
+        // CSRF token has been used — rotate it so a submitted form can't be replayed.
+        $this->clearCsrfToken();
+
         $code = $oauthService->createAuthorizationCode(
             $beUserId,
             $clientName,
             $redirectUri,
             $pkceChallenge,
-            $challengeMethod
+            $challengeMethod,
+            $client['client_id']
         );
 
         // If redirect_uri is provided, redirect there with the code
@@ -215,18 +246,37 @@ class OAuthAuthorizeEndpoint
     private function showConsentForm(ServerRequestInterface $request): ResponseInterface
     {
         $queryParams = $request->getQueryParams();
-        
+
         $clientId = $queryParams['client_id'] ?? '';
-        $clientName = $this->resolveClientName($request);
         $redirectUri = $queryParams['redirect_uri'] ?? '';
         $codeChallenge = $queryParams['code_challenge'] ?? '';
         $challengeMethod = $queryParams['code_challenge_method'] ?? 'S256';
         $state = $queryParams['state'] ?? '';
 
-        // Validate required parameters
-        if (empty($clientId) || $clientId !== 'typo3-mcp-server') {
-            return $this->createErrorResponse('invalid_client', 'Invalid client_id');
+        // Validate the client against the registered clients table
+        $oauthService = GeneralUtility::makeInstance(OAuthService::class);
+        $client = $oauthService->getClient((string)$clientId);
+        if ($client === null) {
+            return $this->createErrorResponse('invalid_client', 'Unknown client_id');
         }
+        if ($redirectUri !== '' && !$oauthService->isRedirectUriAllowed($client, $redirectUri)) {
+            return $this->createErrorResponse('invalid_request', 'redirect_uri is not registered for this client');
+        }
+
+        // MCP authorization spec: public clients (no secret) MUST use PKCE.
+        // Reject early so the user isn't asked to consent to something we'd later refuse.
+        if (($client['token_endpoint_auth_method'] ?? 'none') === 'none' && $codeChallenge === '') {
+            return $this->createErrorResponse('invalid_request', 'Public clients must use PKCE (code_challenge is required)');
+        }
+
+        // Prefer the name the client supplied during dynamic registration; fall
+        // back to the Referer-hostname heuristic only for the well-known seeded
+        // client (which has a generic placeholder name).
+        $registeredName = trim((string)($client['client_name'] ?? ''));
+        $isWellKnown = $client['client_id'] === OAuthService::WELL_KNOWN_CLIENT_ID;
+        $clientName = (!$isWellKnown && $registeredName !== '')
+            ? $registeredName
+            : $this->resolveClientName($request);
 
         $beUser = $GLOBALS['BE_USER'];
         $username = $beUser->user['username'] ?? 'Unknown';
@@ -240,6 +290,7 @@ class OAuthAuthorizeEndpoint
             'code_challenge_method' => htmlspecialchars($challengeMethod),
             'state' => htmlspecialchars($state),
             'user_id' => $beUser->user['uid'],
+            'csrf_token' => htmlspecialchars($this->getOrCreateCsrfToken()),
         ]);
 
         $stream = new Stream('php://temp', 'rw');
@@ -263,6 +314,48 @@ class OAuthAuthorizeEndpoint
         );
     }
 
+
+    private const CSRF_SESSION_KEY = 'mcp_oauth_csrf';
+
+    /**
+     * Return the CSRF token stored in the BE user's session, minting one on
+     * first call. Stable across consent-form reloads so opening the form in
+     * multiple tabs still works.
+     */
+    private function getOrCreateCsrfToken(): string
+    {
+        $beUser = $GLOBALS['BE_USER'] ?? null;
+        if (!$beUser instanceof BackendUserAuthentication) {
+            return '';
+        }
+        $token = $beUser->getSessionData(self::CSRF_SESSION_KEY);
+        if (!is_string($token) || $token === '') {
+            $token = bin2hex(random_bytes(32));
+            $beUser->setAndSaveSessionData(self::CSRF_SESSION_KEY, $token);
+        }
+        return $token;
+    }
+
+    private function verifyCsrfToken(string $provided): bool
+    {
+        $beUser = $GLOBALS['BE_USER'] ?? null;
+        if (!$beUser instanceof BackendUserAuthentication) {
+            return false;
+        }
+        $stored = $beUser->getSessionData(self::CSRF_SESSION_KEY);
+        if (!is_string($stored) || $stored === '' || $provided === '') {
+            return false;
+        }
+        return hash_equals($stored, $provided);
+    }
+
+    private function clearCsrfToken(): void
+    {
+        $beUser = $GLOBALS['BE_USER'] ?? null;
+        if ($beUser instanceof BackendUserAuthentication) {
+            $beUser->setAndSaveSessionData(self::CSRF_SESSION_KEY, '');
+        }
+    }
 
     private function createErrorResponse(string $error, string $description = ''): ResponseInterface
     {
@@ -419,6 +512,7 @@ class OAuthAuthorizeEndpoint
             <input type="hidden" name="code_challenge_method" value="' . $data['code_challenge_method'] . '">
             <input type="hidden" name="state" value="' . $data['state'] . '">
             <input type="hidden" name="user_id" value="' . $data['user_id'] . '">
+            <input type="hidden" name="csrf_token" value="' . $data['csrf_token'] . '">
 
             <div class="buttons">
                 <button type="submit" name="approve" value="1" class="approve">Authorize Access</button>
