@@ -51,6 +51,19 @@ class McpServerMiddleware implements MiddlewareInterface
             }
         }
 
+        // Both endpoints below run MCP tools, and those reach into core APIs that
+        // still read $GLOBALS['TYPO3_REQUEST']: DataHandler's RTE transformation,
+        // for instance, validates href values through DefaultSanitizerBuilder,
+        // whose closure throws a RuntimeException (1775675289) without an active
+        // request - saving a bodytext that contains a t3:// link fails because of
+        // it. This middleware answers the routes itself, so the core
+        // RequestHandler that usually publishes the request never runs for them.
+        // It is registered after normalized-params-attribute, so the request
+        // carries the attributes those APIs expect.
+        if ($path === '/mcp' || $path === '/mcp_upload') {
+            $GLOBALS['TYPO3_REQUEST'] = $request;
+        }
+
         // Route to appropriate endpoint
         return match($path) {
             // Main MCP endpoint

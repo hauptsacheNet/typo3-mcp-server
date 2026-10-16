@@ -13,6 +13,7 @@ use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -25,6 +26,14 @@ use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 class WriteTableTool extends AbstractRecordTool
 {
     protected LanguageService $languageService;
+
+    /**
+     * Foreign fields of nested embedded children that still need to be pointed at their
+     * parent once DataHandler has turned the NEW keys into real uids.
+     *
+     * @var array<int, array{table: string, key: int|string, foreignField: string, parentTable: string, parentKey: int|string}>
+     */
+    protected array $pendingNestedForeignFields = [];
 
     public function __construct()
     {
@@ -48,7 +57,9 @@ class WriteTableTool extends AbstractRecordTool
             : '';
 
         return [
-            'description' => 'Create, update, translate, or delete records in workspace-capable TYPO3 tables. All changes are made in workspace context and require publishing to become live.' . $languageHint . ' ' .
+            'description' => 'Create, update, translate, or delete records in a TYPO3 workspace. ' .
+                'Changes are NOT published live — they land in a workspace and stay invisible to website visitors until a human editor publishes them in the TYPO3 backend. ' .
+                'This tool cannot publish; if the user wants the change live, tell them to publish the workspace in the TYPO3 backend (or ask an editor to), never claim the change is already live.' . $languageHint . ' ' .
                 'Before creating or updating content, always use GetPage to understand the page structure, existing content, and writing style. ' .
                 'Check existing content elements with ReadTable to ensure new content fits the page\'s tone and doesn\'t duplicate existing elements. ' .
                 'For content creation, verify the appropriate colPos by examining existing content layout. ' .
@@ -492,6 +503,9 @@ class WriteTableTool extends AbstractRecordTool
                     );
                 }
 
+                // Children of children are linked here, once their NEW keys are resolved.
+                $this->writePendingNestedForeignFields($childDataHandler);
+
                 $finalizeResult = $this->finalizeEmbeddedInlineRelations($embeddedRelations, $childDataHandler, $liveParentUid);
                 if ($finalizeResult !== null) {
                     return $finalizeResult;
@@ -535,9 +549,11 @@ class WriteTableTool extends AbstractRecordTool
 
         // Extract inline relations before converting data
         $inlineRelations = $this->extractInlineRelations($table, $data);
-        
-        // Convert data for storage
-        $data = $this->convertDataForStorage($table, $data);
+
+        // Convert data for storage. $uid lets FlexForm handling resolve the
+        // record's existing type when the type field itself isn't part of
+        // this update, so it can pick the right DataStructure.
+        $data = $this->convertDataForStorage($table, $data, $uid);
 
         // For translation records, add l10n_state overrides so DataHandler treats
         // explicitly updated fields as "custom" (not synced from parent)
@@ -585,6 +601,9 @@ class WriteTableTool extends AbstractRecordTool
                 if (!empty($childDataHandler->errorLog)) {
                     return $this->createErrorResult('Error processing inline relations: ' . implode(', ', $childDataHandler->errorLog));
                 }
+
+                // Children of children are linked here, once their NEW keys are resolved.
+                $this->writePendingNestedForeignFields($childDataHandler);
             }
 
             if (!empty($embeddedRelations)) {
@@ -668,6 +687,19 @@ class WriteTableTool extends AbstractRecordTool
             return null;
         }
 
+        // DataHandler refuses to move a page into its own rootline, but it compares
+        // the uid it is handed. In a workspace that is the version's uid, not the
+        // live one, so moving page N into page N reads to it as moving an unrelated
+        // record and passes. The version then really does end up below its own live
+        // page. Compare live uids before handing the command over.
+        if ($table === 'pages') {
+            $liveUid = $this->resolveLiveUid($table, $uid);
+            $refusal = $liveUid > 0 ? $this->checkMoveDestination($liveUid, $destination) : null;
+            if ($refusal !== null) {
+                return $this->createErrorResult('Error moving record: ' . $refusal);
+            }
+        }
+
         $cmdMap = [$table => [$uid => ['move' => $destination]]];
         $moveDataHandler = GeneralUtility::makeInstance(DataHandler::class);
         $moveDataHandler->BE_USER = $GLOBALS['BE_USER'];
@@ -687,6 +719,100 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         return null;
+    }
+
+    /**
+     * The uid of the live record behind $uid, which is $uid itself outside a
+     * workspace and the t3ver_oid of a versioned record inside one.
+     */
+    protected function resolveLiveUid(string $table, int $uid): int
+    {
+        $record = BackendUtility::getRecord($table, $uid, 'uid,t3ver_oid');
+        if ($record === null) {
+            return 0;
+        }
+
+        return (int)($record['t3ver_oid'] ?? 0) ?: (int)$record['uid'];
+    }
+
+    /**
+     * Why the page $liveUid must not be moved to $destination, or null when it may.
+     *
+     * $destination follows DataHandler's cmdmap convention: positive is a target
+     * page id, negative means "after the record with that uid".
+     *
+     * @return string|null Reason, phrased to be appended to "Error moving record: "
+     */
+    protected function checkMoveDestination(int $liveUid, int $destination): ?string
+    {
+        if ($destination < 0) {
+            $pageId = $this->resolveParentPageId(abs($destination));
+        } else {
+            $pageId = $destination;
+        }
+
+        // Walking until the rootline runs out needs no depth limit, only a way to
+        // stop on a tree that is already circular somewhere above the destination.
+        // A counter does both at once but cannot tell the two apart, and on a deep
+        // tree it quietly reports "safe" after giving up. Remembering what has been
+        // seen terminates on the first repeat and leaves depth alone.
+        $seen = [];
+        while ($pageId > 0) {
+            if ($pageId === $liveUid) {
+                return sprintf(
+                    'cannot move pages:%d into itself or one of its own subpages',
+                    $liveUid
+                );
+            }
+            if (isset($seen[$pageId])) {
+                // The destination's own ancestry loops, independently of the page
+                // being moved. Nothing can be moved into a page whose rootline does
+                // not resolve, and reporting it here beats the exception DataHandler
+                // raises further in, which names a page nobody asked about.
+                return sprintf(
+                    'the rootline of destination pages:%d is circular, so it cannot receive pages:%d',
+                    $pageId,
+                    $liveUid
+                );
+            }
+            $seen[$pageId] = true;
+
+            $parentPageId = $this->resolveParentPageId($pageId);
+            if ($parentPageId === null) {
+                return null;
+            }
+            $pageId = $parentPageId;
+        }
+
+        return null;
+    }
+
+    /**
+     * The parent page of $pageId as the current workspace sees it.
+     *
+     * Walking live pids is not enough. A page moved inside a workspace keeps its
+     * live pid until the workspace is published, so a chain that is circular in
+     * the workspace still looks well-formed live, and the move is let through.
+     * The overlay reports the staged location in `pid` (the live one moves to
+     * `ORIG_pid`), which is what this check has to follow.
+     *
+     * @return int|null Null when the page does not exist
+     */
+    protected function resolveParentPageId(int $pageId): ?int
+    {
+        // workspaceOL() needs all four fields to recognise a versioned record;
+        // handed a pid-only row it silently leaves it alone.
+        $row = BackendUtility::getRecord('pages', $pageId, 'uid,pid,t3ver_oid,t3ver_state');
+        if ($row === null) {
+            return null;
+        }
+
+        BackendUtility::workspaceOL('pages', $row);
+        if (!is_array($row)) {
+            return null;
+        }
+
+        return (int)$row['pid'];
     }
 
     /**
@@ -964,7 +1090,7 @@ class WriteTableTool extends AbstractRecordTool
         if ($newTranslationUid) {
             // Dispatch the same normalized representation that updateRecord()
             // persists (dates as timestamps etc.), not the raw tool input.
-            $eventFieldValues = !empty($fieldValues) ? $this->convertDataForStorage($table, $fieldValues) : [];
+            $eventFieldValues = !empty($fieldValues) ? $this->convertDataForStorage($table, $fieldValues, (int)$newTranslationUid) : [];
             $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
             $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'translate', (int)$newTranslationUid, $eventFieldValues, null));
         }
@@ -1028,6 +1154,17 @@ class WriteTableTool extends AbstractRecordTool
             $effectivePid = $refRecord['pid'] ?? 0;
         }
 
+        // Page at which TCEFORM field visibility has to be resolved. For every table
+        // except `pages` that is the page the record lives on, so $effectivePid is
+        // right. For a page record it is that page itself: page TSconfig accumulates
+        // down the rootline, so a field the page re-enables for its own subtree still
+        // looks disabled when resolved at the parent. FormEngine makes the same
+        // distinction; BackendUtility::getTSCpid() encodes it but is deprecated as of
+        // TYPO3 14, so the one relevant line is inlined. (#120)
+        $tsConfigPid = ($table === 'pages' && $action === 'update' && $uid !== null)
+            ? $uid
+            : $effectivePid;
+
         // tt_content additionally honours TCEMAIN.table.tt_content.disableCTypes.
         // FormDataCompiler doesn't apply this — it's used by the New Content
         // Element Wizard — so reject those values explicitly so the LLM gets a
@@ -1051,7 +1188,7 @@ class WriteTableTool extends AbstractRecordTool
             }
 
             // Check if field is accessible (filters out inaccessible inline relations)
-            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $effectivePid)) {
+            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $tsConfigPid)) {
                 return "Field '{$fieldName}' is not accessible";
             }
 
@@ -1117,8 +1254,11 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         
-        // Get available fields for this record type
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+        // Get available fields for this record type. Handed no page, this resolves
+        // TCEFORM at a fallback page, which drops fields that page TSconfig enables
+        // only where the record actually lives. Use the same page as the per-field
+        // check above so the two agree. (#120)
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType, $tsConfigPid ?: null);
         
         // The type field itself should always be available if it exists
         if ($typeField) {
@@ -1170,9 +1310,21 @@ class WriteTableTool extends AbstractRecordTool
                 }
                 
                 
-                // If we have available fields configured and this field is not in the list
+                // If we have available fields configured and this field is not in the list.
+                // Name both reasons it can be missing: the field is genuinely not part of
+                // the record type, or TCEFORM TSconfig disables it for this page. Naming
+                // only the first sends readers hunting through the TCA, where nothing is
+                // wrong. The original phrase is kept verbatim so existing assertions on
+                // the message still hold.
                 if (!empty($availableFields) && !isset($availableFields[$fieldName])) {
-                    return "Field '{$fieldName}' is not available for this record type";
+                    return sprintf(
+                        "Field '%s' is not available for this record type ('%s' in table '%s'), "
+                        . 'or it is disabled by TCEFORM TSconfig for page %d',
+                        $fieldName,
+                        $recordType,
+                        $table,
+                        $tsConfigPid
+                    );
                 }
             }
         }
@@ -1225,6 +1377,9 @@ class WriteTableTool extends AbstractRecordTool
         array $inlineRelations,
         ?int $liveUid = null
     ): array {
+        // One write, one collection: an earlier write that bailed out before its links were
+        // flushed must not leak entries into this one.
+        $this->pendingNestedForeignFields = [];
         $embeddedRelations = [];
 
         foreach ($inlineRelations as $fieldName => $relationData) {
@@ -1242,7 +1397,7 @@ class WriteTableTool extends AbstractRecordTool
 
             if ($isHiddenTable) {
                 // Process embedded inline relations (e.g., tx_news_domain_model_link)
-                $order = $this->processEmbeddedInlineRelations($dataMap, $foreignTable, $foreignField, $parentUid, $pid, $value, $config, $liveUid);
+                $order = $this->processEmbeddedInlineRelations($dataMap, $foreignTable, $foreignField, $parentUid, $pid, $value, $config, $liveUid, $parentTable);
                 $embeddedRelations[$fieldName] = [
                     'foreignTable' => $foreignTable,
                     'foreignField' => $foreignField,
@@ -1268,13 +1423,19 @@ class WriteTableTool extends AbstractRecordTool
         int $pid,
         array $records,
         array $config,
-        ?int $liveUid = null
+        ?int $liveUid = null,
+        string $parentTable = ''
     ): array {
         $foreignMatchFields = $config['foreign_match_fields'] ?? [];
+        // Content Blocks "Collection" fields with shareAcrossTables use this TCA key
+        // (not foreign_match_fields) to record which table a shared child table
+        // row belongs to — e.g. sys_file_reference uses foreign_match_fields for
+        // its tablenames column, this uses a dedicated key instead.
+        $foreignTableField = $config['foreign_table_field'] ?? null;
 
         // Existing children of this parent (live uids). Empty for the create path.
         $existingChildUids = $liveUid !== null
-            ? $this->fetchEmbeddedRelationChildUids($foreignTable, $foreignField, $liveUid, $foreignMatchFields)
+            ? $this->fetchEmbeddedRelationChildUids($foreignTable, $foreignField, $liveUid, $foreignMatchFields, $foreignTableField, $parentTable)
             : [];
 
         // Reject any uid that does not currently belong to this parent. Otherwise a caller
@@ -1337,7 +1498,7 @@ class WriteTableTool extends AbstractRecordTool
             // Run the same field-level conversions we apply to top-level records
             // (notably JSON-encoding imageManipulation values) so embedded children
             // like sys_file_reference.crop survive the round trip.
-            $recordData = $this->convertDataForStorage($foreignTable, $recordData);
+            $recordData = $this->convertDataForStorage($foreignTable, $recordData, $existingUid);
 
             if ($existingUid === null) {
                 // New record: pid + foreign_match_fields are required for proper insertion
@@ -1348,6 +1509,14 @@ class WriteTableTool extends AbstractRecordTool
                     foreach ($config['foreign_match_fields'] as $matchField => $matchValue) {
                         $recordData[$matchField] = $matchValue;
                     }
+                }
+
+                // Set foreign_table_field (e.g., "tablenames" for a Content Blocks
+                // Collection with shareAcrossTables) to the parent's own table name.
+                // Without this the row is written but TYPO3 can never find it again —
+                // it renders as an empty relation in both the backend and frontend.
+                if (!empty($foreignTableField) && $parentTable !== '') {
+                    $recordData[$foreignTableField] = $parentTable;
                 }
 
                 $key = 'NEW' . uniqid() . '_' . $index;
@@ -1372,6 +1541,10 @@ class WriteTableTool extends AbstractRecordTool
                 // foreign_sortby — nothing to patch.
                 continue;
             }
+
+            // Relations that sit on the child itself (e.g. a file inside a Collection item)
+            // have to be resolved here - extractInlineRelations() only ever sees the top level.
+            $this->resolveNestedEmbeddedRelations($dataMap, $foreignTable, $key, $recordData, $pid);
 
             // Add to data map
             if (!isset($dataMap[$foreignTable])) {
@@ -1472,6 +1645,171 @@ class WriteTableTool extends AbstractRecordTool
 
         return null;
     }
+
+    /**
+     * Resolve inline and file relations that sit on an embedded child record.
+     *
+     * extractInlineRelations() only inspects the top level of the written record, so a file
+     * field inside a Collection item was previously handed to DataHandler as an array and
+     * ended up as the literal string "Array" - the reference was silently never created.
+     *
+     * The grandchildren go into the same datamap under NEW keys and the child field holds
+     * those keys, so DataHandler creates them in the same run. It does not set the foreign
+     * field of a child of a child though, so that pointer is written right afterwards -
+     * writePendingNestedForeignFields() does for this level what the caller already does
+     * for the top one.
+     *
+     * Nesting follows the payload, so a Collection inside a Collection resolves the same way.
+     */
+    protected function resolveNestedEmbeddedRelations(
+        array &$dataMap,
+        string $table,
+        int|string $recordKey,
+        array &$recordData,
+        int $pid
+    ): void {
+        // Removes the relation fields from $recordData, so anything left untouched below
+        // stays a plain scalar for DataHandler.
+        $nestedRelations = $this->extractInlineRelations($table, $recordData);
+
+        foreach ($nestedRelations as $fieldName => $relationData) {
+            $config = $relationData['config'];
+            $value = $relationData['value'];
+            $foreignTable = $config['foreign_table'] ?? '';
+
+            // Anything but a list of records is none of our business - hand it back
+            // untouched so DataHandler sees exactly what the caller sent.
+            if ($foreignTable === '' || !is_array($value)) {
+                $recordData[$fieldName] = $value;
+                continue;
+            }
+
+            if (!$this->tableAccessService->isEmbeddedChildTable($foreignTable)) {
+                // Independent records cannot be created implicitly at this depth - they need
+                // their own write so the caller gets their uids back.
+                throw new ValidationException([
+                    sprintf(
+                        'Field "%s" of the embedded table "%s" relates to the independent table "%s". '
+                        . 'Nested relations to independent tables are not supported: create those records '
+                        . 'first and reference them by uid.',
+                        $fieldName,
+                        $table,
+                        $foreignTable
+                    )
+                ]);
+            }
+
+            // Children of a record that does not exist yet cannot be claimed by uid.
+            $existingChildUids = [];
+            if (is_numeric($recordKey) && !empty($config['foreign_field'])) {
+                $existingChildUids = $this->fetchEmbeddedRelationChildUids(
+                    $foreignTable,
+                    $config['foreign_field'],
+                    $this->getLiveUid($table, (int)$recordKey),
+                    $config['foreign_match_fields'] ?? []
+                );
+            }
+
+            // Everything is checked before the first write below, so a bad entry late in the
+            // list cannot leave the record with its previous entries already deleted.
+            foreach (array_values($value) as $index => $childData) {
+                if (!is_array($childData)) {
+                    // Silently skipping would drop the entry and, on update, delete the
+                    // reference that is already there.
+                    throw new ValidationException([
+                        sprintf(
+                            'Entry %d of field "%s" must be an object with the fields of "%s", "%s" given.',
+                            $index,
+                            $fieldName,
+                            $foreignTable,
+                            get_debug_type($childData)
+                        )
+                    ]);
+                }
+
+                if (!isset($childData['uid']) || !is_numeric($childData['uid'])) {
+                    continue;
+                }
+
+                // Same guard the top level applies: without it a caller could patch a record
+                // belonging to someone else, and the cleanup below would delete the real one.
+                if (!in_array((int)$childData['uid'], $existingChildUids, true)) {
+                    throw new ValidationException([
+                        sprintf(
+                            'Entry %d of field "%s" references uid %d of "%s", which does not belong to '
+                            . 'this record. Omit the uid to add a new entry.',
+                            $index,
+                            $fieldName,
+                            (int)$childData['uid'],
+                            $foreignTable
+                        )
+                    ]);
+                }
+            }
+
+            // Updating replaces the whole list, so whatever was there before and is not sent
+            // again has to go - otherwise a replaced file leaves its old reference behind.
+            if ($existingChildUids !== []) {
+                $this->deleteOrphanedEmbeddedRelations($foreignTable, $existingChildUids, $value);
+            }
+
+            $keys = [];
+            foreach (array_values($value) as $index => $childData) {
+                $existingUid = (isset($childData['uid']) && is_numeric($childData['uid']) && (int)$childData['uid'] > 0)
+                    ? (int)$childData['uid']
+                    : null;
+                unset($childData['uid']);
+
+                // Stripped here and written after the run - a value sent by the caller
+                // would point wherever they like.
+                if (!empty($config['foreign_field'])) {
+                    unset($childData[$config['foreign_field']]);
+                }
+
+                $childData = $this->convertDataForStorage($foreignTable, $childData);
+
+                if ($existingUid === null) {
+                    $childData['pid'] = $pid;
+
+                    // e.g. tablenames/fieldname for sys_file_reference
+                    foreach (($config['foreign_match_fields'] ?? []) as $matchField => $matchValue) {
+                        $childData[$matchField] = $matchValue;
+                    }
+
+                    $key = 'NEW' . uniqid() . '_' . $index;
+                } else {
+                    $key = $this->resolveToWorkspaceUid($foreignTable, $existingUid);
+                }
+
+                if (isset($config['foreign_sortby'])) {
+                    $childData[$config['foreign_sortby']] = ($index + 1) * 256;
+                }
+
+                $this->resolveNestedEmbeddedRelations($dataMap, $foreignTable, $key, $childData, $pid);
+
+                if (!isset($dataMap[$foreignTable])) {
+                    $dataMap[$foreignTable] = [];
+                }
+                $dataMap[$foreignTable][$key] = $childData;
+                $keys[] = $key;
+
+                // DataHandler leaves the foreign field of a nested child at 0 here, the same
+                // way it does for the top level - both are written directly after the run.
+                if (!empty($config['foreign_field'])) {
+                    $this->pendingNestedForeignFields[] = [
+                        'table' => $foreignTable,
+                        'key' => $key,
+                        'foreignField' => $config['foreign_field'],
+                        'parentTable' => $table,
+                        'parentKey' => $recordKey,
+                    ];
+                }
+            }
+
+            // DataHandler expects a comma separated list of keys here, never an array.
+            $recordData[$fieldName] = implode(',', $keys);
+        }
+    }
     
     /**
      * Process independent inline relations (UIDs only)
@@ -1564,7 +1902,9 @@ class WriteTableTool extends AbstractRecordTool
         string $foreignTable,
         string $foreignField,
         int $parentUid,
-        array $foreignMatchFields = []
+        array $foreignMatchFields = [],
+        ?string $foreignTableField = null,
+        string $parentTable = ''
     ): array {
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable($foreignTable);
@@ -1585,6 +1925,16 @@ class WriteTableTool extends AbstractRecordTool
         foreach ($foreignMatchFields as $matchField => $matchValue) {
             $queryBuilder->andWhere(
                 $queryBuilder->expr()->eq($matchField, $queryBuilder->createNamedParameter($matchValue))
+            );
+        }
+
+        // Scope to the owning parent table when the child table is shared across
+        // multiple parent tables (foreign_table_field, e.g. Content Blocks
+        // shareAcrossTables). Without this, two unrelated parents on different
+        // tables that happen to reuse the same uid could see each other's children.
+        if (!empty($foreignTableField) && $parentTable !== '') {
+            $queryBuilder->andWhere(
+                $queryBuilder->expr()->eq($foreignTableField, $queryBuilder->createNamedParameter($parentTable))
             );
         }
 
@@ -1854,8 +2204,14 @@ class WriteTableTool extends AbstractRecordTool
 
     /**
      * Convert data for storage
+     *
+     * @param int|null $uid The record's uid, when updating an existing record.
+     *                      Used to resolve the record's type (e.g. CType) for
+     *                      FlexForm sheet resolution when the type field isn't
+     *                      part of $data itself. Null for new records, where
+     *                      the type is expected to be present in $data.
      */
-    protected function convertDataForStorage(string $table, array $data): array
+    protected function convertDataForStorage(string $table, array $data, ?int $uid = null): array
     {
         // Process each field
         foreach ($data as $fieldName => $value) {
@@ -1891,46 +2247,299 @@ class WriteTableTool extends AbstractRecordTool
                 if (is_string($value) && strpos($value, '<?xml') === 0) {
                     continue;
                 }
-                
+
                 // If the value is an array or JSON string, convert it to XML
                 $flexFormArray = is_array($value) ? $value : (is_string($value) && strpos($value, '{') === 0 ? json_decode($value, true) : null);
-                
+
                 if (is_array($flexFormArray)) {
-                    // Prepare the data structure for TYPO3's XML conversion
-                    $flexFormData = [
-                        'data' => [
-                            'sDEF' => [
-                                'lDEF' => []
-                            ]
-                        ]
-                    ];
-                    
-                    // Process settings fields
-                    if (isset($flexFormArray['settings']) && is_array($flexFormArray['settings'])) {
-                        foreach ($flexFormArray['settings'] as $settingKey => $settingValue) {
-                            $flexFormData['data']['sDEF']['lDEF']['settings.' . $settingKey]['vDEF'] = $settingValue;
-                        }
-                    }
-                    
-                    // Process other fields
-                    foreach ($flexFormArray as $key => $val) {
-                        if ($key !== 'settings' && !is_array($val)) {
-                            $flexFormData['data']['sDEF']['lDEF'][$key]['vDEF'] = $val;
-                        }
-                    }
-                    
-                    // Use TYPO3's GeneralUtility::array2xml to convert the array to XML
-                    $xml = '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' . "\n";
-                    $xml .= GeneralUtility::array2xml($flexFormData, '', 0, 'T3FlexForms');
-                    
-                    $data[$fieldName] = $xml;
+                    $data[$fieldName] = $this->buildFlexFormXml($table, $fieldName, $flexFormArray, $data, $uid);
                 }
             }
         }
-        
+
         return $data;
     }
-    
+
+    /**
+     * Build the FlexForm XML for one field, with each value placed in the
+     * sheet its real DataStructure declares.
+     *
+     * @param array $data The record's full data (used to resolve the record
+     *                     type when it's part of this write, e.g. CType on create).
+     */
+    protected function buildFlexFormXml(string $table, string $fieldName, array $flexFormArray, array $data, ?int $uid): string
+    {
+        // Flatten every top-level array value with its own key as prefix, not
+        // just "settings" — a DataStructure isn't required to nest all its
+        // fields there (e.g. classic non-Extbase DataStructures commonly
+        // don't), and this server's own GetFlexFormSchemaTool examples
+        // reflect whatever grouping the real DataStructure declares.
+        $flatFields = [];
+        foreach ($flexFormArray as $key => $val) {
+            if (is_array($val)) {
+                $flatFields += $this->flattenFlexFormSettings($val, (string)$key);
+            } else {
+                $flatFields[$key] = $val;
+            }
+        }
+
+        // Resolve which sheet each field actually belongs to per the FlexForm's
+        // real DataStructure. FlexForms with more than one sheet are common
+        // (e.g. a base sheet plus a conditionally shown sheet for
+        // preset/filter-style settings); writing everything into "sDEF"
+        // regardless silently misplaces any field that belongs elsewhere: the
+        // value never reaches wherever the DataStructure-aware readers (the
+        // backend edit form, the plugin itself) actually look for it, even
+        // though ReadTableTool reads it back fine (it doesn't care about
+        // sheets either).
+        $recordType = $this->resolveRecordTypeForFlexForm($table, $data, $uid);
+        $fieldSheets = $this->resolveFlexFormFieldSheets($table, $fieldName, $recordType, $data, $uid);
+
+        $flexFormData = ['data' => []];
+        foreach ($flatFields as $flatFieldName => $flatFieldValue) {
+            $sheet = $fieldSheets[$flatFieldName] ?? 'sDEF';
+            $flexFormData['data'][$sheet]['lDEF'][$flatFieldName]['vDEF'] = $flatFieldValue;
+        }
+        // TYPO3's FlexForm processing expects a "sDEF" sheet to be present
+        // even when every written value belongs elsewhere (e.g. an update
+        // that only touches a conditionally-shown sheet).
+        if (!isset($flexFormData['data']['sDEF'])) {
+            $flexFormData['data']['sDEF'] = ['lDEF' => []];
+        }
+
+        // Use TYPO3's own FlexFormTools to convert the array to XML — NOT
+        // GeneralUtility::array2xml() directly. array2xml() always sanitizes
+        // tag names down to `[:alnum:]_-` before writing them, silently
+        // stripping every dot from a key like "settings.preset.locations"
+        // (producing the meaningless tag <settingspresetlocations>, matching
+        // no field in any real DataStructure). FlexFormTools::flexArray2Xml()
+        // avoids that by writing the real field name into an `index`
+        // attribute on a generically-named <field> tag instead of into the
+        // tag name itself — attributes aren't subject to that sanitization —
+        // which is exactly how TYPO3's own FormEngine persists FlexForm data,
+        // and the only shape TYPO3's DataStructure-aware readers (the backend
+        // edit form, the plugin itself) recognize.
+        $flexFormTools = GeneralUtility::makeInstance(FlexFormTools::class);
+        return $flexFormTools->flexArray2Xml($flexFormData);
+    }
+
+    /**
+     * Flatten nested settings into the dot-separated field names a
+     * DataStructure actually declares (e.g. "settings.preset.locations"),
+     * the same convention TYPO3 extensions use for FlexForm field names. A
+     * list array (sequential integer keys) is treated as the value of a
+     * single multi-select field and imploded into TYPO3's comma-separated
+     * storage format, rather than recursed into further field names.
+     */
+    protected function flattenFlexFormSettings(array $settings, string $prefix): array
+    {
+        $result = [];
+        foreach ($settings as $key => $val) {
+            $path = $prefix === '' ? (string)$key : $prefix . '.' . $key;
+            if (is_array($val)) {
+                if (array_is_list($val)) {
+                    $result[$path] = implode(',', array_map('strval', $val));
+                } else {
+                    $result += $this->flattenFlexFormSettings($val, $path);
+                }
+            } else {
+                $result[$path] = $val;
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Resolve the record type value used to select the correct FlexForm
+     * DataStructure. Prefers the value in $data (present on create, or when a
+     * caller explicitly updates the type field); falls back to loading the
+     * existing record when updating without changing its type.
+     *
+     * On TYPO3 13, plugins are registered as CType="list" with the real
+     * plugin identifier (e.g. "news_pi1") living in a separate subtype field
+     * — conventionally "list_type", declared via the type's
+     * `subtype_value_field` — rather than in CType itself. The FlexForm
+     * DataStructure is keyed by that subtype value, not by "list", so this
+     * resolves it the same way TYPO3 core does whenever a subtype field is
+     * configured for the resolved type. TYPO3 14 has no plugin subtypes
+     * (every plugin is its own CType), so this is a no-op there.
+     */
+    protected function resolveRecordTypeForFlexForm(string $table, array $data, ?int $uid): ?string
+    {
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
+        if ($typeField === null) {
+            return null;
+        }
+
+        $recordType = null;
+        if (isset($data[$typeField]) && is_string($data[$typeField])) {
+            $recordType = $data[$typeField];
+        } elseif ($uid !== null) {
+            $existingRecord = BackendUtility::getRecord($table, $uid, $typeField);
+            if (is_array($existingRecord) && isset($existingRecord[$typeField])) {
+                $recordType = (string)$existingRecord[$typeField];
+            }
+        }
+
+        if ($recordType === null) {
+            return null;
+        }
+
+        $subtypeField = $GLOBALS['TCA'][$table]['types'][$recordType]['subtype_value_field'] ?? null;
+        if (is_string($subtypeField) && $subtypeField !== '') {
+            $subtypeValue = $data[$subtypeField] ?? null;
+            if (!is_string($subtypeValue) && $uid !== null) {
+                $existingRecord = BackendUtility::getRecord($table, $uid, $subtypeField);
+                $subtypeValue = $existingRecord[$subtypeField] ?? null;
+            }
+            if (is_string($subtypeValue) && $subtypeValue !== '') {
+                return $subtypeValue;
+            }
+        }
+
+        return $recordType;
+    }
+
+    /**
+     * Resolve which sheet each field of a FlexForm's DataStructure belongs to.
+     *
+     * Returns a [fieldName => sheetName] map built by parsing the actual
+     * DataStructure XML/array for the given table/field/record type — the
+     * same DS a TYPO3 backend edit form or FlexFormService would resolve.
+     * Returns an empty array when no DataStructure could be resolved (e.g.
+     * unknown type, missing file); callers should then default every field
+     * to "sDEF", matching the previous behaviour for genuinely single-sheet
+     * FlexForms.
+     */
+    protected function resolveFlexFormFieldSheets(string $table, string $fieldName, ?string $recordType, array $data, ?int $uid): array
+    {
+        $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? null;
+        if (!is_array($fieldConfig) || ($fieldConfig['config']['type'] ?? '') !== 'flex') {
+            return [];
+        }
+
+        $xmlArray = null;
+
+        // TYPO3 14: DataStructure attached per record type via columnsOverrides,
+        // rather than through a central ds map keyed by a pointer field.
+        $dsValue = $recordType !== null
+            ? ($GLOBALS['TCA'][$table]['types'][$recordType]['columnsOverrides'][$fieldName]['config']['ds'] ?? null)
+            : null;
+
+        if ($dsValue !== null) {
+            $xmlArray = $this->loadFlexFormDataStructure($dsValue);
+        } else {
+            $dsMap = $fieldConfig['config']['ds'] ?? null;
+            if (is_string($dsMap)) {
+                // Single DS for the whole field, no pointer field involved.
+                $xmlArray = $this->loadFlexFormDataStructure($dsMap);
+            } elseif (is_array($dsMap)) {
+                // TYPO3 13 style: central `ds` map keyed by pointer field
+                // value(s), e.g. "list_type,CType". Resolved through TYPO3's
+                // own FlexFormTools — the exact algorithm DataHandler itself
+                // uses — rather than reimplementing it: that algorithm needs
+                // BOTH pointer field values at once, in a specific candidate
+                // order, to build the right key (a single collapsed
+                // "$recordType" can't reproduce that faithfully).
+                $row = $this->buildFlexFormPointerRow($table, $fieldConfig, $data, $uid);
+                if ($row !== null) {
+                    try {
+                        $flexFormTools = GeneralUtility::makeInstance(FlexFormTools::class);
+                        $identifier = $flexFormTools->getDataStructureIdentifier($fieldConfig, $table, $fieldName, $row);
+                        $xmlArray = $flexFormTools->parseDataStructureByIdentifier($identifier);
+                    } catch (\Throwable) {
+                        $xmlArray = null;
+                    }
+                }
+            }
+        }
+
+        if (!is_array($xmlArray)) {
+            return [];
+        }
+
+        $fieldSheets = [];
+        if (isset($xmlArray['sheets']) && is_array($xmlArray['sheets'])) {
+            foreach ($xmlArray['sheets'] as $sheetName => $sheet) {
+                foreach (array_keys($sheet['ROOT']['el'] ?? []) as $dsFieldName) {
+                    $fieldSheets[$dsFieldName] = (string)$sheetName;
+                }
+            }
+        } elseif (isset($xmlArray['ROOT']['el'])) {
+            foreach (array_keys($xmlArray['ROOT']['el']) as $dsFieldName) {
+                $fieldSheets[$dsFieldName] = 'sDEF';
+            }
+        }
+
+        return $fieldSheets;
+    }
+
+    /**
+     * Load a FlexForm DataStructure value (a `ds`/columnsOverrides entry)
+     * into its parsed array form, resolving a "FILE:" reference first.
+     * Returns null when the value can't be resolved to an array (missing
+     * file, invalid XML).
+     */
+    protected function loadFlexFormDataStructure(string|array $dsValue): ?array
+    {
+        if (is_array($dsValue)) {
+            return $dsValue;
+        }
+
+        if (str_starts_with($dsValue, 'FILE:')) {
+            $file = GeneralUtility::getFileAbsFileName(substr($dsValue, 5));
+            if (empty($file) || !file_exists($file)) {
+                return null;
+            }
+            $dsValue = file_get_contents($file);
+            if ($dsValue === false) {
+                return null;
+            }
+        }
+
+        $xmlArray = GeneralUtility::xml2array($dsValue);
+        return is_array($xmlArray) ? $xmlArray : null;
+    }
+
+    /**
+     * Build the row TYPO3's FlexFormTools needs to resolve a `ds_pointerField`
+     * DataStructure: the value of each pointer field (one or two, per TCA),
+     * preferring the value in $data, then the existing record, then falling
+     * back to the field's TCA-declared default (what a fresh record gets for
+     * any column the write doesn't mention). Returns null only when the
+     * field has no `ds_pointerField` configured at all.
+     */
+    protected function buildFlexFormPointerRow(string $table, array $fieldConfig, array $data, ?int $uid): ?array
+    {
+        $pointerFieldConfig = $fieldConfig['config']['ds_pointerField'] ?? null;
+        if (!is_string($pointerFieldConfig) || $pointerFieldConfig === '') {
+            return null;
+        }
+
+        $existingRecord = null;
+        $row = ['uid' => $uid ?? 0];
+        foreach (GeneralUtility::trimExplode(',', $pointerFieldConfig, true) as $pointerField) {
+            if (isset($data[$pointerField]) && is_string($data[$pointerField])) {
+                $row[$pointerField] = $data[$pointerField];
+                continue;
+            }
+            if ($existingRecord === null) {
+                $existingRecord = $uid !== null ? (BackendUtility::getRecord($table, $uid) ?: []) : [];
+            }
+            if (isset($existingRecord[$pointerField])) {
+                $row[$pointerField] = (string)$existingRecord[$pointerField];
+                continue;
+            }
+            // New record, and this pointer field isn't part of the current
+            // write: fall back to its TCA-declared default (e.g. "" for
+            // list_type) — the value DataHandler itself persists for a
+            // column the write never mentions.
+            $row[$pointerField] = (string)($GLOBALS['TCA'][$table]['columns'][$pointerField]['config']['default'] ?? '');
+        }
+
+        return $row;
+    }
+
     /**
      * For translation records, set l10n_state to "custom" for fields that
      * have allowLanguageSynchronization enabled and are being explicitly updated.
@@ -2022,6 +2631,53 @@ class WriteTableTool extends AbstractRecordTool
         
         // Default: return the workspace UID
         return $workspaceUid;
+    }
+
+    /**
+     * Write the foreign field of every nested embedded child collected during this write.
+     *
+     * DataHandler resolves relations of the record it writes, but a child of a child is
+     * linked through a field it never evaluates, so the pointer stays at 0. The top level
+     * has the same problem and solves it the same way, right after its own run.
+     */
+    protected function writePendingNestedForeignFields(DataHandler $dataHandler): void
+    {
+        $pending = $this->pendingNestedForeignFields;
+        $this->pendingNestedForeignFields = [];
+
+        foreach ($pending as $link) {
+            $childUid = $this->resolveWrittenUid($dataHandler, $link['key']);
+            $parentUid = $this->resolveWrittenUid($dataHandler, $link['parentKey']);
+
+            if ($childUid === null || $parentUid === null) {
+                continue;
+            }
+
+            // Point at the live uid the way the top level does, so workspace overlays resolve.
+            $parentUid = $this->getLiveUid($link['parentTable'], $parentUid);
+
+            GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable($link['table'])
+                ->update(
+                    $link['table'],
+                    [$link['foreignField'] => $parentUid],
+                    ['uid' => $childUid]
+                );
+        }
+    }
+
+    /**
+     * Turn a datamap key into the uid it ended up with - numeric keys are existing records.
+     */
+    protected function resolveWrittenUid(DataHandler $dataHandler, int|string $key): ?int
+    {
+        if (is_numeric($key)) {
+            return (int)$key;
+        }
+
+        $uid = $dataHandler->substNEWwithIDs[$key] ?? null;
+
+        return $uid ? (int)$uid : null;
     }
     
     /**

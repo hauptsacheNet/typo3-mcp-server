@@ -8,6 +8,7 @@ use GuzzleHttp\Promise\FulfilledPromise;
 use GuzzleHttp\Psr7\Response;
 use Hn\McpServer\MCP\Tool\File\UploadFileTool;
 use Hn\McpServer\Service\SiteInformationService;
+use Hn\McpServer\Tests\Functional\Fixtures\ThrowingOnlineMediaHelper;
 use PHPUnit\Framework\Attributes\DataProvider;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Http\NormalizedParams;
@@ -612,6 +613,83 @@ class UploadFileToolTest extends FunctionalTestCase
 
         $this->assertEquals($first['uid'], $second['uid'], 'Same video should not create a second asset');
         $this->assertTrue($second['deduplicated']);
+    }
+
+    public function testThrowingThirdPartyOnlineMediaHelperDoesNotBreakUrlUploads(): void
+    {
+        // Real-world case: a project helper for a media database only supports
+        // creation from a JSON payload and throws from transformUrlToFile()
+        // instead of returning null. Every non-YouTube/Vimeo URL upload failed
+        // with "An unexpected error occurred" because the registry loop
+        // reached that helper.
+        $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers']['broken'] = ThrowingOnlineMediaHelper::class;
+        ThrowingOnlineMediaHelper::$calls = 0;
+        $this->mockHttpResponses([
+            'http://203.0.113.10/images/skipped-helper.png' => new Response(200, ['Content-Type' => 'image/png'], $this->pngBytes()),
+        ]);
+
+        $data = $this->executeUpload([
+            'url' => 'http://203.0.113.10/images/skipped-helper.png',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertEquals('skipped-helper.png', $data['fileName']);
+        $this->assertArrayNotHasKey('onlineMedia', $data);
+        $this->assertSame(1, ThrowingOnlineMediaHelper::$calls, 'The broken helper must be consulted once and then skipped');
+    }
+
+    public function testSkippedHelperFailureIsReportedWhenTheFallbackDownloadFailsToo(): void
+    {
+        // The throwing helper might have been the one responsible for the URL
+        // (e.g. a YouTube helper whose API call failed). If the plain download
+        // does not work out either, the caller must learn about the helper
+        // failure instead of only seeing an unrelated download error.
+        $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers']['broken'] = ThrowingOnlineMediaHelper::class;
+        $this->mockHttpResponses([]); // everything 404s
+
+        $result = GeneralUtility::makeInstance(UploadFileTool::class)->execute([
+            'url' => 'http://203.0.113.10/videos/clip',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertTrue($result->isError);
+        $message = $result->content[0]->text;
+        $this->assertStringContainsString('HTTP status 404', $message);
+        $this->assertStringContainsString('".broken"', $message);
+        $this->assertStringContainsString('requires more than just an url', $message);
+    }
+
+    public function testSuccessfulDownloadIsNotBurdenedWithSkippedHelperNotes(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers']['broken'] = ThrowingOnlineMediaHelper::class;
+        $this->mockHttpResponses([
+            'http://203.0.113.10/images/clean-result.png' => new Response(200, ['Content-Type' => 'image/png'], $this->pngBytes()),
+        ]);
+
+        $data = $this->executeUpload([
+            'url' => 'http://203.0.113.10/images/clean-result.png',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertEquals('clean-result.png', $data['fileName']);
+        $this->assertStringNotContainsString('skipped', json_encode($data));
+    }
+
+    public function testOnlineMediaHelpersBehindAThrowingOneAreStillConsulted(): void
+    {
+        // The broken helper comes first, so YouTube is only recognized if the
+        // lookup continues past the exception instead of giving up.
+        $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers'] =
+            ['broken' => ThrowingOnlineMediaHelper::class] + $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers'];
+        $this->mockHttpResponses([]);
+
+        $data = $this->executeUpload([
+            'url' => 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertTrue($data['onlineMedia']);
+        $this->assertStringEndsWith('.youtube', $data['fileName']);
     }
 
     // ---------------------------------------------------------------
