@@ -965,7 +965,9 @@ class ReadTableTool extends AbstractRecordTool
 
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
 
-        // Apply restrictions including workspace delete placeholders
+        // Apply restrictions including workspace delete placeholders and move pointers:
+        // a child moved or reordered in the workspace is selected once, as its move
+        // pointer, which carries the workspace sorting the ORDER BY below relies on.
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))

@@ -12,13 +12,23 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Versioning\VersionState;
 
 /**
- * Query restriction to exclude live records that have delete placeholders in the current workspace.
- * 
- * This restriction ensures that when working in a workspace, records that have been "deleted"
- * (which creates a delete placeholder) are not shown in the results. This is different from
- * the standard WorkspaceRestriction which handles workspace record selection but doesn't
- * exclude live records that have delete placeholders.
- * 
+ * Query restriction to exclude live records that are superseded by a version in the current
+ * workspace which lives somewhere else or not at all: delete placeholders and move pointers.
+ *
+ * The standard WorkspaceRestriction admits live rows plus the workspace's new records and
+ * move pointers (t3ver_state=4), and expects consumers to fold versions onto live rows with
+ * BackendUtility::workspaceOL(). That leaves two gaps for a workspace-transparent read:
+ *
+ * - Deleted in the workspace (t3ver_state=2): the delete placeholder itself is filtered, but
+ *   the live row is still selected and would show up as if it still existed.
+ * - Moved in the workspace (t3ver_state=4, which is also how a reorder is staged): both the
+ *   live row and the move pointer are selected, so the record appears twice, and the live
+ *   row carries the old pid/sorting, so it also shows up at its old position or parent.
+ *
+ * Excluding these live rows at query level lets the remaining rows (live, new-in-workspace
+ * and move pointers) be filtered, sorted, counted and paginated by SQL in their workspace
+ * state. Callers map version uids back to live uids via t3ver_oid.
+ *
  * Only applies to workspace-enabled tables.
  */
 class WorkspaceDeletePlaceholderRestriction implements QueryRestrictionInterface
@@ -52,8 +62,8 @@ class WorkspaceDeletePlaceholderRestriction implements QueryRestrictionInterface
                 continue;
             }
             
-            // Create a subquery to find UIDs of live records that have delete placeholders
-            // in the current workspace
+            // Create a subquery to find UIDs of live records that have a delete placeholder
+            // or a move pointer in the current workspace
             try {
                 $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
                 $subQueryBuilder = $connectionPool->getQueryBuilderForTable($tableName);
@@ -63,9 +73,10 @@ class WorkspaceDeletePlaceholderRestriction implements QueryRestrictionInterface
                     ->select('t3ver_oid')
                     ->from($tableName)
                     ->where(
-                        $subQueryBuilder->expr()->eq('t3ver_state', 
-                            $subQueryBuilder->expr()->literal((string)VersionState::DELETE_PLACEHOLDER->value)
-                        ),
+                        $subQueryBuilder->expr()->in('t3ver_state', [
+                            $subQueryBuilder->expr()->literal((string)VersionState::DELETE_PLACEHOLDER->value),
+                            $subQueryBuilder->expr()->literal((string)VersionState::MOVE_POINTER->value),
+                        ]),
                         $subQueryBuilder->expr()->eq('t3ver_wsid', 
                             $subQueryBuilder->expr()->literal((string)$this->workspaceId)
                         ),
@@ -73,8 +84,18 @@ class WorkspaceDeletePlaceholderRestriction implements QueryRestrictionInterface
                             $subQueryBuilder->expr()->literal('0')
                         )
                     );
+
+                // A soft-deleted version no longer supersedes its live record. This matters
+                // for move pointers in particular: the restricted main query drops deleted
+                // move pointers too, so excluding the live row would make the record vanish.
+                $deleteField = $GLOBALS['TCA'][$tableName]['ctrl']['delete'] ?? '';
+                if ($deleteField !== '') {
+                    $subQuery->andWhere(
+                        $subQueryBuilder->expr()->eq($deleteField, $subQueryBuilder->expr()->literal('0'))
+                    );
+                }
                 
-                // Exclude live records that have delete placeholders in current workspace
+                // Exclude live records that are deleted or moved in the current workspace
                 $constraints[] = $expressionBuilder->notIn(
                     $tableAlias . '.uid',
                     $subQuery->getSQL()

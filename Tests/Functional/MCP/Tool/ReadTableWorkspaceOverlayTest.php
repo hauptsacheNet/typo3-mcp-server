@@ -141,6 +141,73 @@ class ReadTableWorkspaceOverlayTest extends AbstractFunctionalTest
     }
 
     /**
+     * Reordering live records in a workspace stages move pointers (t3ver_state=4).
+     * A pid listing must return each record once, in the workspace order, with a
+     * total that matches the returned rows.
+     */
+    public function testReadByPidReturnsLiveRecordsReorderedInWorkspaceOnceInNewOrder(): void
+    {
+        // Live order on page 1: 100 (256), 101 (512), 104 (768)
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        $writeResult = $this->writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => 104,
+            'position' => 'top',
+        ]);
+        $this->assertFalse($writeResult->isError, json_encode($writeResult->jsonSerialize()));
+
+        $payload = $this->readByPid(1);
+        $this->assertSame([104, 100, 101], array_map('intval', array_column($payload['records'], 'uid')));
+        $this->assertSame(3, $payload['total']);
+    }
+
+    /**
+     * A live record moved to another page in the workspace must disappear from the
+     * old page and show up once, under its live uid, on the new page.
+     */
+    public function testReadByPidFollowsLiveRecordMovedToAnotherPageInWorkspace(): void
+    {
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        $writeResult = $this->writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => 101,
+            'data' => ['pid' => 2],
+        ]);
+        $this->assertFalse($writeResult->isError, json_encode($writeResult->jsonSerialize()));
+
+        $sourcePage = $this->readByPid(1);
+        $this->assertSame([100, 104], array_map('intval', array_column($sourcePage['records'], 'uid')));
+        $this->assertSame(2, $sourcePage['total']);
+
+        $targetPage = $this->readByPid(2);
+        $targetUids = array_map('intval', array_column($targetPage['records'], 'uid'));
+        $this->assertSame(1, count(array_keys($targetUids, 101, true)), 'Moved record must appear exactly once: ' . json_encode($targetUids));
+        $this->assertSame(count($targetUids), $targetPage['total']);
+
+        $moved = $this->readSingle('tt_content', 101, ['uid', 'pid', 'header']);
+        $this->assertSame(101, (int)$moved['uid']);
+        $this->assertSame(2, (int)$moved['pid']);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function readByPid(int $pid): array
+    {
+        $result = $this->readTool->execute([
+            'table' => 'tt_content',
+            'pid' => $pid,
+            'fields' => ['uid', 'header'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        return json_decode($result->content[0]->text, true);
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function readSingle(string $table, int $uid, array $fields): array
