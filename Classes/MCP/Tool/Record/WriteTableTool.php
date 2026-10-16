@@ -13,6 +13,7 @@ use Hn\McpServer\Service\LanguageService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -584,9 +585,11 @@ class WriteTableTool extends AbstractRecordTool
 
         // Extract inline relations before converting data
         $inlineRelations = $this->extractInlineRelations($table, $data);
-        
-        // Convert data for storage
-        $data = $this->convertDataForStorage($table, $data);
+
+        // Convert data for storage. $uid lets FlexForm handling resolve the
+        // record's existing type when the type field itself isn't part of
+        // this update, so it can pick the right DataStructure.
+        $data = $this->convertDataForStorage($table, $data, $uid);
 
         // For translation records, add l10n_state overrides so DataHandler treats
         // explicitly updated fields as "custom" (not synced from parent)
@@ -1045,7 +1048,7 @@ class WriteTableTool extends AbstractRecordTool
         if ($newTranslationUid) {
             // Dispatch the same normalized representation that updateRecord()
             // persists (dates as timestamps etc.), not the raw tool input.
-            $eventFieldValues = !empty($fieldValues) ? $this->convertDataForStorage($table, $fieldValues) : [];
+            $eventFieldValues = !empty($fieldValues) ? $this->convertDataForStorage($table, $fieldValues, (int)$newTranslationUid) : [];
             $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
             $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'translate', (int)$newTranslationUid, $eventFieldValues, null));
         }
@@ -1402,7 +1405,7 @@ class WriteTableTool extends AbstractRecordTool
             // Run the same field-level conversions we apply to top-level records
             // (notably JSON-encoding imageManipulation values) so embedded children
             // like sys_file_reference.crop survive the round trip.
-            $recordData = $this->convertDataForStorage($foreignTable, $recordData);
+            $recordData = $this->convertDataForStorage($foreignTable, $recordData, $existingUid);
 
             if ($existingUid === null) {
                 // New record: pid + foreign_match_fields are required for proper insertion
@@ -2013,8 +2016,14 @@ class WriteTableTool extends AbstractRecordTool
 
     /**
      * Convert data for storage
+     *
+     * @param int|null $uid The record's uid, when updating an existing record.
+     *                      Used to resolve the record's type (e.g. CType) for
+     *                      FlexForm sheet resolution when the type field isn't
+     *                      part of $data itself. Null for new records, where
+     *                      the type is expected to be present in $data.
      */
-    protected function convertDataForStorage(string $table, array $data): array
+    protected function convertDataForStorage(string $table, array $data, ?int $uid = null): array
     {
         // Process each field
         foreach ($data as $fieldName => $value) {
@@ -2050,46 +2059,299 @@ class WriteTableTool extends AbstractRecordTool
                 if (is_string($value) && strpos($value, '<?xml') === 0) {
                     continue;
                 }
-                
+
                 // If the value is an array or JSON string, convert it to XML
                 $flexFormArray = is_array($value) ? $value : (is_string($value) && strpos($value, '{') === 0 ? json_decode($value, true) : null);
-                
+
                 if (is_array($flexFormArray)) {
-                    // Prepare the data structure for TYPO3's XML conversion
-                    $flexFormData = [
-                        'data' => [
-                            'sDEF' => [
-                                'lDEF' => []
-                            ]
-                        ]
-                    ];
-                    
-                    // Process settings fields
-                    if (isset($flexFormArray['settings']) && is_array($flexFormArray['settings'])) {
-                        foreach ($flexFormArray['settings'] as $settingKey => $settingValue) {
-                            $flexFormData['data']['sDEF']['lDEF']['settings.' . $settingKey]['vDEF'] = $settingValue;
-                        }
-                    }
-                    
-                    // Process other fields
-                    foreach ($flexFormArray as $key => $val) {
-                        if ($key !== 'settings' && !is_array($val)) {
-                            $flexFormData['data']['sDEF']['lDEF'][$key]['vDEF'] = $val;
-                        }
-                    }
-                    
-                    // Use TYPO3's GeneralUtility::array2xml to convert the array to XML
-                    $xml = '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' . "\n";
-                    $xml .= GeneralUtility::array2xml($flexFormData, '', 0, 'T3FlexForms');
-                    
-                    $data[$fieldName] = $xml;
+                    $data[$fieldName] = $this->buildFlexFormXml($table, $fieldName, $flexFormArray, $data, $uid);
                 }
             }
         }
-        
+
         return $data;
     }
-    
+
+    /**
+     * Build the FlexForm XML for one field, with each value placed in the
+     * sheet its real DataStructure declares.
+     *
+     * @param array $data The record's full data (used to resolve the record
+     *                     type when it's part of this write, e.g. CType on create).
+     */
+    protected function buildFlexFormXml(string $table, string $fieldName, array $flexFormArray, array $data, ?int $uid): string
+    {
+        // Flatten every top-level array value with its own key as prefix, not
+        // just "settings" — a DataStructure isn't required to nest all its
+        // fields there (e.g. classic non-Extbase DataStructures commonly
+        // don't), and this server's own GetFlexFormSchemaTool examples
+        // reflect whatever grouping the real DataStructure declares.
+        $flatFields = [];
+        foreach ($flexFormArray as $key => $val) {
+            if (is_array($val)) {
+                $flatFields += $this->flattenFlexFormSettings($val, (string)$key);
+            } else {
+                $flatFields[$key] = $val;
+            }
+        }
+
+        // Resolve which sheet each field actually belongs to per the FlexForm's
+        // real DataStructure. FlexForms with more than one sheet are common
+        // (e.g. a base sheet plus a conditionally shown sheet for
+        // preset/filter-style settings); writing everything into "sDEF"
+        // regardless silently misplaces any field that belongs elsewhere: the
+        // value never reaches wherever the DataStructure-aware readers (the
+        // backend edit form, the plugin itself) actually look for it, even
+        // though ReadTableTool reads it back fine (it doesn't care about
+        // sheets either).
+        $recordType = $this->resolveRecordTypeForFlexForm($table, $data, $uid);
+        $fieldSheets = $this->resolveFlexFormFieldSheets($table, $fieldName, $recordType, $data, $uid);
+
+        $flexFormData = ['data' => []];
+        foreach ($flatFields as $flatFieldName => $flatFieldValue) {
+            $sheet = $fieldSheets[$flatFieldName] ?? 'sDEF';
+            $flexFormData['data'][$sheet]['lDEF'][$flatFieldName]['vDEF'] = $flatFieldValue;
+        }
+        // TYPO3's FlexForm processing expects a "sDEF" sheet to be present
+        // even when every written value belongs elsewhere (e.g. an update
+        // that only touches a conditionally-shown sheet).
+        if (!isset($flexFormData['data']['sDEF'])) {
+            $flexFormData['data']['sDEF'] = ['lDEF' => []];
+        }
+
+        // Use TYPO3's own FlexFormTools to convert the array to XML — NOT
+        // GeneralUtility::array2xml() directly. array2xml() always sanitizes
+        // tag names down to `[:alnum:]_-` before writing them, silently
+        // stripping every dot from a key like "settings.preset.locations"
+        // (producing the meaningless tag <settingspresetlocations>, matching
+        // no field in any real DataStructure). FlexFormTools::flexArray2Xml()
+        // avoids that by writing the real field name into an `index`
+        // attribute on a generically-named <field> tag instead of into the
+        // tag name itself — attributes aren't subject to that sanitization —
+        // which is exactly how TYPO3's own FormEngine persists FlexForm data,
+        // and the only shape TYPO3's DataStructure-aware readers (the backend
+        // edit form, the plugin itself) recognize.
+        $flexFormTools = GeneralUtility::makeInstance(FlexFormTools::class);
+        return $flexFormTools->flexArray2Xml($flexFormData);
+    }
+
+    /**
+     * Flatten nested settings into the dot-separated field names a
+     * DataStructure actually declares (e.g. "settings.preset.locations"),
+     * the same convention TYPO3 extensions use for FlexForm field names. A
+     * list array (sequential integer keys) is treated as the value of a
+     * single multi-select field and imploded into TYPO3's comma-separated
+     * storage format, rather than recursed into further field names.
+     */
+    protected function flattenFlexFormSettings(array $settings, string $prefix): array
+    {
+        $result = [];
+        foreach ($settings as $key => $val) {
+            $path = $prefix === '' ? (string)$key : $prefix . '.' . $key;
+            if (is_array($val)) {
+                if (array_is_list($val)) {
+                    $result[$path] = implode(',', array_map('strval', $val));
+                } else {
+                    $result += $this->flattenFlexFormSettings($val, $path);
+                }
+            } else {
+                $result[$path] = $val;
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Resolve the record type value used to select the correct FlexForm
+     * DataStructure. Prefers the value in $data (present on create, or when a
+     * caller explicitly updates the type field); falls back to loading the
+     * existing record when updating without changing its type.
+     *
+     * On TYPO3 13, plugins are registered as CType="list" with the real
+     * plugin identifier (e.g. "news_pi1") living in a separate subtype field
+     * — conventionally "list_type", declared via the type's
+     * `subtype_value_field` — rather than in CType itself. The FlexForm
+     * DataStructure is keyed by that subtype value, not by "list", so this
+     * resolves it the same way TYPO3 core does whenever a subtype field is
+     * configured for the resolved type. TYPO3 14 has no plugin subtypes
+     * (every plugin is its own CType), so this is a no-op there.
+     */
+    protected function resolveRecordTypeForFlexForm(string $table, array $data, ?int $uid): ?string
+    {
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
+        if ($typeField === null) {
+            return null;
+        }
+
+        $recordType = null;
+        if (isset($data[$typeField]) && is_string($data[$typeField])) {
+            $recordType = $data[$typeField];
+        } elseif ($uid !== null) {
+            $existingRecord = BackendUtility::getRecord($table, $uid, $typeField);
+            if (is_array($existingRecord) && isset($existingRecord[$typeField])) {
+                $recordType = (string)$existingRecord[$typeField];
+            }
+        }
+
+        if ($recordType === null) {
+            return null;
+        }
+
+        $subtypeField = $GLOBALS['TCA'][$table]['types'][$recordType]['subtype_value_field'] ?? null;
+        if (is_string($subtypeField) && $subtypeField !== '') {
+            $subtypeValue = $data[$subtypeField] ?? null;
+            if (!is_string($subtypeValue) && $uid !== null) {
+                $existingRecord = BackendUtility::getRecord($table, $uid, $subtypeField);
+                $subtypeValue = $existingRecord[$subtypeField] ?? null;
+            }
+            if (is_string($subtypeValue) && $subtypeValue !== '') {
+                return $subtypeValue;
+            }
+        }
+
+        return $recordType;
+    }
+
+    /**
+     * Resolve which sheet each field of a FlexForm's DataStructure belongs to.
+     *
+     * Returns a [fieldName => sheetName] map built by parsing the actual
+     * DataStructure XML/array for the given table/field/record type — the
+     * same DS a TYPO3 backend edit form or FlexFormService would resolve.
+     * Returns an empty array when no DataStructure could be resolved (e.g.
+     * unknown type, missing file); callers should then default every field
+     * to "sDEF", matching the previous behaviour for genuinely single-sheet
+     * FlexForms.
+     */
+    protected function resolveFlexFormFieldSheets(string $table, string $fieldName, ?string $recordType, array $data, ?int $uid): array
+    {
+        $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? null;
+        if (!is_array($fieldConfig) || ($fieldConfig['config']['type'] ?? '') !== 'flex') {
+            return [];
+        }
+
+        $xmlArray = null;
+
+        // TYPO3 14: DataStructure attached per record type via columnsOverrides,
+        // rather than through a central ds map keyed by a pointer field.
+        $dsValue = $recordType !== null
+            ? ($GLOBALS['TCA'][$table]['types'][$recordType]['columnsOverrides'][$fieldName]['config']['ds'] ?? null)
+            : null;
+
+        if ($dsValue !== null) {
+            $xmlArray = $this->loadFlexFormDataStructure($dsValue);
+        } else {
+            $dsMap = $fieldConfig['config']['ds'] ?? null;
+            if (is_string($dsMap)) {
+                // Single DS for the whole field, no pointer field involved.
+                $xmlArray = $this->loadFlexFormDataStructure($dsMap);
+            } elseif (is_array($dsMap)) {
+                // TYPO3 13 style: central `ds` map keyed by pointer field
+                // value(s), e.g. "list_type,CType". Resolved through TYPO3's
+                // own FlexFormTools — the exact algorithm DataHandler itself
+                // uses — rather than reimplementing it: that algorithm needs
+                // BOTH pointer field values at once, in a specific candidate
+                // order, to build the right key (a single collapsed
+                // "$recordType" can't reproduce that faithfully).
+                $row = $this->buildFlexFormPointerRow($table, $fieldConfig, $data, $uid);
+                if ($row !== null) {
+                    try {
+                        $flexFormTools = GeneralUtility::makeInstance(FlexFormTools::class);
+                        $identifier = $flexFormTools->getDataStructureIdentifier($fieldConfig, $table, $fieldName, $row);
+                        $xmlArray = $flexFormTools->parseDataStructureByIdentifier($identifier);
+                    } catch (\Throwable) {
+                        $xmlArray = null;
+                    }
+                }
+            }
+        }
+
+        if (!is_array($xmlArray)) {
+            return [];
+        }
+
+        $fieldSheets = [];
+        if (isset($xmlArray['sheets']) && is_array($xmlArray['sheets'])) {
+            foreach ($xmlArray['sheets'] as $sheetName => $sheet) {
+                foreach (array_keys($sheet['ROOT']['el'] ?? []) as $dsFieldName) {
+                    $fieldSheets[$dsFieldName] = (string)$sheetName;
+                }
+            }
+        } elseif (isset($xmlArray['ROOT']['el'])) {
+            foreach (array_keys($xmlArray['ROOT']['el']) as $dsFieldName) {
+                $fieldSheets[$dsFieldName] = 'sDEF';
+            }
+        }
+
+        return $fieldSheets;
+    }
+
+    /**
+     * Load a FlexForm DataStructure value (a `ds`/columnsOverrides entry)
+     * into its parsed array form, resolving a "FILE:" reference first.
+     * Returns null when the value can't be resolved to an array (missing
+     * file, invalid XML).
+     */
+    protected function loadFlexFormDataStructure(string|array $dsValue): ?array
+    {
+        if (is_array($dsValue)) {
+            return $dsValue;
+        }
+
+        if (str_starts_with($dsValue, 'FILE:')) {
+            $file = GeneralUtility::getFileAbsFileName(substr($dsValue, 5));
+            if (empty($file) || !file_exists($file)) {
+                return null;
+            }
+            $dsValue = file_get_contents($file);
+            if ($dsValue === false) {
+                return null;
+            }
+        }
+
+        $xmlArray = GeneralUtility::xml2array($dsValue);
+        return is_array($xmlArray) ? $xmlArray : null;
+    }
+
+    /**
+     * Build the row TYPO3's FlexFormTools needs to resolve a `ds_pointerField`
+     * DataStructure: the value of each pointer field (one or two, per TCA),
+     * preferring the value in $data, then the existing record, then falling
+     * back to the field's TCA-declared default (what a fresh record gets for
+     * any column the write doesn't mention). Returns null only when the
+     * field has no `ds_pointerField` configured at all.
+     */
+    protected function buildFlexFormPointerRow(string $table, array $fieldConfig, array $data, ?int $uid): ?array
+    {
+        $pointerFieldConfig = $fieldConfig['config']['ds_pointerField'] ?? null;
+        if (!is_string($pointerFieldConfig) || $pointerFieldConfig === '') {
+            return null;
+        }
+
+        $existingRecord = null;
+        $row = ['uid' => $uid ?? 0];
+        foreach (GeneralUtility::trimExplode(',', $pointerFieldConfig, true) as $pointerField) {
+            if (isset($data[$pointerField]) && is_string($data[$pointerField])) {
+                $row[$pointerField] = $data[$pointerField];
+                continue;
+            }
+            if ($existingRecord === null) {
+                $existingRecord = $uid !== null ? (BackendUtility::getRecord($table, $uid) ?: []) : [];
+            }
+            if (isset($existingRecord[$pointerField])) {
+                $row[$pointerField] = (string)$existingRecord[$pointerField];
+                continue;
+            }
+            // New record, and this pointer field isn't part of the current
+            // write: fall back to its TCA-declared default (e.g. "" for
+            // list_type) — the value DataHandler itself persists for a
+            // column the write never mentions.
+            $row[$pointerField] = (string)($GLOBALS['TCA'][$table]['columns'][$pointerField]['config']['default'] ?? '');
+        }
+
+        return $row;
+    }
+
     /**
      * For translation records, set l10n_state to "custom" for fields that
      * have allowLanguageSynchronization enabled and are being explicitly updated.
