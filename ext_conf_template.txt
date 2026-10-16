@@ -6,3 +6,6 @@ additionalStandaloneTables = sys_file_metadata
 
 # cat=mcp/files; type=int+; label=Maximum file size (MiB): Upper limit for files fetched from URLs or received through pre-signed uploads via the UploadFile tool. Default: 500
 maxFileSizeMb = 500
+
+# cat=mcp/http; type=int+; label=Session timeout (seconds): How long an idle MCP session is kept alive. Only affects clients using the session-based lifecycle (protocol revisions before 2026-07-28); after the timeout their next request is answered with HTTP 404 and they have to start a new session. Default: 14400 (4 hours)
+sessionTimeout = 14400

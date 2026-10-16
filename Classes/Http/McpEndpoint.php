@@ -14,6 +14,7 @@ use Mcp\Server\Transport\Http\FileSessionStore;
 use Mcp\Server\Transport\Http\HttpMessage;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\UserAspect;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
@@ -29,6 +30,11 @@ class McpEndpoint
 {
     use CorsHeadersTrait;
     use RequestUrlTrait;
+
+    /**
+     * Fallback for the sessionTimeout extension setting, in seconds.
+     */
+    private const DEFAULT_SESSION_TIMEOUT = 14400;
 
     /**
      * Header and query parameter names whose values must never reach a log file.
@@ -155,7 +161,7 @@ class McpEndpoint
 
             // Configure HTTP options
             $httpOptions = [
-                'session_timeout' => 1800, // 30 minutes
+                'session_timeout' => $this->getSessionTimeout(),
                 'max_queue_size' => 500,
                 'enable_sse' => false,
                 'shared_hosting' => false,
@@ -239,6 +245,29 @@ class McpEndpoint
 
             return $this->addCorsHeaders($response, $request);
         }
+    }
+
+    /**
+     * How long an idle MCP session is kept alive on the server, in seconds.
+     *
+     * Only clients using the session-based lifecycle (protocol revisions
+     * before 2026-07-28) are affected: once their session expired, the next
+     * request is answered with 404 and they have to start over. How well a
+     * client recovers from that varies - mcp-remote, for example, does not
+     * re-initialize, so the tool call appears to hang. Session files are
+     * tiny, so keeping them around longer costs next to nothing.
+     */
+    private function getSessionTimeout(): int
+    {
+        try {
+            $timeout = (int)GeneralUtility::makeInstance(ExtensionConfiguration::class)
+                ->get('mcp_server', 'sessionTimeout');
+        } catch (\Exception) {
+            // Extension configuration not synchronized yet
+            $timeout = 0;
+        }
+
+        return $timeout > 0 ? $timeout : self::DEFAULT_SESSION_TIMEOUT;
     }
 
     /**
