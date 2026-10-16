@@ -7,6 +7,7 @@ namespace Hn\McpServer\Tests\Functional\Http;
 use Hn\McpServer\Http\McpEndpoint;
 use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Message\ResponseInterface;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Http\Stream;
@@ -226,6 +227,48 @@ class McpEndpointAuthTest extends AbstractFunctionalTest
         ], $token);
 
         $this->assertSame(401, $response->getStatusCode());
+    }
+
+    /**
+     * @return array<string, array{0: array<string, int>}>
+     */
+    public static function unavailableUserProvider(): array
+    {
+        return [
+            'disabled' => [['disable' => 1]],
+            'deleted' => [['deleted' => 1]],
+            'validity period over' => [['endtime' => time() - 3600]],
+        ];
+    }
+
+    /**
+     * A valid token of a user that can no longer be impersonated must get the
+     * same answer as an invalid token - neither a server error nor anything
+     * that tells whether the account behind the token exists.
+     *
+     * @param array<string, int> $userChange
+     */
+    #[DataProvider('unavailableUserProvider')]
+    public function testTokenOfUnavailableUserIsRejectedLikeAnInvalidToken(array $userChange): void
+    {
+        $token = $this->createAccessToken();
+        $this->getConnectionForTable('be_users')->update('be_users', $userChange, ['uid' => 1]);
+
+        $request = [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'tools/list',
+            'params' => ['_meta' => self::modernMeta()],
+        ];
+        $response = $this->dispatch($request, $token);
+        $invalidTokenResponse = $this->dispatch($request, str_repeat('f', 64));
+
+        $this->assertSame(401, $response->getStatusCode(), (string)$response->getBody());
+        $this->assertSame((string)$invalidTokenResponse->getBody(), (string)$response->getBody());
+        $this->assertSame(
+            $invalidTokenResponse->getHeaderLine('WWW-Authenticate'),
+            $response->getHeaderLine('WWW-Authenticate')
+        );
     }
 
     private function createAccessToken(): string
