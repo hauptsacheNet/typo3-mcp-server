@@ -96,6 +96,14 @@ class McpEndpoint
      */
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
+        // Answer CORS preflights before authentication: browsers never send
+        // the Authorization header on an OPTIONS preflight, so requiring a
+        // token here would fail every browser-based client with a 401 before
+        // its first real request.
+        if ($request->getMethod() === 'OPTIONS') {
+            return $this->handlePreflightRequest($request);
+        }
+
         try {
             // Get services through DI container
             $container = GeneralUtility::getContainer();
