@@ -1,0 +1,11 @@
+{
+    "name": "hn/test-share-across-tables",
+    "type": "typo3-cms-extension",
+    "description": "Test fixture: foreign_table_field inline child (Content Blocks shareAcrossTables shape)",
+    "license": "GPL-2.0-or-later",
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "test_share_across_tables"
+        }
+    }
+}

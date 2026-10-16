@@ -9,6 +9,7 @@ use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\MCP\Tool\Record\GetFlexFormSchemaTool;
 use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Tests\Functional\Traits\PluginContentTrait;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -514,5 +515,108 @@ class NewsFlexFormTest extends FunctionalTestCase
         // Verify detail configuration
         $this->assertArrayHasKey('detail', $settings);
         $this->assertEquals('1', $settings['detail']['showSocialShareButtons']);
+    }
+
+    /**
+     * Regression test for the FlexForm sheet-placement bug: settings that
+     * belong to a sheet other than "sDEF" (the News list FlexForm has three:
+     * sDEF, additional, template) must actually be written into that sheet,
+     * not "sDEF", and the real dotted field name must survive as a proper
+     * FlexForm field identifier - not be mangled into a flat, meaningless tag
+     * name.
+     *
+     * ReadTableTool/GetFlexFormSchemaTool round-tripping through this MCP
+     * server alone can't catch this: both sides used to share the same
+     * (wrong) convention, so a value written to the wrong sheet, or with its
+     * dots stripped, still read back "correctly" through this server's own
+     * tools while being invisible to TYPO3's real DataStructure-aware
+     * consumers (the backend edit form, the plugin itself). This test
+     * inspects the raw stored FlexForm XML instead, the same shape those
+     * real consumers parse.
+     */
+    public function testFlexFormFieldsAreStoredInTheirDeclaredSheet(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                // Deliberately not buildPluginContentRow(): news registers all its
+                // plugins via ExtensionUtility::PLUGIN_TYPE_CONTENT_ELEMENT, which
+                // puts the plugin identifier straight into CType with no list_type
+                // involved at all, on TYPO3 13 exactly as on 14. list_type still
+                // existing in tt_content's TCA on 13 doesn't mean this plugin uses
+                // it.
+                'CType' => 'news_pi1',
+                'header' => 'Sheet Placement Test',
+                'pi_flexform' => [
+                    'settings' => [
+                        // sDEF
+                        'orderBy' => 'datetime',
+                        // "additional" sheet
+                        'detailPid' => '20',
+                        // "template" sheet
+                        'media' => [
+                            'maxWidth' => '800',
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $pluginUid = json_decode($result->content[0]->text, true)['uid'];
+
+        // Inspect the raw stored XML directly - bypassing ReadTableTool's own
+        // (sheet-agnostic) array conversion, which is exactly what let this
+        // bug hide behind a passing round trip before.
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tt_content');
+        $rawFlexForm = (string)$connection->select(['pi_flexform'], 'tt_content', ['uid' => $pluginUid])
+            ->fetchOne();
+
+        $this->assertNotSame('', $rawFlexForm);
+
+        $xmlArray = GeneralUtility::xml2array($rawFlexForm);
+        $this->assertIsArray($xmlArray, 'Stored pi_flexform must be valid, parseable FlexForm XML');
+
+        // Every field must appear as a real "index" attribute value inside
+        // its declared sheet, not merged into "sDEF", and not as a mangled
+        // tag name with the dots stripped out.
+        $this->assertSame(
+            'datetime',
+            $xmlArray['data']['sDEF']['lDEF']['settings.orderBy']['vDEF'] ?? null,
+            'settings.orderBy belongs in sheet "sDEF"'
+        );
+        $this->assertSame(
+            '20',
+            $xmlArray['data']['additional']['lDEF']['settings.detailPid']['vDEF'] ?? null,
+            'settings.detailPid belongs in sheet "additional", not "sDEF"'
+        );
+        $this->assertSame(
+            '800',
+            $xmlArray['data']['template']['lDEF']['settings.media.maxWidth']['vDEF'] ?? null,
+            'settings.media.maxWidth belongs in sheet "template", not "sDEF", and must keep its literal dots'
+        );
+
+        // None of the three fields may have leaked into the wrong sheet either.
+        $this->assertArrayNotHasKey('settings.detailPid', $xmlArray['data']['sDEF']['lDEF'] ?? []);
+        $this->assertArrayNotHasKey('settings.media.maxWidth', $xmlArray['data']['sDEF']['lDEF'] ?? []);
+
+        // The existing MCP round trip must still reconstruct the same, correctly
+        // nested settings - this is the regression-safety half of the test.
+        $readTool = GeneralUtility::makeInstance(ReadTableTool::class);
+        $result = $readTool->execute([
+            'table' => 'tt_content',
+            'uid' => $pluginUid,
+        ]);
+        $plugin = json_decode($result->content[0]->text, true)['records'][0];
+        $settings = $plugin['pi_flexform']['settings'];
+
+        $this->assertEquals('datetime', $settings['orderBy']);
+        $this->assertEquals('20', $settings['detailPid']);
+        $this->assertEquals('800', $settings['media']['maxWidth']);
     }
 }
