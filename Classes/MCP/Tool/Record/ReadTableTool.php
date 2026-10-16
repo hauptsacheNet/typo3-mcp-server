@@ -78,14 +78,16 @@ class ReadTableTool extends AbstractRecordTool
                     . 'Operators: "=", "!=", "<", "<=", ">", ">=" compare a single value; "in" and "notIn" '
                     . 'take an array; "contains", "startsWith" and "endsWith" match text; "isNull" and '
                     . '"isNotNull" take no value. Values are typed: a field holding numbers needs numbers. '
-                    . 'Only readable fields can be filtered on — use GetTableSchema to see them. '
+                    . 'Any field ReadTable returns can be filtered on: the fields GetTableSchema lists for any '
+                    . 'record type, plus uid, pid and control fields such as tstamp, crdate and sorting. '
+                    . 'Date fields are compared as Unix timestamps in seconds, even though results show them as ISO dates. '
                     . 'This is not SQL: a condition string is rejected.',
                 'items' => [
                     'type' => 'object',
                     'properties' => [
                         'field' => [
                             'type' => 'string',
-                            'description' => 'Field name to filter on, plus "uid" and "pid".',
+                            'description' => 'Field name to filter on: a readable field of the table, or a control field like "uid", "pid", "tstamp", "crdate", "sorting".',
                         ],
                         'operator' => [
                             'type' => 'string',

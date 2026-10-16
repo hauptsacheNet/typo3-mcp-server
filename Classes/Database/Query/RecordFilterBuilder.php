@@ -67,8 +67,22 @@ final class RecordFilterBuilder
      */
     private const ALWAYS_FILTERABLE = ['uid', 'pid'];
 
+    /**
+     * ctrl keys naming integer columns that usually have no TCA column, so
+     * their type cannot be read from TCA: timestamps and manual sorting.
+     */
+    private const NUMERIC_CTRL_KEYS = ['tstamp', 'crdate', 'sortby'];
+
     /** TCA types whose values are numbers, so a filter must supply integers. */
     private const NUMERIC_TCA_TYPES = ['number', 'check', 'language', 'datetime'];
+
+    /**
+     * Filterable field names per table and TSconfig page, computed once: the
+     * builder is applied to both the result and the count query.
+     *
+     * @var array<string, array<string, true>>
+     */
+    private array $filterableFields = [];
 
     public function __construct(
         private readonly TableAccessService $tableAccessService,
@@ -189,17 +203,7 @@ final class RecordFilterBuilder
      */
     private function assertFieldIsFilterable(string $table, string $field, string $position, ?int $pid): void
     {
-        if (in_array($field, self::ALWAYS_FILTERABLE, true)) {
-            return;
-        }
-
-        // getAvailableFields() is the set the tool actually hands out, so it is
-        // the honest definition of "a field the caller could also read".
-        // canAccessField() cannot serve here: it reads TCA columns and returns
-        // true for a name it does not know, so it validates restrictions but
-        // never existence.
-        $available = $this->tableAccessService->getAvailableFields($table, '', $pid);
-        if (!array_key_exists($field, $available)) {
+        if (!isset($this->getFilterableFields($table, $pid)[$field])) {
             throw new ValidationException([sprintf(
                 '%s.field "%s" is not a readable field of %s. Use GetTableSchema to see the available fields.',
                 $position,
@@ -209,10 +213,70 @@ final class RecordFilterBuilder
         }
     }
 
+    /**
+     * Every field ReadTable can hand out for some record of the table.
+     *
+     * ReadTable returns, per record, the fields getAvailableFields() lists for
+     * that record's type plus the essential ctrl fields. A filter runs across
+     * records of every type at once, so the allow-list is the union of that
+     * over all record types: a field shown only for CType=textmedia (assets)
+     * is still a field the caller can read on those records. Each per-type
+     * list has already passed canAccessField(), so exclude fields the user is
+     * not granted and TCEFORM-disabled fields stay out, and a field disabled
+     * globally but re-enabled for one type is in, exactly as ReadTable would
+     * return it for records of that type.
+     *
+     * Only real TCA columns are taken from those lists: getAvailableFields()
+     * also carries computed fields added by AfterSchemaLoadEvent listeners,
+     * which have no database column to filter on. canAccessField() alone
+     * cannot serve as the check: it returns true for a name it does not know,
+     * so it validates restrictions but never existence.
+     *
+     * @return array<string, true>
+     */
+    private function getFilterableFields(string $table, ?int $pid): array
+    {
+        $cacheKey = $table . ':' . ($pid ?? '');
+        if (isset($this->filterableFields[$cacheKey])) {
+            return $this->filterableFields[$cacheKey];
+        }
+
+        // uid/pid plus the ctrl fields ReadTable puts into every row (type,
+        // label, language, tstamp, crdate, hidden, sorting), derived from the
+        // table's ctrl section.
+        $fields = array_fill_keys(
+            array_merge(self::ALWAYS_FILTERABLE, $this->tableAccessService->getEssentialFields($table)),
+            true
+        );
+
+        $columns = $GLOBALS['TCA'][$table]['columns'] ?? [];
+        // '' stands for the default type and covers tables without types.
+        $recordTypes = array_unique(array_merge(
+            [''],
+            array_map('strval', array_keys($GLOBALS['TCA'][$table]['types'] ?? []))
+        ));
+        foreach ($recordTypes as $recordType) {
+            foreach (array_keys($this->tableAccessService->getAvailableFields($table, $recordType, $pid)) as $fieldName) {
+                if (isset($columns[$fieldName])) {
+                    $fields[$fieldName] = true;
+                }
+            }
+        }
+
+        return $this->filterableFields[$cacheKey] = $fields;
+    }
+
     private function isNumericField(string $table, string $field): bool
     {
         if (in_array($field, self::ALWAYS_FILTERABLE, true)) {
             return true;
+        }
+
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        foreach (self::NUMERIC_CTRL_KEYS as $ctrlKey) {
+            if (($ctrl[$ctrlKey] ?? null) === $field) {
+                return true;
+            }
         }
 
         $config = $this->tableAccessService->getFieldConfig($table, $field);
