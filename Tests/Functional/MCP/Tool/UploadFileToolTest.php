@@ -41,6 +41,13 @@ class UploadFileToolTest extends FunctionalTestCase
         'mcp_server',
     ];
 
+    /**
+     * Request options of every request that reached the mocked HTTP layer.
+     *
+     * @var list<array<string, mixed>>
+     */
+    protected array $recordedHttpOptions = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -73,6 +80,7 @@ class UploadFileToolTest extends FunctionalTestCase
         $GLOBALS['TYPO3_CONF_VARS']['HTTP']['handler'] = [
             'mcp_test_mock' => function (callable $handler) use ($responses) {
                 return function ($request, array $options) use ($responses) {
+                    $this->recordedHttpOptions[] = $options;
                     $url = (string)$request->getUri();
                     foreach ($responses as $prefix => $response) {
                         if (str_starts_with($url, $prefix)) {
@@ -92,6 +100,30 @@ class UploadFileToolTest extends FunctionalTestCase
     protected function pngBytes(): string
     {
         return base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==');
+    }
+
+    /**
+     * The tool with a deterministic DNS lookup: every host name resolves to
+     * the given (public) IP, IP literals are validated as usual.
+     */
+    protected function createToolResolvingHostsTo(string $ip): UploadFileTool
+    {
+        return new class ($ip) extends UploadFileTool {
+            public function __construct(private readonly string $fixedIp)
+            {
+                parent::__construct();
+            }
+
+            protected function assertPublicHttpUrl(string $url): ?string
+            {
+                $host = trim((string)parse_url($url, PHP_URL_HOST), '[]');
+                if ($host === '' || filter_var($host, FILTER_VALIDATE_IP)) {
+                    return parent::assertPublicHttpUrl($url);
+                }
+                $this->assertPublicIp($this->fixedIp);
+                return $this->fixedIp;
+            }
+        };
     }
 
     protected function executeUpload(array $params): array
@@ -395,6 +427,58 @@ class UploadFileToolTest extends FunctionalTestCase
         $this->assertEquals('photo.png', $data['fileName']);
         $file = GeneralUtility::makeInstance(ResourceFactory::class)->getFileObject($data['uid']);
         $this->assertEquals($bytes, $file->getContents());
+    }
+
+    public function testHostNameDownloadIsPinnedWithoutForcingTheStreamHandler(): void
+    {
+        // A host name URL gets its vetted IP pinned via CURLOPT_RESOLVE. That
+        // option only exists for the curl handler; "stream" => true would route
+        // the request to the StreamHandler, which ignores the pin (Guzzle 7.11+)
+        // or rejects the "curl" option outright (Guzzle 8), so the two must
+        // never be combined.
+        if (!defined('CURLOPT_RESOLVE')) {
+            $this->markTestSkipped('IP pinning requires ext-curl.');
+        }
+        $bytes = $this->pngBytes();
+        $this->mockHttpResponses([
+            'https://files.example.org/images/pinned.png' => new Response(200, ['Content-Type' => 'image/png'], $bytes),
+        ]);
+
+        $result = $this->createToolResolvingHostsTo('203.0.113.10')->execute([
+            'url' => 'https://files.example.org/images/pinned.png',
+            'targetFolder' => '/user_upload/',
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        // The file system is not reset between tests, so only the prefix is stable
+        $this->assertStringStartsWith('pinned', $data['fileName']);
+
+        $this->assertCount(1, $this->recordedHttpOptions);
+        $options = $this->recordedHttpOptions[0];
+        $this->assertSame(
+            ['files.example.org:443:203.0.113.10'],
+            $options['curl'][\CURLOPT_RESOLVE] ?? null,
+            'The vetted IP must be pinned for the curl handler'
+        );
+        $this->assertFalse(
+            (bool)($options['stream'] ?? false),
+            'A pinned download must not set "stream", which forces the StreamHandler and drops the curl pin'
+        );
+    }
+
+    public function testIpLiteralDownloadIsStreamed(): void
+    {
+        // Nothing to pin for an IP literal, so the body is streamed and the
+        // size limit is enforced while reading it.
+        $this->mockHttpResponses([
+            'http://203.0.113.10/images/photo.png' => new Response(200, ['Content-Type' => 'image/png'], $this->pngBytes()),
+        ]);
+
+        $this->executeUpload(['url' => 'http://203.0.113.10/images/photo.png', 'targetFolder' => '/user_upload/']);
+
+        $this->assertCount(1, $this->recordedHttpOptions);
+        $this->assertArrayNotHasKey('curl', $this->recordedHttpOptions[0]);
+        $this->assertTrue($this->recordedHttpOptions[0]['stream'] ?? false);
     }
 
     public function testUrlUploadFollowsRedirects(): void
