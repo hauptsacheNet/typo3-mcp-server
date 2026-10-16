@@ -260,7 +260,6 @@ class UploadFileTool extends AbstractRecordTool
             $options = [
                 'allow_redirects' => false,
                 'http_errors' => false,
-                'stream' => true,
                 'connect_timeout' => 10,
                 'timeout' => 300,
                 'headers' => ['User-Agent' => 'TYPO3-MCP-Server'],
@@ -282,6 +281,8 @@ class UploadFileTool extends AbstractRecordTool
                     ? '[' . $resolvedIp . ']'
                     : $resolvedIp;
                 $options['curl'] = [\CURLOPT_RESOLVE => [$host . ':' . $port . ':' . $pinnedIp]];
+            } else {
+                $options['stream'] = true;
             }
 
             try {
