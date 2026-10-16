@@ -12,6 +12,7 @@ use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Symfony\Component\Yaml\Yaml;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -54,6 +55,8 @@ class WorkspaceOverlayPageToolsTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
 
         $this->setUpBackendUser(1);
+        // DataHandler's move path (BackendUtility::getLanguageService()) needs $GLOBALS['LANG']
+        $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('en');
         $this->createTestSiteConfiguration();
 
         $siteInformationService = GeneralUtility::makeInstance(SiteInformationService::class);
@@ -462,11 +465,9 @@ class WorkspaceOverlayPageToolsTest extends FunctionalTestCase
     /**
      * GetPageTree subpage count uses WorkspaceRestriction for counting.
      *
-     * Note: countSubpages() applies WorkspaceRestriction to the query, which
-     * prevents counting workspace overlay records. However, since it uses a
-     * COUNT query (not individual workspaceOL()), delete placeholders aren't
-     * individually filtered, so the count may still include pages with pending
-     * deletions. This is a known limitation.
+     * countSubpages() applies WorkspaceRestriction (no overlay rows) plus
+     * WorkspaceDeletePlaceholderRestriction (no live rows deleted or moved away
+     * in the workspace), so the COUNT query matches the listed subpages.
      */
     public function testGetPageTreeSubpageCountWithWorkspace(): void
     {
@@ -503,6 +504,96 @@ class WorkspaceOverlayPageToolsTest extends FunctionalTestCase
             }
         }
         $this->assertTrue($foundPage2, 'Page 2 should appear in the tree');
+    }
+
+    // =========================================================================
+    // Live records moved in the workspace (move pointers, t3ver_state=4)
+    // =========================================================================
+
+    /**
+     * Reordering live content in a workspace stages move pointers. GetPage must list
+     * each record once, under its live uid, in the workspace order.
+     */
+    public function testGetPageListsLiveContentReorderedInWorkspaceOnceInNewOrder(): void
+    {
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        // Live order on page 1: 100 (256), 101 (512), 104 (768)
+        $moveResult = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 104,
+            'position' => 'top',
+        ]);
+        $this->assertFalse($moveResult->isError, json_encode($moveResult->jsonSerialize()));
+
+        $result = $this->getPageTool->execute(['uid' => 1]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        foreach (['[100]', '[101]', '[104]'] as $marker) {
+            $this->assertSame(1, substr_count($content, $marker), $marker . ' must appear exactly once: ' . $content);
+        }
+        $this->assertLessThan(strpos($content, '[100]'), strpos($content, '[104]'), 'Moved record must come first');
+        $this->assertLessThan(strpos($content, '[101]'), strpos($content, '[100]'));
+    }
+
+    /**
+     * A live content record moved to another page in the workspace must only be
+     * listed on the new page, under its live uid.
+     */
+    public function testGetPageListsLiveContentMovedToAnotherPageOnlyOnNewPage(): void
+    {
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        $moveResult = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 101,
+            'data' => ['pid' => 2],
+        ]);
+        $this->assertFalse($moveResult->isError, json_encode($moveResult->jsonSerialize()));
+
+        $sourceResult = $this->getPageTool->execute(['uid' => 1]);
+        $this->assertFalse($sourceResult->isError, json_encode($sourceResult->jsonSerialize()));
+        $this->assertStringNotContainsString('[101]', $sourceResult->content[0]->text);
+        $this->assertStringContainsString('[100] Welcome Header', $sourceResult->content[0]->text);
+
+        $targetResult = $this->getPageTool->execute(['uid' => 2]);
+        $this->assertFalse($targetResult->isError, json_encode($targetResult->jsonSerialize()));
+        $this->assertSame(1, substr_count($targetResult->content[0]->text, '[101] About Section'), $targetResult->content[0]->text);
+    }
+
+    /**
+     * A live page moved below another parent in the workspace must show up once,
+     * under its live uid, below the new parent only; subpage counts follow.
+     */
+    public function testGetPageTreeShowsLivePageMovedInWorkspaceOnlyBelowNewParent(): void
+    {
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        // Page 6 (Contact) moves from page 1 to page 2
+        $moveResult = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 6,
+            'data' => ['pid' => 2],
+        ]);
+        $this->assertFalse($moveResult->isError, json_encode($moveResult->jsonSerialize()));
+
+        $result = $this->getPageTreeTool->execute(['startPage' => 1, 'depth' => 1]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+        $this->assertStringNotContainsString('[6]', $content, 'Moved page must not stay below its old parent');
+        foreach (explode("\n", $content) as $line) {
+            if (str_contains($line, '[2]')) {
+                $this->assertStringContainsString('3 subpages', $line, 'Page 2 gained the moved page');
+            }
+        }
+
+        $result = $this->getPageTreeTool->execute(['startPage' => 2, 'depth' => 1]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertSame(1, substr_count($result->content[0]->text, '[6] Contact'), $result->content[0]->text);
     }
 
     // =========================================================================
