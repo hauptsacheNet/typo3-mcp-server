@@ -67,7 +67,7 @@ class ResourceConstraintTest extends AbstractFunctionalTest
         // Test reading with no limit
         $result = $this->readTool->execute([
             'table' => 'tt_content',
-            'where' => 'pid = 1'
+            'where' => [['field' => 'pid', 'operator' => '=', 'value' => 1]],
         ]);
         
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
@@ -92,7 +92,7 @@ class ResourceConstraintTest extends AbstractFunctionalTest
         // Try to read with huge IN clause
         $result = $this->readTool->execute([
             'table' => 'pages',
-            'where' => 'uid IN (' . implode(',', array_slice($uids, 0, 1000)) . ')' // Limit to 1000 to avoid SQL issues
+            'where' => [['field' => 'uid', 'operator' => 'in', 'value' => array_slice($uids, 0, 1000)]],
         ]);
         
         // Should handle this gracefully (maybe by batching)
@@ -129,7 +129,7 @@ class ResourceConstraintTest extends AbstractFunctionalTest
         // Try to read pages with complex conditions
         $result = $this->readTool->execute([
             'table' => 'pages',
-            'where' => "title LIKE '%Level%'"
+            'where' => [['field' => 'title', 'operator' => 'contains', 'value' => 'Level']],
         ]);
         
         // Should handle deep structures without stack overflow
@@ -275,64 +275,43 @@ class ResourceConstraintTest extends AbstractFunctionalTest
     /**
      * Helper method to build WHERE clause from array structure
      */
-    protected function buildWhereClause(array $where): string
-    {
-        if (isset($where['type']) && $where['type'] === 'AND') {
-            $conditions = [];
-            foreach ($where['conditions'] as $condition) {
-                if (isset($condition['type']) && $condition['type'] === 'OR') {
-                    $orConditions = [];
-                    foreach ($condition['conditions'] as $orCond) {
-                        $orConditions[] = sprintf(
-                            "%s %s '%s'",
-                            $orCond['field'],
-                            $orCond['operator'],
-                            $orCond['value']
-                        );
-                    }
-                    $conditions[] = '(' . implode(' OR ', $orConditions) . ')';
-                }
-            }
-            return implode(' AND ', $conditions);
-        }
-        return '1=1';
-    }
     
     /**
-     * Test handling of query complexity limits
+     * Many filter clauses at once stay a bounded query.
+     *
+     * This used to build a nested AND-of-ORs SQL string. Clauses are
+     * AND-combined and OR is deliberately absent, so that shape is not
+     * expressible any more — what remains testable, and what a caller can
+     * actually produce, is a long conjunction.
      */
-    public function testQueryComplexityLimits(): void
+    public function testManyFilterClausesAreHandled(): void
     {
-        // Build a very complex where clause
-        $complexWhere = [
-            'type' => 'AND',
-            'conditions' => []
-        ];
-        
-        // Add many conditions
+        $clauses = [];
         for ($i = 0; $i < 50; $i++) {
-            $complexWhere['conditions'][] = [
-                'type' => 'OR',
-                'conditions' => [
-                    ['field' => 'title', 'operator' => 'like', 'value' => "%test$i%"],
-                    ['field' => 'description', 'operator' => 'like', 'value' => "%test$i%"],
-                ]
-            ];
+            $clauses[] = ['field' => 'title', 'operator' => '!=', 'value' => "absent-$i"];
         }
-        
-        // Build SQL where clause from the complex structure
-        $whereClause = $this->buildWhereClause($complexWhere);
-        
+
         $result = $this->readTool->execute([
             'table' => 'pages',
-            'where' => $whereClause
+            'where' => $clauses,
         ]);
-        
-        // Should handle complex queries or fail gracefully
-        if ($result->isError) {
-            $this->assertStringContainsString('complex', $result->content[0]->text);
-        } else {
-            $this->assertIsArray(json_decode($result->content[0]->text, true));
-        }
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertIsArray(json_decode($result->content[0]->text, true));
     }
+
+    /**
+     * OR is not part of the filter contract, so a clause cannot ask for it.
+     */
+    public function testOrIsNotAnOperator(): void
+    {
+        $result = $this->readTool->execute([
+            'table' => 'pages',
+            'where' => [['field' => 'title', 'operator' => 'or', 'value' => 'x']],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('is not supported', $result->content[0]->text);
+    }
+
 }

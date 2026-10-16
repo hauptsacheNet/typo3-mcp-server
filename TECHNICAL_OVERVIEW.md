@@ -216,7 +216,7 @@ Here are practical examples of how the MCP Server enables AI-powered content man
 // or
 {"tool": "ReadTable", "params": {
   "table": "pages",
-  "where": "doktype = 254",
+  "where": [{"field": "doktype", "operator": "=", "value": 254}],
   "limit": 10
 }}
 
