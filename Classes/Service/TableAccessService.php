@@ -10,6 +10,7 @@ use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
+use TYPO3\CMS\Core\Database\Query\QueryHelper;
 use TYPO3\CMS\Core\Schema\Capability\TcaSchemaCapability;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
@@ -1214,21 +1215,18 @@ class TableAccessService implements SingletonInterface
             return [];
         }
         
-        $sortParts = GeneralUtility::trimExplode(',', $defaultSorting, true);
+        // Use the core parser: it strips a leading "ORDER BY", which TYPO3 accepts in default_sortby
         $sorting = [];
-        
-        foreach ($sortParts as $sortPart) {
-            $sortPart = trim($sortPart);
-            
-            // Extract field and direction
-            if (preg_match('/^(.*?)\s+(ASC|DESC)$/i', $sortPart, $matches)) {
-                $field = trim($matches[1]);
-                $direction = strtoupper($matches[2]);
-                $sorting[] = ['field' => $field, 'direction' => $direction];
-            } else {
-                // Default to ASC if no direction specified
-                $sorting[] = ['field' => $sortPart, 'direction' => 'ASC'];
+        foreach (QueryHelper::parseOrderBy($defaultSorting) as [$field, $direction]) {
+            if ($field === null || $field === '') {
+                continue;
             }
+            $direction = strtoupper((string)$direction);
+            $sorting[] = [
+                'field' => $field,
+                // Default to ASC if no (valid) direction specified
+                'direction' => $direction === 'DESC' ? 'DESC' : 'ASC',
+            ];
         }
         
         return $sorting;
