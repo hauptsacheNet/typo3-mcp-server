@@ -315,8 +315,9 @@ class SearchTool extends AbstractRecordTool
             $inlineTableMetadata[$inlineInfo['table']] = $inlineInfo;
         }
         
-        // Combine primary tables with inline tables for searching
-        $allTablesToSearch = array_merge($primaryTables, array_column($inlineTableInfo, 'table'));
+        // Combine primary tables with inline tables for searching. Embedded child
+        // tables are usually accessible on their own as well, so search each once.
+        $allTablesToSearch = array_values(array_unique(array_merge($primaryTables, array_column($inlineTableInfo, 'table'))));
         
         foreach ($allTablesToSearch as $tableName) {
             $searchableFields = $this->getSearchableFields($tableName);
@@ -349,8 +350,9 @@ class SearchTool extends AbstractRecordTool
     protected function attributeInlineResultsToParents(array $searchResults, array $inlineTableMetadata): array
     {
         $attributedResults = [];
-        $parentRecordCache = [];
-        
+        // Parent records with inline matches, indexed by parent table and uid
+        $parentRecordsByTable = [];
+
         foreach ($searchResults as $tableName => $tableResults) {
             // Check if this is an inline table result
             if (isset($tableResults['_inline_metadata'])) {
@@ -359,34 +361,32 @@ class SearchTool extends AbstractRecordTool
                 $foreignField = $inlineMetadata['foreign_field'];
                 $parentField = $inlineMetadata['parent_field'];
                 $relationType = $inlineMetadata['relation_type'] ?? 'inline';
-                
+
                 // Process each inline record and find its parent(s)
                 // Note: tableResults is the structure returned by searchInTable which includes metadata
                 $inlineRecords = $tableResults['records'] ?? [];
                 foreach ($inlineRecords as $inlineRecord) {
-                    
+
                     $parentRecords = $this->findParentRecordsForInlineRecord(
-                        $inlineRecord, 
-                        $tableName, 
-                        $parentTable, 
-                        $foreignField, 
+                        $inlineRecord,
+                        $tableName,
+                        $parentTable,
+                        $foreignField,
                         $parentField,
                         $relationType
                     );
-                    
+
                     // Add the inline match info to each parent record
                     foreach ($parentRecords as $parentRecord) {
-                        $parentUid = $parentRecord['uid'];
-                        $parentKey = $parentTable . '_' . $parentUid;
-                        
-                        // Cache parent record
-                        if (!isset($parentRecordCache[$parentKey])) {
-                            $parentRecordCache[$parentKey] = $parentRecord;
-                            $parentRecordCache[$parentKey]['_inline_matches'] = [];
+                        $parentUid = (int)$parentRecord['uid'];
+
+                        if (!isset($parentRecordsByTable[$parentTable][$parentUid])) {
+                            $parentRecord['_inline_matches'] = [];
+                            $parentRecordsByTable[$parentTable][$parentUid] = $parentRecord;
                         }
-                        
+
                         // Add inline match information
-                        $parentRecordCache[$parentKey]['_inline_matches'][] = [
+                        $parentRecordsByTable[$parentTable][$parentUid]['_inline_matches'][] = [
                             'table' => $tableName,
                             'record' => $inlineRecord,
                             'field' => $parentField,
@@ -394,28 +394,33 @@ class SearchTool extends AbstractRecordTool
                         ];
                     }
                 }
-                
+
                 // Don't include the inline table directly in results
                 continue;
             }
-            
+
             // Include regular (non-inline) table results as-is
             $attributedResults[$tableName] = $tableResults;
         }
-        
-        // Add parent records that had inline matches
-        foreach ($parentRecordCache as $parentKey => $parentRecord) {
-            $parentTable = explode('_', $parentKey)[0];
-            
-            if (!isset($attributedResults[$parentTable])) {
-                $attributedResults[$parentTable] = [];
+
+        // Merge the parent records into their table's results. A parent that also
+        // matched directly stays a single entry that carries the inline matches.
+        foreach ($parentRecordsByTable as $parentTable => $parentRecords) {
+            $records = $attributedResults[$parentTable]['records'] ?? [];
+            foreach ($records as &$record) {
+                $uid = (int)($record['uid'] ?? 0);
+                if (isset($parentRecords[$uid])) {
+                    $record['_inline_matches'] = $parentRecords[$uid]['_inline_matches'];
+                    unset($parentRecords[$uid]);
+                }
             }
-            
-            // Remove the cached key prefix and add to results
-            unset($parentRecord['_parent_key']);
-            $attributedResults[$parentTable][] = $parentRecord;
+            unset($record);
+
+            $records = array_merge($records, array_values($parentRecords));
+            $attributedResults[$parentTable]['records'] = $records;
+            $attributedResults[$parentTable]['total'] = count($records);
         }
-        
+
         return $attributedResults;
     }
 
@@ -452,16 +457,34 @@ class SearchTool extends AbstractRecordTool
             }
         } elseif ($relationType === 'select') {
             // For select relations, find records that reference this inline record
-            $inlineUid = $inlineRecord['uid'] ?? null;
-            if ($inlineUid) {
-                $queryBuilder->where(
-                    $queryBuilder->expr()->like(
-                        $parentField,
-                        $queryBuilder->createNamedParameter('%' . $inlineUid . '%')
-                    )
-                );
-            } else {
+            $inlineUid = (int)($inlineRecord['uid'] ?? 0);
+            if ($inlineUid <= 0) {
                 return [];
+            }
+            $fieldConfig = $GLOBALS['TCA'][$parentTable]['columns'][$parentField]['config'] ?? [];
+            if (!empty($fieldConfig['MM'])) {
+                // The field only holds a count, the references live in the MM table
+                $isOpposite = !empty($fieldConfig['MM_opposite_field']);
+                $mmQueryBuilder = $connectionPool->getQueryBuilderForTable($fieldConfig['MM']);
+                $mmQueryBuilder->getRestrictions()->removeAll();
+                $mmQueryBuilder
+                    ->select($isOpposite ? 'uid_foreign' : 'uid_local')
+                    ->from($fieldConfig['MM'])
+                    ->where($mmQueryBuilder->expr()->eq(
+                        $isOpposite ? 'uid_local' : 'uid_foreign',
+                        $queryBuilder->createNamedParameter($inlineUid, ParameterType::INTEGER)
+                    ));
+                foreach ($fieldConfig['MM_match_fields'] ?? [] as $matchField => $matchValue) {
+                    $mmQueryBuilder->andWhere($mmQueryBuilder->expr()->eq(
+                        $matchField,
+                        $queryBuilder->createNamedParameter((string)$matchValue)
+                    ));
+                }
+                $queryBuilder->where($queryBuilder->expr()->in('uid', $mmQueryBuilder->getSQL()));
+            } else {
+                // The field holds a comma-separated uid list: match whole uids
+                // only, so a reference to uid 8 does not also match 18 or 83
+                $queryBuilder->where($queryBuilder->expr()->inSet($parentField, (string)$inlineUid));
             }
         } else {
             return [];
@@ -562,9 +585,12 @@ class SearchTool extends AbstractRecordTool
                 // Also check for select fields with foreign_table (like categories)
                 if ($fieldType === 'select') {
                     $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
-                    
-                    // Skip self-referential relations (like localization fields)
-                    if (!empty($foreignTable) && $foreignTable !== $primaryTable && isset($GLOBALS['TCA'][$foreignTable])) {
+
+                    // Skip self-referential relations (like localization fields) and
+                    // tables that are searched on their own anyway (like sys_file from
+                    // sys_file_metadata.file): their hits are listed under their own
+                    // table instead of being hidden behind the records referencing them.
+                    if (!empty($foreignTable) && !in_array($foreignTable, $primaryTables, true) && isset($GLOBALS['TCA'][$foreignTable])) {
                         // Use TableAccessService to check if table is accessible and has searchable fields
                         if ($this->tableAccessService->canAccessTable($foreignTable) && !empty($this->getSearchableFields($foreignTable))) {
                             $inlineTables[$foreignTable] = [
@@ -1009,7 +1035,7 @@ class SearchTool extends AbstractRecordTool
             
             // Check if this field contains any of the search terms
             foreach ($searchTerms as $term) {
-                if (stripos($content, $term) !== false) {
+                if (mb_stripos($content, $term, 0, 'UTF-8') !== false) {
                     // Extract a snippet around the match
                     $snippet = RecordFormattingUtility::extractSnippet($content, $term);
                     if (!empty($snippet)) {
