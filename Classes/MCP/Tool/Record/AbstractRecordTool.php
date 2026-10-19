@@ -54,10 +54,14 @@ abstract class AbstractRecordTool extends AbstractTool
     }
     /**
      * Create a successful result with text content
+     *
+     * Invalid UTF-8 (legacy column values, binary garbage) is replaced: the HTTP
+     * transport encodes responses with JSON_THROW_ON_ERROR and drops a response
+     * it cannot encode, so the client would wait for an answer that never comes.
      */
     protected function createSuccessResult(string $content): CallToolResult
     {
-        return new CallToolResult([new TextContent($content)]);
+        return new CallToolResult([new TextContent(mb_scrub($content, 'UTF-8'))]);
     }
 
     /**

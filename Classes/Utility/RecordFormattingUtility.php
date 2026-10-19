@@ -232,29 +232,34 @@ class RecordFormattingUtility
 
     /**
      * Extract a snippet around a search query
+     *
+     * Offsets are counted in characters, not bytes: cutting through a multibyte
+     * sequence (an umlaut next to the context boundary is enough) yields invalid
+     * UTF-8, and the HTTP transport then fails to JSON-encode the whole tool
+     * response.
      */
     public static function extractSnippet(string $content, string $query, int $contextLength = 50): string
     {
-        $pos = stripos($content, $query);
+        $pos = mb_stripos($content, $query, 0, 'UTF-8');
         if ($pos === false) {
             return '';
         }
 
         $start = max(0, $pos - $contextLength);
-        $length = $contextLength * 2 + strlen($query);
-        
-        $snippet = substr($content, $start, $length);
-        
+        $length = $contextLength * 2 + mb_strlen($query, 'UTF-8');
+
+        $snippet = mb_substr($content, $start, $length, 'UTF-8');
+
         // Add ellipsis if needed
         if ($start > 0) {
             $snippet = '...' . $snippet;
         }
-        if ($start + $length < strlen($content)) {
+        if ($start + $length < mb_strlen($content, 'UTF-8')) {
             $snippet .= '...';
         }
 
-        // Highlight the query (simple text-based highlighting)
-        $snippet = str_ireplace($query, "**$query**", $snippet);
+        // Highlight the query, keeping the casing found in the content
+        $snippet = preg_replace('/' . preg_quote($query, '/') . '/iu', '**$0**', $snippet) ?? $snippet;
 
         return trim($snippet);
     }
