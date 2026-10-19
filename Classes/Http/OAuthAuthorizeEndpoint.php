@@ -7,9 +7,11 @@ namespace Hn\McpServer\Http;
 use Hn\McpServer\Service\OAuthService;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use TYPO3\CMS\Backend\Routing\UriBuilder;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Core\Http\Stream;
+use TYPO3\CMS\Core\Routing\RequestContextFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
@@ -129,7 +131,7 @@ class OAuthAuthorizeEndpoint
         ];
         
         $oauthDataEncoded = base64_encode(json_encode($oauthData));
-        $loginUrl = $this->getRequestSitePath($request) . '/typo3/index.php?loginProvider=1450629977&login_status=login';
+        $loginUrl = $this->buildBackendLoginUrl($request);
         
         // Build cookie string with environment-aware security flags
         $isHttps = $request->getUri()->getScheme() === 'https';
@@ -150,6 +152,36 @@ class OAuthAuthorizeEndpoint
                 'Set-Cookie' => 'tx_mcpserver_oauth=' . $oauthDataEncoded . '; ' . $cookieFlags
             ]
         );
+    }
+
+    /**
+     * Build the backend login URL through the backend UriBuilder.
+     *
+     * The URL must not be hardcoded: TYPO3 14 removed the legacy
+     * "typo3/index.php" backend entry script (backend requests now go through
+     * the regular entry point), so redirecting to "/typo3/index.php" yields a
+     * "File not found" error there. The UriBuilder resolves the configured
+     * backend entry point - including a subdirectory prefix - from the request,
+     * so the generated URL stays correct on TYPO3 13, TYPO3 14 and with a
+     * customized BE entry point alike.
+     *
+     * This endpoint is answered directly from a PSR-15 middleware, before the
+     * core request handler populates $GLOBALS['TYPO3_REQUEST'] (which the
+     * UriBuilder would otherwise fall back to - and on TYPO3 14 that global is
+     * no longer set this early). The request context is therefore passed
+     * explicitly so URL generation does not depend on that global being present.
+     */
+    private function buildBackendLoginUrl(ServerRequestInterface $request): string
+    {
+        $uriBuilder = GeneralUtility::makeInstance(UriBuilder::class);
+        $uriBuilder->setRequestContext(
+            GeneralUtility::makeInstance(RequestContextFactory::class)->fromBackendRequest($request)
+        );
+
+        return (string)$uriBuilder->buildUriFromRoute('login', [
+            'loginProvider' => '1450629977',
+            'login_status' => 'login',
+        ]);
     }
 
     private function handleApproval(ServerRequestInterface $request, int $beUserId): ResponseInterface
