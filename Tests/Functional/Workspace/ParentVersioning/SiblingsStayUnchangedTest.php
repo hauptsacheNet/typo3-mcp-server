@@ -155,6 +155,18 @@ final class SiblingsStayUnchangedTest extends FunctionalTestCase
         $workspaceRecord = $this->get(WorkspaceRepository::class)->findByUid($backendUser->workspace);
         $stages = $this->get(WorkspaceStageRepository::class)->findAllStagesByWorkspace($backendUser, $workspaceRecord);
 
-        return $this->get(GridDataService::class)->getRowDetails($stages, $parameters)['data'][0]['diff'] ?? [];
+        return $this->getRowDetailsService()->getRowDetails($stages, $parameters)['data'][0]['diff'] ?? [];
+    }
+
+    /**
+     * TYPO3 v14 moved getRowDetails() from RemoteServer into GridDataService; the signature is the same.
+     */
+    private function getRowDetailsService(): object
+    {
+        $className = method_exists(GridDataService::class, 'getRowDetails')
+            ? GridDataService::class
+            : 'TYPO3\\CMS\\Workspaces\\Controller\\Remote\\RemoteServer';
+
+        return $this->get($className);
     }
 }
