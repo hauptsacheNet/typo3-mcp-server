@@ -6,3 +6,12 @@ additionalStandaloneTables = sys_file_metadata
 
 # cat=mcp/files; type=int+; label=Maximum file size (MiB): Upper limit for files fetched from URLs or received through pre-signed uploads via the UploadFile tool. Default: 500
 maxFileSizeMb = 500
+
+# cat=mcp/oauth; type=int+; label=Access token lifetime (days): How long an access token issued to an MCP client stays valid. After it expires, the user has to authorize the client again (backend login). Also the default for tokens created with "mcp:oauth create". Default: 30
+tokenLifetimeDays = 30
+
+# cat=mcp/oauth; type=boolean; label=Extend token lifetime on use: When enabled, every authenticated request moves the expiry to "now + token lifetime", so a token only expires after that long without use. When disabled, a token expires a fixed time after it was issued, however often it is used.
+tokenSlidingExpiration = 0
+
+# cat=mcp/oauth; type=int+; label=Maximum token lifetime (days): Only used when "Extend token lifetime on use" is enabled. Upper limit counted from when the token was issued; after it, the user has to authorize again however active they are. 0 = no limit. Default: 0
+tokenMaxLifetimeDays = 0

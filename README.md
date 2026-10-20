@@ -99,6 +99,9 @@ The defaults work out of the box. All settings live in the extension configurati
 | `maxFileSizeMb`              | `500`               | Upper limit in MiB for files fetched from a URL or received through an upload link |
 | `additionalReadOnlyTables`   | `sys_file`          | Non-workspace-capable tables exposed read-only — this is what lets the AI browse your files |
 | `additionalStandaloneTables` | `sys_file_metadata` | `hideTable` tables exposed as independent tables — this is what makes file metadata such as titles and alt texts editable |
+| `tokenLifetimeDays`          | `30`                | How long an access token stays valid; afterwards the user authorizes the client again |
+| `tokenSlidingExpiration`     | off                 | Extend a token on every use, so it only expires after `tokenLifetimeDays` without use |
+| `tokenMaxLifetimeDays`       | `0` (no limit)      | With sliding expiration: hard limit counted from when the token was issued, so users still re-authorize periodically |
 
 ## Usage
 

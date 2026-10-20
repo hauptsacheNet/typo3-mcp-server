@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Service;
 
+use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
@@ -23,7 +24,7 @@ class OAuthService
     public const REDIRECT_URI_LOOPBACK_SENTINEL = 'loopback:*';
     private const CLIENTS_TABLE = 'tx_mcpserver_oauth_clients';
     private const CODE_EXPIRY_SECONDS = 600; // 10 minutes
-    private const TOKEN_EXPIRY_SECONDS = 2592000; // 30 days
+    private const TOKEN_EXPIRY_SECONDS = 2592000; // 30 days, default for the extension setting "tokenLifetimeDays"
 
     /**
      * Generate authorization URL for OAuth flow
@@ -151,7 +152,8 @@ class OAuthService
 
         // Generate access token
         $accessToken = $this->generateSecureToken();
-        $expires = time() + self::TOKEN_EXPIRY_SECONDS;
+        $issuedAt = time();
+        $expires = $this->calculateTokenExpiry($issuedAt);
 
         // Get client IP
         $clientIp = '';
@@ -190,14 +192,14 @@ class OAuthService
             'tx_mcpserver_access_tokens',
             [
                 'pid' => 0,
-                'tstamp' => time(),
-                'crdate' => time(),
+                'tstamp' => $issuedAt,
+                'crdate' => $issuedAt,
                 'token' => $this->hashToken($accessToken),
                 'be_user_uid' => $authCode['be_user_uid'],
                 'client_uid' => $clientUid,
                 'client_name' => $authCode['client_name'],
                 'expires' => $expires,
-                'last_used' => time(),
+                'last_used' => $issuedAt,
                 'created_ip' => $clientIp,
                 'last_used_ip' => $clientIp,
                 'token_version' => 1,
@@ -207,7 +209,7 @@ class OAuthService
         return [
             'access_token' => $accessToken,
             'token_type' => 'Bearer',
-            'expires_in' => self::TOKEN_EXPIRY_SECONDS,
+            'expires_in' => $expires - $issuedAt,
         ];
     }
 
@@ -287,13 +289,25 @@ class OAuthService
                 $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
             }
 
+            $now = time();
             $queryBuilder = $connection->createQueryBuilder();
             $queryBuilder
                 ->update('tx_mcpserver_access_tokens')
                 ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($tokenRecord['uid'])))
-                ->set('last_used', time())
-                ->set('last_used_ip', $clientIp)
-                ->executeStatement();
+                ->set('last_used', $now)
+                ->set('last_used_ip', $clientIp);
+
+            // Sliding expiration: a token in use moves its expiry forward, but
+            // never past the maximum lifetime and never backwards (a token
+            // created with a longer explicit TTL keeps it).
+            if ($this->isSlidingExpirationEnabled()) {
+                $slidingExpiry = $this->calculateTokenExpiry($now, (int)$tokenRecord['crdate']);
+                if ($slidingExpiry > (int)$tokenRecord['expires']) {
+                    $queryBuilder->set('expires', $slidingExpiry);
+                }
+            }
+
+            $queryBuilder->executeStatement();
         } catch (\Throwable $e) {
             // Non-fatal: audit trail update failure must not prevent authentication
         }
@@ -406,7 +420,7 @@ class OAuthService
      */
     private function cleanupStaleClients(int $currentTime): void
     {
-        $threshold = $currentTime - self::TOKEN_EXPIRY_SECONDS;
+        $threshold = $currentTime - $this->getTokenLifetimeSeconds();
 
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable(self::CLIENTS_TABLE);
@@ -881,7 +895,8 @@ class OAuthService
     public function createDirectAccessToken(int $beUserId, string $clientName, ?ServerRequestInterface $request = null): string
     {
         $accessToken = $this->generateSecureToken();
-        $expires = time() + self::TOKEN_EXPIRY_SECONDS;
+        $issuedAt = time();
+        $expires = $this->calculateTokenExpiry($issuedAt);
 
         // Get client IP
         $clientIp = '';
@@ -901,14 +916,14 @@ class OAuthService
             'tx_mcpserver_access_tokens',
             [
                 'pid' => 0,
-                'tstamp' => time(),
-                'crdate' => time(),
+                'tstamp' => $issuedAt,
+                'crdate' => $issuedAt,
                 'token' => $this->hashToken($accessToken),
                 'be_user_uid' => $beUserId,
                 'client_uid' => $clientUid,
                 'client_name' => $clientName,
                 'expires' => $expires,
-                'last_used' => time(),
+                'last_used' => $issuedAt,
                 'created_ip' => $clientIp,
                 'last_used_ip' => $clientIp,
                 'token_version' => 1,
@@ -928,7 +943,7 @@ class OAuthService
     public function createToken(int $beUserUid, string $clientName, ?int $ttlSeconds = null): array
     {
         $accessToken = $this->generateSecureToken();
-        $ttl = $ttlSeconds ?? self::TOKEN_EXPIRY_SECONDS;
+        $ttl = $ttlSeconds ?? $this->getTokenLifetimeSeconds();
         if ($ttl <= 0) {
             throw new \InvalidArgumentException('Token TTL must be greater than zero seconds.');
         }
@@ -959,6 +974,61 @@ class OAuthService
             'expires' => $expires,
             'expires_in' => $ttl,
         ];
+    }
+
+    /**
+     * Expiry as of $now: "now + lifetime", capped at "issued + maximum
+     * lifetime" when sliding expiration is enabled and a maximum is
+     * configured. Pass the issue time of an existing token when extending it;
+     * without it the token counts as issued at $now.
+     */
+    private function calculateTokenExpiry(int $now, ?int $issuedAt = null): int
+    {
+        $issuedAt ??= $now;
+        $expires = $now + $this->getTokenLifetimeSeconds();
+        $maxLifetime = $this->isSlidingExpirationEnabled() ? $this->getMaxTokenLifetimeSeconds() : 0;
+        if ($maxLifetime > 0) {
+            $expires = min($expires, $issuedAt + $maxLifetime);
+        }
+        return $expires;
+    }
+
+    /**
+     * Token lifetime in seconds, configurable via the extension setting
+     * "tokenLifetimeDays".
+     */
+    private function getTokenLifetimeSeconds(): int
+    {
+        $days = (int)$this->getExtensionSetting('tokenLifetimeDays');
+        return $days > 0 ? $days * 86400 : self::TOKEN_EXPIRY_SECONDS;
+    }
+
+    /**
+     * Whether a token in use moves its expiry forward, configurable via the
+     * extension setting "tokenSlidingExpiration".
+     */
+    private function isSlidingExpirationEnabled(): bool
+    {
+        return (bool)$this->getExtensionSetting('tokenSlidingExpiration');
+    }
+
+    /**
+     * Upper limit for a sliding token's lifetime in seconds, counted from its
+     * issue time; 0 = no limit. Extension setting "tokenMaxLifetimeDays".
+     */
+    private function getMaxTokenLifetimeSeconds(): int
+    {
+        $days = (int)$this->getExtensionSetting('tokenMaxLifetimeDays');
+        return $days > 0 ? $days * 86400 : 0;
+    }
+
+    private function getExtensionSetting(string $name): mixed
+    {
+        try {
+            return GeneralUtility::makeInstance(ExtensionConfiguration::class)->get('mcp_server', $name);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**
