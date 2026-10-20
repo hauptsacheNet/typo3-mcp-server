@@ -16,6 +16,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class OAuthTokenLifetimeTest extends AbstractFunctionalTest
 {
     private const DAY = 86400;
+    private const MAX_TIMESTAMP = 4294967295;
 
     private OAuthService $service;
 
@@ -155,11 +156,103 @@ class OAuthTokenLifetimeTest extends AbstractFunctionalTest
     public function testSlidingExpirationNeverShortensAToken(): void
     {
         $this->configure(['tokenLifetimeDays' => '30', 'tokenSlidingExpiration' => '1']);
+        $tokenData = $this->issueTokenViaOAuthFlow();
+        $farAway = (int)$this->latestToken()['crdate'] + 365 * self::DAY;
+        $this->updateLatestToken(['expires' => $farAway]);
+
+        $this->assertNotNull($this->service->validateToken($tokenData['access_token']));
+
+        $this->assertSame($farAway, (int)$this->latestToken()['expires']);
+    }
+
+    public function testSlidingExpirationDoesNotExtendACliTokenWithShorterExplicitTtl(): void
+    {
+        $this->configure(['tokenLifetimeDays' => '30', 'tokenSlidingExpiration' => '1']);
+        $created = $this->service->createToken(1, 'cli', 2 * self::DAY);
+
+        $this->assertNotNull($this->service->validateToken($created['access_token']));
+
+        $this->assertSame($created['expires'], (int)$this->latestToken()['expires']);
+    }
+
+    public function testSlidingExpirationDoesNotExtendACliTokenWithLongerExplicitTtl(): void
+    {
+        $this->configure(['tokenLifetimeDays' => '30', 'tokenSlidingExpiration' => '1']);
         $created = $this->service->createToken(1, 'cli', 365 * self::DAY);
 
         $this->assertNotNull($this->service->validateToken($created['access_token']));
 
         $this->assertSame($created['expires'], (int)$this->latestToken()['expires']);
+    }
+
+    public function testCliTokenWithoutExplicitTtlSlidesLikeAnOAuthToken(): void
+    {
+        $this->configure(['tokenLifetimeDays' => '30', 'tokenSlidingExpiration' => '1']);
+        $created = $this->service->createToken(1, 'cli');
+        $this->updateLatestToken(['expires' => time() + 100]);
+
+        $this->assertNotNull($this->service->validateToken($created['access_token']));
+
+        $token = $this->latestToken();
+        $this->assertSame((int)$token['last_used'] + 30 * self::DAY, (int)$token['expires']);
+    }
+
+    public function testSlidingUsesTheConfiguredLifetimeWhenItWasShortenedSinceIssue(): void
+    {
+        $this->configure(['tokenLifetimeDays' => '30', 'tokenSlidingExpiration' => '1']);
+        $tokenData = $this->issueTokenViaOAuthFlow();
+        $this->configure(['tokenLifetimeDays' => '7']);
+        $this->updateLatestToken(['expires' => time() + 100]);
+
+        $this->assertNotNull($this->service->validateToken($tokenData['access_token']));
+
+        $token = $this->latestToken();
+        $this->assertSame((int)$token['last_used'] + 7 * self::DAY, (int)$token['expires']);
+    }
+
+    public function testTokenWithoutStoredLifetimeDoesNotSlide(): void
+    {
+        $this->configure(['tokenSlidingExpiration' => '1']);
+        $tokenData = $this->issueTokenViaOAuthFlow();
+        $expiresSoon = time() + 100;
+        // Like a token issued before the lifetime was stored
+        $this->updateLatestToken(['lifetime' => 0, 'expires' => $expiresSoon]);
+
+        $this->assertNotNull($this->service->validateToken($tokenData['access_token']));
+
+        $this->assertSame($expiresSoon, (int)$this->latestToken()['expires']);
+    }
+
+    public function testHugeConfiguredLifetimeIsCappedToTheColumnRange(): void
+    {
+        $this->configure(['tokenLifetimeDays' => '99999999']);
+
+        $tokenData = $this->issueTokenViaOAuthFlow();
+
+        $token = $this->latestToken();
+        $this->assertSame(self::MAX_TIMESTAMP, (int)$token['expires']);
+        $this->assertSame(self::MAX_TIMESTAMP - (int)$token['crdate'], $tokenData['expires_in']);
+        $this->assertNotNull($this->service->validateToken($tokenData['access_token']));
+    }
+
+    public function testHugeLifetimeIsCappedWhenSliding(): void
+    {
+        $this->configure(['tokenLifetimeDays' => '99999999', 'tokenSlidingExpiration' => '1']);
+        $tokenData = $this->issueTokenViaOAuthFlow();
+        $this->updateLatestToken(['expires' => time() + 100]);
+
+        $this->assertNotNull($this->service->validateToken($tokenData['access_token']));
+
+        $this->assertSame(self::MAX_TIMESTAMP, (int)$this->latestToken()['expires']);
+    }
+
+    public function testHugeExplicitCliTtlIsCappedToTheColumnRange(): void
+    {
+        $created = $this->service->createToken(1, 'cli', 99999999 * self::DAY);
+
+        $this->assertSame(self::MAX_TIMESTAMP, $created['expires']);
+        $this->assertSame(self::MAX_TIMESTAMP, (int)$this->latestToken()['expires']);
+        $this->assertNotNull($this->service->validateToken($created['access_token']));
     }
 
     public function testAnExpiredTokenIsNotRevivedBySlidingExpiration(): void

@@ -25,6 +25,8 @@ class OAuthService
     private const CLIENTS_TABLE = 'tx_mcpserver_oauth_clients';
     private const CODE_EXPIRY_SECONDS = 600; // 10 minutes
     private const TOKEN_EXPIRY_SECONDS = 2592000; // 30 days, default for the extension setting "tokenLifetimeDays"
+    /** Largest value of the int(11) unsigned columns "expires" and "lifetime" of the token table. */
+    private const MAX_TIMESTAMP = 4294967295;
 
     /**
      * Generate authorization URL for OAuth flow
@@ -153,7 +155,8 @@ class OAuthService
         // Generate access token
         $accessToken = $this->generateSecureToken();
         $issuedAt = time();
-        $expires = $this->calculateTokenExpiry($issuedAt);
+        $lifetime = $this->getTokenLifetimeSeconds();
+        $expires = $this->calculateTokenExpiry($issuedAt, $lifetime);
 
         // Get client IP
         $clientIp = '';
@@ -199,6 +202,7 @@ class OAuthService
                 'client_uid' => $clientUid,
                 'client_name' => $authCode['client_name'],
                 'expires' => $expires,
+                'lifetime' => $lifetime,
                 'last_used' => $issuedAt,
                 'created_ip' => $clientIp,
                 'last_used_ip' => $clientIp,
@@ -297,11 +301,16 @@ class OAuthService
                 ->set('last_used', $now)
                 ->set('last_used_ip', $clientIp);
 
-            // Sliding expiration: a token in use moves its expiry forward, but
-            // never past the maximum lifetime and never backwards (a token
-            // created with a longer explicit TTL keeps it).
-            if ($this->isSlidingExpirationEnabled()) {
-                $slidingExpiry = $this->calculateTokenExpiry($now, (int)$tokenRecord['crdate']);
+            // Sliding expiration: a token in use moves its expiry forward by its
+            // own sliding window, or by the configured lifetime if that has
+            // been shortened since. Never past the maximum lifetime and never
+            // backwards. A window of 0 means a fixed expiry: an explicit TTL
+            // from createToken(), or a token issued before the window was
+            // stored — neither may outlive the expiry it was issued with.
+            $window = (int)($tokenRecord['lifetime'] ?? 0);
+            if ($window > 0 && $this->isSlidingExpirationEnabled()) {
+                $window = min($window, $this->getTokenLifetimeSeconds());
+                $slidingExpiry = $this->calculateTokenExpiry($now, $window, (int)$tokenRecord['crdate']);
                 if ($slidingExpiry > (int)$tokenRecord['expires']) {
                     $queryBuilder->set('expires', $slidingExpiry);
                 }
@@ -896,7 +905,8 @@ class OAuthService
     {
         $accessToken = $this->generateSecureToken();
         $issuedAt = time();
-        $expires = $this->calculateTokenExpiry($issuedAt);
+        $lifetime = $this->getTokenLifetimeSeconds();
+        $expires = $this->calculateTokenExpiry($issuedAt, $lifetime);
 
         // Get client IP
         $clientIp = '';
@@ -923,6 +933,7 @@ class OAuthService
                 'client_uid' => $clientUid,
                 'client_name' => $clientName,
                 'expires' => $expires,
+                'lifetime' => $lifetime,
                 'last_used' => $issuedAt,
                 'created_ip' => $clientIp,
                 'last_used_ip' => $clientIp,
@@ -939,6 +950,10 @@ class OAuthService
      * OAuth discovery (e.g. subdirectory installs) and authenticate with a
      * static Authorization header instead. Returns the plaintext token, which
      * is only available at creation time (the database stores a hash).
+     *
+     * An explicit $ttlSeconds is a hard expiry: such a token is never extended
+     * by sliding expiration, so an admin can hand out access for a fixed time.
+     * Without it the token behaves like one from the OAuth flow.
      */
     public function createToken(int $beUserUid, string $clientName, ?int $ttlSeconds = null): array
     {
@@ -947,7 +962,14 @@ class OAuthService
         if ($ttl <= 0) {
             throw new \InvalidArgumentException('Token TTL must be greater than zero seconds.');
         }
-        $expires = time() + $ttl;
+        $issuedAt = time();
+        if ($ttlSeconds === null) {
+            $lifetime = $ttl;
+            $expires = $this->calculateTokenExpiry($issuedAt, $ttl);
+        } else {
+            $lifetime = 0;
+            $expires = min($issuedAt + $ttl, self::MAX_TIMESTAMP);
+        }
 
         GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('tx_mcpserver_access_tokens')
@@ -955,12 +977,13 @@ class OAuthService
                 'tx_mcpserver_access_tokens',
                 [
                     'pid' => 0,
-                    'tstamp' => time(),
-                    'crdate' => time(),
+                    'tstamp' => $issuedAt,
+                    'crdate' => $issuedAt,
                     'token' => $this->hashToken($accessToken),
                     'be_user_uid' => $beUserUid,
                     'client_name' => $clientName,
                     'expires' => $expires,
+                    'lifetime' => $lifetime,
                     'last_used' => 0,
                     'created_ip' => '',
                     'last_used_ip' => '',
@@ -972,35 +995,36 @@ class OAuthService
             'access_token' => $accessToken,
             'token_type' => 'Bearer',
             'expires' => $expires,
-            'expires_in' => $ttl,
+            'expires_in' => $expires - $issuedAt,
         ];
     }
 
     /**
      * Expiry as of $now: "now + lifetime", capped at "issued + maximum
      * lifetime" when sliding expiration is enabled and a maximum is
-     * configured. Pass the issue time of an existing token when extending it;
-     * without it the token counts as issued at $now.
+     * configured, and at the largest value the expires column can hold. Pass
+     * the issue time of an existing token when extending it; without it the
+     * token counts as issued at $now.
      */
-    private function calculateTokenExpiry(int $now, ?int $issuedAt = null): int
+    private function calculateTokenExpiry(int $now, int $lifetime, ?int $issuedAt = null): int
     {
         $issuedAt ??= $now;
-        $expires = $now + $this->getTokenLifetimeSeconds();
+        $expires = $now + $lifetime;
         $maxLifetime = $this->isSlidingExpirationEnabled() ? $this->getMaxTokenLifetimeSeconds() : 0;
         if ($maxLifetime > 0) {
             $expires = min($expires, $issuedAt + $maxLifetime);
         }
-        return $expires;
+        return min($expires, self::MAX_TIMESTAMP);
     }
 
     /**
      * Token lifetime in seconds, configurable via the extension setting
-     * "tokenLifetimeDays".
+     * "tokenLifetimeDays". Clamped so it fits the lifetime column.
      */
     private function getTokenLifetimeSeconds(): int
     {
         $days = (int)$this->getExtensionSetting('tokenLifetimeDays');
-        return $days > 0 ? $days * 86400 : self::TOKEN_EXPIRY_SECONDS;
+        return $days > 0 ? (int)min($days * 86400, self::MAX_TIMESTAMP) : self::TOKEN_EXPIRY_SECONDS;
     }
 
     /**
@@ -1019,7 +1043,7 @@ class OAuthService
     private function getMaxTokenLifetimeSeconds(): int
     {
         $days = (int)$this->getExtensionSetting('tokenMaxLifetimeDays');
-        return $days > 0 ? $days * 86400 : 0;
+        return $days > 0 ? (int)min($days * 86400, self::MAX_TIMESTAMP) : 0;
     }
 
     private function getExtensionSetting(string $name): mixed

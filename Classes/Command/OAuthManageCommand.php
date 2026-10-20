@@ -27,7 +27,7 @@ class OAuthManageCommand extends Command
             ->addOption('client-name', 'c', InputOption::VALUE_OPTIONAL, 'Client name for authorization URL', 'MCP Client')
             ->addOption('token-id', 't', InputOption::VALUE_OPTIONAL, 'Token ID to revoke (for revoke action)')
             ->addOption('all', 'a', InputOption::VALUE_NONE, 'Revoke all tokens for user (for revoke action)')
-            ->addOption('ttl-days', null, InputOption::VALUE_OPTIONAL, 'Token lifetime in days (for create action; default: extension setting "tokenLifetimeDays", 30)');
+            ->addOption('ttl-days', null, InputOption::VALUE_OPTIONAL, 'Token lifetime in days (for create action; default: extension setting "tokenLifetimeDays", 30). A token with an explicit lifetime expires at that point and is never extended by sliding expiration');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
