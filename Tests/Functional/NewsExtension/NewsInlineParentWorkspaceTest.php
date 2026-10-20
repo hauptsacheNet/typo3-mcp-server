@@ -38,7 +38,12 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
     private const OTHER_NEWS_UID = 101;
     private const CONTENT_UID = 300;
     private const UNRELATED_CONTENT_UID = 301;
+    private const SIBLING_CONTENT_UID = 302;
     private const LINK_UID = 201;
+    private const CONTENT_ASSET_UID = 400;
+    private const CONTENT_SECOND_ASSET_UID = 401;
+    private const CONTENT_FLEXFORM_FILE_UID = 402;
+    private const NEWS_MEDIA_UID = 403;
 
     protected function setUp(): void
     {
@@ -70,7 +75,7 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
             'tstamp' => 1734875000,
             'crdate' => 1734875000,
         ]);
-        foreach ([self::CONTENT_UID => self::NEWS_UID, self::UNRELATED_CONTENT_UID => 0] as $uid => $newsUid) {
+        foreach ([self::CONTENT_UID => self::NEWS_UID, self::UNRELATED_CONTENT_UID => 0, self::SIBLING_CONTENT_UID => self::NEWS_UID] as $uid => $newsUid) {
             $connectionPool->getConnectionForTable('tt_content')->insert('tt_content', [
                 'uid' => $uid,
                 'pid' => 1,
@@ -78,6 +83,26 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
                 'header' => 'Live content ' . $uid,
                 'tx_news_related_news' => $newsUid,
                 'sorting' => $uid,
+                'tstamp' => 1734875000,
+                'crdate' => 1734875000,
+            ]);
+        }
+        // File references point at their parent through uid_foreign, tablenames and fieldname.
+        // The FlexForm one names a field that is no TCA column of tt_content.
+        foreach ([
+            [self::CONTENT_ASSET_UID, 'tt_content', self::CONTENT_UID, 'assets', 256],
+            [self::CONTENT_SECOND_ASSET_UID, 'tt_content', self::CONTENT_UID, 'assets', 512],
+            [self::CONTENT_FLEXFORM_FILE_UID, 'tt_content', self::CONTENT_UID, 'settings.image', 256],
+            [self::NEWS_MEDIA_UID, 'tx_news_domain_model_news', self::OTHER_NEWS_UID, 'fal_media', 256],
+        ] as [$uid, $tablenames, $uidForeign, $fieldname, $sorting]) {
+            $connectionPool->getConnectionForTable('sys_file_reference')->insert('sys_file_reference', [
+                'uid' => $uid,
+                'pid' => 1,
+                'uid_local' => 1,
+                'uid_foreign' => $uidForeign,
+                'tablenames' => $tablenames,
+                'fieldname' => $fieldname,
+                'sorting_foreign' => $sorting,
                 'tstamp' => 1734875000,
                 'crdate' => 1734875000,
             ]);
@@ -102,26 +127,28 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
         $news = $this->readNews(self::NEWS_UID);
         $this->assertSame(self::NEWS_UID, (int)$news['uid']);
         $this->assertSame('Live news', $news['title']);
-        $this->assertSame([self::CONTENT_UID], array_map('intval', $news['content_elements']));
+        $this->assertSame([self::CONTENT_UID, self::SIBLING_CONTENT_UID], array_map('intval', $news['content_elements']));
     }
 
     /**
-     * Versioning a parent makes DataHandler renumber the sorting of the children it
-     * versions along, on their live rows. Live must stay exactly as it was.
+     * Versioning a parent makes DataHandler version its children along and renumber the
+     * sorting of their live rows, down to the file references of a sibling content
+     * element. Live must stay exactly as it was.
      */
     public function testMarkingNewsAsModifiedLeavesLiveRowsUntouched(): void
     {
-        $tables = ['tx_news_domain_model_news', 'tx_news_domain_model_link', 'tt_content'];
+        $tables = ['tx_news_domain_model_news', 'tx_news_domain_model_link', 'tt_content', 'sys_file_reference'];
         $liveBefore = array_map($this->getLiveRows(...), $tables);
 
         $this->write([
             'table' => 'tt_content',
             'action' => 'update',
-            'uid' => self::CONTENT_UID,
+            'uid' => self::SIBLING_CONTENT_UID,
             'data' => ['header' => 'Changed header'],
         ]);
 
         $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
+        $this->assertWorkspaceVersionExists('sys_file_reference', self::CONTENT_ASSET_UID);
         $this->assertSame($liveBefore, array_map($this->getLiveRows(...), $tables));
     }
 
@@ -164,7 +191,7 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
         ]);
 
         $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
-        $this->assertSame([], $this->readNews(self::NEWS_UID)['content_elements'] ?? []);
+        $this->assertSame([self::SIBLING_CONTENT_UID], array_map('intval', $this->readNews(self::NEWS_UID)['content_elements']));
     }
 
     public function testMovingContentElementToAnotherNewsMarksBothAsModified(): void
@@ -212,14 +239,70 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
             'uid' => self::CONTENT_UID,
             'data' => [
                 'assets' => [
-                    ['uid_local' => 1, 'alternative' => 'Alt text'],
+                    ['uid' => self::CONTENT_ASSET_UID, 'alternative' => 'Alt text'],
+                    ['uid' => self::CONTENT_SECOND_ASSET_UID],
+                    ['uid_local' => 1, 'alternative' => 'New asset'],
                 ],
             ],
+        ]);
+
+        $this->assertWorkspaceVersionExists('sys_file_reference', self::CONTENT_ASSET_UID);
+        $this->assertWorkspaceVersionExists('tt_content', self::CONTENT_UID);
+        $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
+        $this->assertNoWorkspaceVersion('tx_news_domain_model_news', self::OTHER_NEWS_UID);
+    }
+
+    /**
+     * A file reference written on its own finds its parent through tablenames and
+     * uid_foreign, and from there the news above the content element.
+     */
+    public function testUpdatingFileReferenceDirectlyMarksWholeInlineChain(): void
+    {
+        $this->write([
+            'table' => 'sys_file_reference',
+            'action' => 'update',
+            'uid' => self::CONTENT_ASSET_UID,
+            'data' => ['alternative' => 'Alt text'],
         ]);
 
         $this->assertWorkspaceVersionExists('tt_content', self::CONTENT_UID);
         $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
         $this->assertNoWorkspaceVersion('tx_news_domain_model_news', self::OTHER_NEWS_UID);
+    }
+
+    /**
+     * tablenames decides the parent table: the same uid_foreign on another table is
+     * another parent.
+     */
+    public function testUpdatingNewsMediaReferenceMarksOnlyThatNews(): void
+    {
+        $this->write([
+            'table' => 'sys_file_reference',
+            'action' => 'update',
+            'uid' => self::NEWS_MEDIA_UID,
+            'data' => ['alternative' => 'Alt text'],
+        ]);
+
+        $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::OTHER_NEWS_UID);
+        $this->assertNoWorkspaceVersion('tx_news_domain_model_news', self::NEWS_UID);
+        $this->assertNoWorkspaceVersion('tt_content', self::CONTENT_UID);
+    }
+
+    /**
+     * A reference from a FlexForm field names no TCA column in fieldname, tablenames
+     * and uid_foreign still identify the parent.
+     */
+    public function testUpdatingFlexFormFileReferenceMarksItsParent(): void
+    {
+        $this->write([
+            'table' => 'sys_file_reference',
+            'action' => 'update',
+            'uid' => self::CONTENT_FLEXFORM_FILE_UID,
+            'data' => ['alternative' => 'Alt text'],
+        ]);
+
+        $this->assertWorkspaceVersionExists('tt_content', self::CONTENT_UID);
+        $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
     }
 
     /**

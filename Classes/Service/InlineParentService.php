@@ -70,8 +70,15 @@ class InlineParentService
             if ($parentUid <= 0) {
                 continue;
             }
-            // A child table shared by several parent tables or fields records which one it belongs to.
-            if ($relation['foreignTableField'] !== null && (string)($row[$relation['foreignTableField']] ?? '') !== $relation['parentTable']) {
+            if ($relation['foreignTableField'] !== null) {
+                // A child table shared by several parent tables records which one it belongs to
+                // (sys_file_reference.tablenames). Together with the foreign field that names the
+                // parent, whatever field it hangs in: fieldname may be a FlexForm field that is
+                // no TCA column of the parent and so matches none of its relations.
+                if ((string)($row[$relation['foreignTableField']] ?? '') !== $relation['parentTable']) {
+                    continue;
+                }
+                $parents[$relation['parentTable'] . ':' . $parentUid] = ['table' => $relation['parentTable'], 'uid' => $parentUid];
                 continue;
             }
             foreach ($relation['foreignMatchFields'] as $matchField => $matchValue) {
@@ -189,11 +196,16 @@ class InlineParentService
             }
             $visited[$parentKey] = true;
 
+            // foreign_match_fields are left out: they would miss FlexForm file references
+            // (fieldname is no TCA column), and fetching a row too many costs nothing.
+            $queried = [];
             foreach ($this->getRelations() as $relation) {
-                if ($relation['parentTable'] !== $parent['table']) {
+                $childTable = $relation['childTable'];
+                $queryKey = $childTable . ':' . $relation['foreignField'] . ':' . $relation['foreignTableField'];
+                if ($relation['parentTable'] !== $parent['table'] || isset($queried[$queryKey])) {
                     continue;
                 }
-                $childTable = $relation['childTable'];
+                $queried[$queryKey] = true;
                 $queryBuilder = $connectionPool->getQueryBuilderForTable($childTable);
                 $queryBuilder->getRestrictions()->removeAll()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
                 $queryBuilder
@@ -207,11 +219,6 @@ class InlineParentService
                 if ($relation['foreignTableField'] !== null) {
                     $queryBuilder->andWhere(
                         $queryBuilder->expr()->eq($relation['foreignTableField'], $queryBuilder->createNamedParameter($parent['table']))
-                    );
-                }
-                foreach ($relation['foreignMatchFields'] as $matchField => $matchValue) {
-                    $queryBuilder->andWhere(
-                        $queryBuilder->expr()->eq($matchField, $queryBuilder->createNamedParameter($matchValue))
                     );
                 }
 
