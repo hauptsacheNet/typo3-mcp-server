@@ -1,0 +1,45 @@
+"pages"
+,"uid","pid","title","doktype","slug"
+,1,0,"Root",1,"/"
+"be_users"
+,"uid","pid","username","password","admin"
+,1,0,"admin","$1$tCrlLajZ$C0sikFQQ3SWaFAZ1Me0Z/1",1
+"sys_workspace"
+,"uid","pid","title","stagechg_notification"
+,1,0,"Workspace",0
+,2,0,"Other workspace",0
+"tx_testrel_parent"
+,"uid","pid","title","children","list_children","optout_children","t3ver_oid","t3ver_wsid","t3ver_state","t3ver_stage"
+,1,1,"Live-only parent",2,"",1,0,0,0,0
+,2,1,"Parent with version",2,"",0,0,0,0,0
+,3,1,"Parent with version (version)",2,"",0,2,1,0,0
+,5,1,"Parent of a child in stage -10",1,"",0,0,0,0,0
+,6,1,"Parent with uid list children",0,"61,62",0,0,0,0,0
+,7,1,"Uid list parent with version",0,"71,72",0,0,0,0,0
+,8,1,"Uid list parent with version (version, 71 removed)",0,"72",0,7,1,0,0
+"tx_testrel_child"
+,"uid","pid","title","parent","grandchildren","sorting","t3ver_oid","t3ver_wsid","t3ver_state","t3ver_stage"
+,11,1,"Child of live-only parent",1,1,256,0,0,0,0
+,12,1,"Sibling of 11",1,0,512,0,0,0,0
+,21,1,"Live-only child of versioned parent",2,0,1,0,0,0,0
+,30,1,"Child without parent",0,1,1,0,0,0,0
+,51,1,"Child in stage -10",5,1,1,0,0,0,0
+,52,1,"Child in stage -10 (version)",5,1,1,51,1,0,-10
+,23,1,"Child of versioned parent",2,0,2,0,0,0,0
+,24,1,"Child of versioned parent (version)",2,0,2,23,1,0,0
+,25,1,"Child of versioned parent (version in workspace 2)",2,0,2,23,2,0,0
+"tx_testrel_grandchild"
+,"uid","pid","title","parent_uid","parent_table","parent_field","t3ver_oid","t3ver_wsid","t3ver_state"
+,111,1,"Grandchild of 11",11,"tx_testrel_child","grandchildren",0,0,0
+,112,1,"Grandchild new in workspace, child 51 has a version",51,"tx_testrel_child","grandchildren",0,1,1
+,113,1,"Grandchild new in workspace, child 30 has no parent",30,"tx_testrel_child","grandchildren",0,1,1
+"tx_testrel_listchild"
+,"uid","pid","title","t3ver_oid","t3ver_wsid","t3ver_state"
+,61,1,"List child of 6",0,0,0
+,62,1,"Sibling of 61",0,0,0
+,63,1,"List child without parent",0,0,0
+,71,1,"List child removed from the version of 7",0,0,0
+,72,1,"List child kept in the version of 7",0,0,0
+"tx_testrel_optout"
+,"uid","pid","title","parent","t3ver_oid","t3ver_wsid","t3ver_state"
+,41,1,"Opt-out child of 1",1,0,0,0

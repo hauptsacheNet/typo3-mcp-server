@@ -9,4 +9,5 @@
 - Always check if there is some typo3 core api that can be used for TCA related data actions.
 - If the TYPO3 instance has no language support, then hide all aspects of translation like parameters or even database fields. Check the LanguageService.php to check support.
 - Language overlays use TYPO3's PageRepository API while workspace overlays use custom implementation for transparency (see Documentation/Architecture/LanguageOverlays.md)
+- A DataHandler hook versions the outermost inline parent of every record changed in a workspace, so the Workspaces module shows whole families instead of context-less children (see Documentation/Architecture/WorkspaceParentVersioning.md)
 - Tool output must be valid UTF-8 (cut strings with `mb_*`): the SDK's HTTP transport encodes with `JSON_THROW_ON_ERROR` and silently drops a response it cannot encode, so the client just times out.

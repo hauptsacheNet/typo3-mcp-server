@@ -27,6 +27,10 @@ services:
         command: 'mcp:oauth'
         description: 'Manage OAuth tokens for MCP server'
         
+  # DataHandler hooks are instantiated via GeneralUtility::makeInstance()
+  Hn\McpServer\Hook\PropagateChangesToParentDataHandlerHook:
+    public: true
+
   # Make ToolRegistry public for eID access
   Hn\McpServer\MCP\ToolRegistry:
     public: true

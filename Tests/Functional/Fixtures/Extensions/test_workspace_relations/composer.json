@@ -1,0 +1,11 @@
+{
+    "name": "hn/test-workspace-relations",
+    "type": "typo3-cms-extension",
+    "description": "Fixture: parent -> child -> grandchild inline relations and uid list children for parent versioning",
+    "license": "GPL-2.0-or-later",
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "test_workspace_relations"
+        }
+    }
+}
