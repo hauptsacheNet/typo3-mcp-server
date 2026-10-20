@@ -14,11 +14,15 @@ use TYPO3\CMS\Workspaces\Event\ModifyVersionDifferencesEvent;
  * would show up as "modified" instead of "unchanged" because of them:
  *
  * - The timestamps (ctrl.crdate and ctrl.tstamp): the core sets both to the time the version was created
- *   (DataHandler::insertNewCopyVersion()). Publishing keeps the live values anyway. They only show up as a
- *   difference at all when they are TCA columns of the table, which georgringer/news makes them for tt_content,
- *   for instance. tstamp matters because ParentVersioningService restores the live value the core overwrites
- *   while versioning (see there): without that restore live and version carry the same new timestamp, with it
- *   an untouched child versioned along with its parent differs in tstamp alone and would be "modified".
+ *   (DataHandler::insertNewCopyVersion()). They show up as a difference only where they are TCA columns of the
+ *   table, which georgringer/news makes them for tt_content, for instance.
+ *   crdate never reaches live: DataHandlerHook::version_swap() keeps the live value ("Do not update the
+ *   creation date of the live record while publishing").
+ *   tstamp does reach live, it is swapped along with the record, so after publishing even an untouched child
+ *   carries the time its version was written. It is filtered all the same: it says nothing about the content,
+ *   and it differs here only because ParentVersioningService restores the live tstamp the core overwrites while
+ *   versioning (see there) — without that restore, live and version carry the same new timestamp and the
+ *   module sees no difference either.
  * - Differences without visible change: RemoteServer::getRowDetails() compares the raw values, but versioning
  *   normalizes some of them (e.g. NULL becomes 0 in fields without nullable). The diff of the formatted values then
  *   contains neither <ins> nor <del>. Rich text fields are kept: the diff strips HTML tags, so a markup-only change

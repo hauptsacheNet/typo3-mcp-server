@@ -94,10 +94,12 @@ via `ModifyVersionDifferencesEvent`:
 
 - The timestamps (`ctrl.crdate` and `ctrl.tstamp`): every new version gets the current time for both, which
   shows for tables that have them as TCA columns (e.g. news, or `tt_content` through the columns
-  georgringer/news adds). Publishing keeps the live values anyway. `tstamp` only becomes a difference because
-  of the live protection above: without it the core overwrites the live `tstamp` of the children with the same
-  new time, so live and version match; with it an untouched child versioned along with its parent differs in
-  `tstamp` alone and the module would call it "modified".
+  georgringer/news adds). `crdate` never reaches live — `DataHandlerHook::version_swap()` keeps the live value
+  on purpose — while `tstamp` is swapped along with the record. Both are filtered because neither says anything
+  about the content. `tstamp` differs at all only because of the live protection above: without it the core
+  overwrites the live `tstamp` of the children with the same new time, so live and version match; with it an
+  untouched child versioned along with its parent differs in `tstamp` alone and the module would call it
+  "modified".
 - Differences without visible change: versioning normalizes some raw values (e.g. NULL becomes 0 in fields
   without `nullable`). Both values look the same, and the diff marks neither an insertion nor a deletion.
   Publishing still writes the normalized value to live; set `nullable` for fields of your own to keep NULL.
@@ -109,6 +111,9 @@ via `ModifyVersionDifferencesEvent`:
 - The parent shows up as changed without field changes ("unchanged" version), and its untouched children get
   unchanged versions too.
 - Discarding only the child leaves the parent version behind; discard the parent to discard the whole family.
+- After publishing, the untouched children carry the `tstamp` of their version, so "last modified" moves for
+  records whose content did not change. Without the live protection the same thing happens at versioning time
+  instead; the core's own behaviour does not keep `tstamp` either way.
 - Errors of the versioning sub DataHandler (e.g. missing permission to edit the parent) are appended to the
   errorLog of the calling DataHandler. The change of the child itself is kept in that case.
 
