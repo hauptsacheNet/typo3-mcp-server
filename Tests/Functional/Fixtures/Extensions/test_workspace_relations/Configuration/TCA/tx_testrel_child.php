@@ -5,6 +5,7 @@ return [
         'title' => 'Child',
         'label' => 'title',
         'crdate' => 'crdate',
+        'tstamp' => 'tstamp',
         'delete' => 'deleted',
         'sortby' => 'sorting',
         'versioningWS' => true,

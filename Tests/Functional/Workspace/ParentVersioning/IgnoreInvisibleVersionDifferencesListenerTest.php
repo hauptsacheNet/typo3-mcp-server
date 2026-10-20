@@ -28,6 +28,28 @@ final class IgnoreInvisibleVersionDifferencesListenerTest extends AbstractParent
         self::assertSame([], $differences);
     }
 
+    public function testTheModificationDateIsRemovedFromTheDifferences(): void
+    {
+        // ParentVersioningService restores the live tstamp the core overwrites while versioning, so an
+        // untouched child versioned along with its parent differs in tstamp alone and would be "modified"
+        $differences = $this->dispatch('tx_testrel_child', [
+            ['field' => 'tstamp', 'label' => 'Modification date', 'content' => '<del>old</del><ins>new</ins>'],
+            ['field' => 'title', 'label' => 'Title', 'content' => '<del>old</del><ins>new</ins>'],
+        ]);
+
+        self::assertSame(['title'], array_column($differences, 'field'));
+    }
+
+    public function testTablesWithoutModificationDateKeepAColumnOfThatName(): void
+    {
+        // tx_testrel_parent has no ctrl.tstamp
+        $differences = $this->dispatch('tx_testrel_parent', [
+            ['field' => 'tstamp', 'label' => 'Modification date', 'content' => '<del>old</del><ins>new</ins>'],
+        ]);
+
+        self::assertSame(['tstamp'], array_column($differences, 'field'));
+    }
+
     public function testTablesWithoutCreationDateKeepAColumnOfThatName(): void
     {
         // tx_testrel_parent has no ctrl.crdate, a column of that name is an ordinary field there
