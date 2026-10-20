@@ -26,8 +26,10 @@ class TcaFormattingUtility
      * @param string $fieldName Optional field name for special handling
      * @param string $table Optional table name for authMode filtering
      * @param int|null $pid Optional page id for TSconfig context (filters select items via FormDataCompiler)
+     * @param string $recordType Optional record type (e.g. the CType) the field is shown for. Select items
+     *                           depending on the type (e.g. colPos restricted by backend layout) are resolved for it.
      */
-    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = '', ?int $pid = null): void
+    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = '', ?int $pid = null, string $recordType = ''): void
     {
         // Get the field type
         $type = $config['type'] ?? '';
@@ -91,9 +93,28 @@ class TcaFormattingUtility
                 // Pass the pid context so TSconfig defined on real pages (rootline) is applied — vanillaUid=0 misses it.
                 $resolved = null;
                 if (!empty($table) && !empty($fieldName)) {
-                    $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
-                    $resolverPid = GeneralUtility::makeInstance(TableAccessService::class)->resolveTSconfigPid($pid);
-                    $resolved = $resolver->resolveSelectItems($table, $fieldName, ['pid' => $resolverPid]);
+                    $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+                    $resolverPid = $tableAccessService->resolveTSconfigPid($pid);
+                    $typeField = $tableAccessService->getTypeFieldName($table);
+                    if ($fieldName === $typeField) {
+                        // The type field lists the types available on the page, independent
+                        // of a column — same list GetTableSchema validates the type against.
+                        $types = $tableAccessService->getAvailableTypes($table, $pid);
+                        $resolved = [
+                            'values' => array_map('strval', array_keys($types)),
+                            'labels' => $types,
+                        ];
+                    } else {
+                        // Seed the record type so type-dependent items match a record of
+                        // that type (e.g. tt_content.colPos only lists the backend layout
+                        // columns that allow the CType).
+                        $record = ['pid' => $resolverPid];
+                        if ($typeField !== null && $recordType !== '') {
+                            $record[$typeField] = $recordType;
+                        }
+                        $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
+                        $resolved = $resolver->resolveSelectItems($table, $fieldName, $record);
+                    }
                 }
 
                 if ($resolved !== null && !empty($resolved['values'])) {
