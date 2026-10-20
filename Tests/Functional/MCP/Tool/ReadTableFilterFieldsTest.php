@@ -256,6 +256,9 @@ class ReadTableFilterFieldsTest extends AbstractFunctionalTest
         $user->groupData['non_exclude_fields'] = $nonExcludeFields;
         $user->groupData['webmounts'] = '1';
         $user->user['db_mountpoints'] = '1';
+        // Read tools follow the page permissions of the backend: the mounted
+        // page must grant "show" to the editor
+        $this->getConnectionForTable('pages')->update('pages', ['perms_userid' => 99, 'perms_user' => 31], ['uid' => 1]);
         $this->assertFalse($user->isAdmin());
     }
 
