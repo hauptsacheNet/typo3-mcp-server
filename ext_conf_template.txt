@@ -7,11 +7,11 @@ additionalStandaloneTables = sys_file_metadata
 # cat=mcp/files; type=int+; label=Maximum file size (MiB): Upper limit for files fetched from URLs or received through pre-signed uploads via the UploadFile tool. Default: 500
 maxFileSizeMb = 500
 
-# cat=mcp/oauth; type=int+; label=Access token lifetime (days): How long an access token issued to an MCP client stays valid. After it expires, the user has to authorize the client again (backend login). Also the default for tokens created with "mcp:oauth create". Default: 30
+# cat=mcp/oauth; type=int+; label=Access token lifetime (days): How long an access token issued to an MCP client stays valid. After it expires, the user has to authorize the client again (backend login). Also the default for tokens created with "mcp:oauth create". 0 or empty means the default. Default: 30
 tokenLifetimeDays = 30
 
-# cat=mcp/oauth; type=boolean; label=Extend token lifetime on use: When enabled, every authenticated request moves the expiry to "now + token lifetime", so a token only expires after that long without use. When disabled, a token expires a fixed time after it was issued, however often it is used. Tokens created with "mcp:oauth create --ttl-days" keep their fixed expiry and are never extended.
+# cat=mcp/oauth; type=boolean; label=Extend token lifetime on use: When enabled, every authenticated request moves the expiry to "now + token lifetime" (the lifetime the token was issued with, or the current setting if that is shorter), so a token only expires after that long without use. When disabled, a token expires a fixed time after it was issued, however often it is used. Tokens created with "mcp:oauth create --ttl-days" keep their fixed expiry and are never extended, and so do tokens issued before updating to the version that added this setting (re-authorize once). Without a maximum token lifetime, a token that keeps being used - a leaked one too - never expires. While enabled, the token response carries no expires_in, as the issue-time expiry would be wrong.
 tokenSlidingExpiration = 0
 
-# cat=mcp/oauth; type=int+; label=Maximum token lifetime (days): Only used when "Extend token lifetime on use" is enabled. Upper limit counted from when the token was issued; after it, the user has to authorize again however active they are. 0 = no limit. Default: 0
+# cat=mcp/oauth; type=int+; label=Maximum token lifetime (days): Only used when "Extend token lifetime on use" is enabled. Upper limit counted from when the token was issued; after it, the user has to authorize again however active they are. Does not apply to tokens created with "mcp:oauth create --ttl-days", which keep their fixed expiry. 0 = no limit. Default: 0
 tokenMaxLifetimeDays = 0

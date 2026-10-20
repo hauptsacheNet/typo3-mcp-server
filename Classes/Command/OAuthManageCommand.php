@@ -118,7 +118,8 @@ class OAuthManageCommand extends Command
         $output->writeln($token['access_token']);
         $output->writeln("");
         $output->writeln("Client: <info>$clientName</info>");
-        $output->writeln("Expires: <info>" . date('Y-m-d H:i:s', $token['expires']) . "</info>");
+        $output->writeln("Expires: <info>" . date('Y-m-d H:i:s', $token['expires']) . "</info>"
+            . (!empty($token['extended_on_use']) ? ' (extended on use)' : ''));
         $output->writeln("");
         $output->writeln("<comment>Store it now — it cannot be retrieved later (only a hash is kept).</comment>");
         $output->writeln("Use it as a static Bearer header in your MCP client, e.g.:");

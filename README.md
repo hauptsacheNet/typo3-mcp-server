@@ -99,13 +99,13 @@ The defaults work out of the box. All settings live in the extension configurati
 | `maxFileSizeMb`              | `500`               | Upper limit in MiB for files fetched from a URL or received through an upload link |
 | `additionalReadOnlyTables`   | `sys_file`          | Non-workspace-capable tables exposed read-only — this is what lets the AI browse your files |
 | `additionalStandaloneTables` | `sys_file_metadata` | `hideTable` tables exposed as independent tables — this is what makes file metadata such as titles and alt texts editable |
-| `tokenLifetimeDays`          | `30`                | How long an access token stays valid; afterwards the user authorizes the client again |
-| `tokenSlidingExpiration`     | off                 | Extend a token on every use, so it only expires after `tokenLifetimeDays` without use. Tokens from `mcp:oauth create --ttl-days` keep their fixed expiry |
-| `tokenMaxLifetimeDays`       | `0` (no limit)      | With sliding expiration: hard limit counted from when the token was issued, so users still re-authorize periodically |
+| `tokenLifetimeDays`          | `30`                | How long an access token stays valid; afterwards the user authorizes the client again. `0` means the default |
+| `tokenSlidingExpiration`     | off                 | Extend a token on every use, so it only expires after `tokenLifetimeDays` (or the shorter lifetime it was issued with) without use. Tokens from `mcp:oauth create --ttl-days` keep their fixed expiry, and so do tokens issued before updating to the version that added this setting (re-authorize once). The token response then carries no `expires_in`, since the issue-time expiry would be wrong |
+| `tokenMaxLifetimeDays`       | `0` (no limit)      | With sliding expiration: hard limit counted from when the token was issued, so users still re-authorize periodically (not for `--ttl-days` tokens, whose expiry is fixed anyway). Without it, a token that keeps being used — a leaked one too — never expires |
 
 ### Upgrading
 
-Updates can add database columns. Apply the schema update after every update of the extension, ideally before the new code serves requests:
+Updates can add database columns. Apply the schema update right after every update of the extension:
 
 ```bash
 vendor/bin/typo3 extension:setup --extension=mcp_server

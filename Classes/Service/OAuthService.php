@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
+use TYPO3\CMS\Core\Database\Connection;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Log\LogManager;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -26,8 +27,12 @@ class OAuthService
     private const CLIENTS_TABLE = 'tx_mcpserver_oauth_clients';
     private const CODE_EXPIRY_SECONDS = 600; // 10 minutes
     private const TOKEN_EXPIRY_SECONDS = 2592000; // 30 days, default for the extension setting "tokenLifetimeDays"
-    /** Largest value of the int(11) unsigned columns "expires" and "lifetime" of the token table. */
-    private const MAX_TIMESTAMP = 4294967295;
+    /**
+     * Largest value the int columns "expires" and "lifetime" hold on every
+     * database: "unsigned" is ignored on PostgreSQL, so the signed 32-bit
+     * maximum (2038-01-19) is the common limit.
+     */
+    private const MAX_TIMESTAMP = 2147483647;
 
     /**
      * Generate authorization URL for OAuth flow
@@ -209,13 +214,22 @@ class OAuthService
                 'token_version' => 1,
             ]
         );
-        $this->storeTokenLifetime((int)$tokenConnection->lastInsertId(), $lifetime);
+        $this->storeTokenLifetime($this->hashToken($accessToken), $lifetime);
 
-        return [
+        $response = [
             'access_token' => $accessToken,
             'token_type' => 'Bearer',
-            'expires_in' => $expires - $issuedAt,
         ];
+        // With sliding expiration the issue-time expiry is not the real one:
+        // a client that schedules re-authorization from expires_in would drop
+        // a token the server keeps extending. expires_in is only RECOMMENDED
+        // (RFC 6749 §5.1), so it is left out rather than stated wrongly. (Should
+        // the token still end at its issue-time expiry — no "lifetime" column
+        // yet — the client gets a 401 and re-authorizes, as for any expiry.)
+        if (!$this->isSlidingExpirationEnabled()) {
+            $response['expires_in'] = $expires - $issuedAt;
+        }
+        return $response;
     }
 
     /**
@@ -288,36 +302,20 @@ class OAuthService
         }
 
         // Update last used timestamp and IP (best-effort, must not block authentication)
+        $usedAt = time();
         try {
             $clientIp = '';
             if ($request !== null) {
                 $clientIp = $request->getServerParams()['REMOTE_ADDR'] ?? '';
             }
 
-            $now = time();
             $queryBuilder = $connection->createQueryBuilder();
             $queryBuilder
                 ->update('tx_mcpserver_access_tokens')
                 ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($tokenRecord['uid'])))
-                ->set('last_used', $now)
-                ->set('last_used_ip', $clientIp);
-
-            // Sliding expiration: a token in use moves its expiry forward by its
-            // own sliding window, or by the configured lifetime if that has
-            // been shortened since. Never past the maximum lifetime and never
-            // backwards. A window of 0 means a fixed expiry: an explicit TTL
-            // from createToken(), or a token issued before the window was
-            // stored — neither may outlive the expiry it was issued with.
-            $window = (int)($tokenRecord['lifetime'] ?? 0);
-            if ($window > 0 && $this->isSlidingExpirationEnabled()) {
-                $window = min($window, $this->getTokenLifetimeSeconds());
-                $slidingExpiry = $this->calculateTokenExpiry($now, $window, (int)$tokenRecord['crdate']);
-                if ($slidingExpiry > (int)$tokenRecord['expires']) {
-                    $queryBuilder->set('expires', $slidingExpiry);
-                }
-            }
-
-            $queryBuilder->executeStatement();
+                ->set('last_used', $usedAt)
+                ->set('last_used_ip', $clientIp)
+                ->executeStatement();
         } catch (\Throwable $e) {
             // Non-fatal: audit trail update failure must not prevent authentication
         }
@@ -327,7 +325,53 @@ class OAuthService
             'client_uid' => (int)($tokenRecord['client_uid'] ?? 0),
             'client_name' => $tokenRecord['client_name'],
             'token_uid' => (int)$tokenRecord['uid'],
+            // For extendTokenOnUse(); "lifetime" is absent before the schema update
+            'used_at' => $usedAt,
+            'crdate' => (int)$tokenRecord['crdate'],
+            'expires' => (int)$tokenRecord['expires'],
+            'lifetime' => (int)($tokenRecord['lifetime'] ?? 0),
         ];
+    }
+
+    /**
+     * Sliding expiration: move the expiry of a token that was just used
+     * forward, by its own sliding window — or by the configured lifetime if
+     * that has been shortened since. Never past the maximum lifetime and never
+     * backwards. A window of 0 means a fixed expiry: an explicit TTL from
+     * createToken(), or a token issued before the window was stored.
+     *
+     * Call it only once the request is actually served, i.e. after the
+     * backend user behind the token has been found active. Otherwise a
+     * token of a disabled user would be kept alive by every rejected request.
+     *
+     * @param array $tokenInfo Result of {@see self::validateToken()}
+     */
+    public function extendTokenOnUse(array $tokenInfo): void
+    {
+        $window = (int)($tokenInfo['lifetime'] ?? 0);
+        if ($window <= 0 || !$this->isSlidingExpirationEnabled()) {
+            return;
+        }
+        $window = min($window, $this->getTokenLifetimeSeconds());
+        $slidingExpiry = $this->calculateTokenExpiry((int)($tokenInfo['used_at'] ?? time()), $window, (int)$tokenInfo['crdate']);
+        if ($slidingExpiry <= (int)$tokenInfo['expires']) {
+            return;
+        }
+        try {
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('tx_mcpserver_access_tokens');
+            $queryBuilder
+                ->update('tx_mcpserver_access_tokens')
+                ->set('expires', $slidingExpiry)
+                ->where(
+                    $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter((int)$tokenInfo['token_uid'], Connection::PARAM_INT)),
+                    // Concurrent requests: the one that computed a later expiry wins
+                    $queryBuilder->expr()->lt('expires', $queryBuilder->createNamedParameter($slidingExpiry, Connection::PARAM_INT))
+                )
+                ->executeStatement();
+        } catch (\Throwable $e) {
+            // Non-fatal: the token keeps its current expiry
+        }
     }
 
     /**
@@ -430,7 +474,7 @@ class OAuthService
      */
     private function cleanupStaleClients(int $currentTime): void
     {
-        $threshold = $currentTime - $this->getTokenLifetimeSeconds();
+        $threshold = $currentTime - self::TOKEN_EXPIRY_SECONDS;
 
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable(self::CLIENTS_TABLE);
@@ -940,7 +984,7 @@ class OAuthService
                 'token_version' => 1,
             ]
         );
-        $this->storeTokenLifetime((int)$connection->lastInsertId(), $lifetime);
+        $this->storeTokenLifetime($this->hashToken($accessToken), $lifetime);
 
         return $accessToken;
     }
@@ -990,13 +1034,14 @@ class OAuthService
                 'token_version' => 1,
             ]
         );
-        $this->storeTokenLifetime((int)$connection->lastInsertId(), $lifetime);
+        $this->storeTokenLifetime($this->hashToken($accessToken), $lifetime);
 
         return [
             'access_token' => $accessToken,
             'token_type' => 'Bearer',
             'expires' => $expires,
             'expires_in' => $expires - $issuedAt,
+            'extended_on_use' => $lifetime > 0 && $this->isSlidingExpirationEnabled(),
         ];
     }
 
@@ -1008,23 +1053,37 @@ class OAuthService
      * between deploying the code and running "extension:setup". Written
      * separately and best-effort, a missing column only costs the sliding
      * expiration: the token is issued with a fixed expiry and the cause is
-     * logged.
+     * logged. The row is addressed by its token hash, which is effectively unique, so no
+     * driver-specific insert id is needed.
      */
-    private function storeTokenLifetime(int $tokenUid, int $lifetime): void
+    private function storeTokenLifetime(string $tokenHash, int $lifetime): void
     {
-        if ($tokenUid <= 0 || $lifetime <= 0) {
+        if ($lifetime <= 0) {
             return;
         }
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens');
         try {
-            GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getConnectionForTable('tx_mcpserver_access_tokens')
-                ->update('tx_mcpserver_access_tokens', ['lifetime' => $lifetime], ['uid' => $tokenUid]);
+            $connection->update('tx_mcpserver_access_tokens', ['lifetime' => $lifetime], ['token' => $tokenHash]);
         } catch (\Throwable $e) {
-            GeneralUtility::makeInstance(LogManager::class)->getLogger(__CLASS__)->warning(
-                'Could not store the sliding window of an MCP access token, so it will not be extended on use. '
-                . 'Run "typo3 extension:setup --extension=mcp_server" to add the column tx_mcpserver_access_tokens.lifetime.',
-                ['exception' => $e]
-            );
+            // Drivers report a missing column differently (SQLite: a generic
+            // driver error on UPDATE), so the schema is only asked here, on
+            // the failure path, to tell the two causes apart.
+            $message = $this->isLifetimeColumnMissing($connection)
+                ? 'The column tx_mcpserver_access_tokens.lifetime is missing, so tokens issued now keep a fixed expiry '
+                    . 'even with sliding expiration enabled. Run "typo3 extension:setup --extension=mcp_server".'
+                : 'Could not store the sliding window of an MCP access token, so it will not be extended on use.';
+            GeneralUtility::makeInstance(LogManager::class)->getLogger(__CLASS__)->warning($message, ['exception' => $e]);
+        }
+    }
+
+    private function isLifetimeColumnMissing(Connection $connection): bool
+    {
+        try {
+            $columns = array_change_key_case($connection->createSchemaManager()->listTableColumns('tx_mcpserver_access_tokens'));
+            return !isset($columns['lifetime']);
+        } catch (\Throwable) {
+            return false;
         }
     }
 
@@ -1062,7 +1121,7 @@ class OAuthService
      */
     private function isSlidingExpirationEnabled(): bool
     {
-        return (bool)$this->getExtensionSetting('tokenSlidingExpiration');
+        return filter_var($this->getExtensionSetting('tokenSlidingExpiration'), FILTER_VALIDATE_BOOL);
     }
 
     /**
@@ -1075,13 +1134,20 @@ class OAuthService
         return $days > 0 ? (int)min($days * 86400, self::MAX_TIMESTAMP) : 0;
     }
 
+    /**
+     * Reads the extension configuration as a whole rather than by path: a
+     * path that is missing (a new key before "extension:setup" ran) would make
+     * core sync all ext_conf_template.txt files into settings.php on every
+     * call, from a web request. A missing key simply means the default.
+     */
     private function getExtensionSetting(string $name): mixed
     {
         try {
-            return GeneralUtility::makeInstance(ExtensionConfiguration::class)->get('mcp_server', $name);
+            $settings = GeneralUtility::makeInstance(ExtensionConfiguration::class)->get('mcp_server');
         } catch (\Throwable) {
             return null;
         }
+        return is_array($settings) ? ($settings[$name] ?? null) : null;
     }
 
     /**
