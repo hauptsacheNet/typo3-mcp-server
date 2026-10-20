@@ -6,7 +6,10 @@ namespace Hn\McpServer\Tests\Functional\Service;
 
 use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
+use Psr\Log\LogLevel;
+use TYPO3\CMS\Core\Core\Environment;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Log\Writer\FileWriter;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
@@ -253,6 +256,29 @@ class OAuthTokenLifetimeTest extends AbstractFunctionalTest
         $this->assertSame(self::MAX_TIMESTAMP, $created['expires']);
         $this->assertSame(self::MAX_TIMESTAMP, (int)$this->latestToken()['expires']);
         $this->assertNotNull($this->service->validateToken($created['access_token']));
+    }
+
+    public function testMissingLifetimeColumnStillIssuesAFixedTokenAndLogsAWarning(): void
+    {
+        $logFile = Environment::getVarPath() . '/log/oauth-lifetime-test.log';
+        @unlink($logFile);
+        $GLOBALS['TYPO3_CONF_VARS']['LOG']['Hn']['McpServer']['Service']['OAuthService']['writerConfiguration'] = [
+            LogLevel::WARNING => [FileWriter::class => ['logFile' => $logFile]],
+        ];
+        $this->configure(['tokenSlidingExpiration' => '1']);
+        // Code deployed, schema update not run yet
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->executeStatement('ALTER TABLE tx_mcpserver_access_tokens DROP COLUMN lifetime');
+
+        $tokenData = $this->issueTokenViaOAuthFlow();
+        $this->updateLatestToken(['expires' => time() + 100]);
+        $expiresSoon = (int)$this->latestToken()['expires'];
+
+        $this->assertNotNull($this->service->validateToken($tokenData['access_token']));
+        $this->assertSame($expiresSoon, (int)$this->latestToken()['expires'], 'Without the column the token must not slide');
+        $this->assertFileExists($logFile);
+        $this->assertStringContainsString('extension:setup --extension=mcp_server', (string)file_get_contents($logFile));
     }
 
     public function testAnExpiredTokenIsNotRevivedBySlidingExpiration(): void

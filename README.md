@@ -103,6 +103,16 @@ The defaults work out of the box. All settings live in the extension configurati
 | `tokenSlidingExpiration`     | off                 | Extend a token on every use, so it only expires after `tokenLifetimeDays` without use. Tokens from `mcp:oauth create --ttl-days` keep their fixed expiry |
 | `tokenMaxLifetimeDays`       | `0` (no limit)      | With sliding expiration: hard limit counted from when the token was issued, so users still re-authorize periodically |
 
+### Upgrading
+
+Updates can add database columns. Apply the schema update after every update of the extension, ideally before the new code serves requests:
+
+```bash
+vendor/bin/typo3 extension:setup --extension=mcp_server
+```
+
+(Classic mode: `typo3/sysext/core/bin/typo3 extension:setup --extension=mcp_server`, or the Database Analyzer in the Install Tool.) Example: sliding expiration needs the column `tx_mcpserver_access_tokens.lifetime`. Until the schema update has run, tokens are still issued, but with a fixed expiry, and a warning is logged on every token issue.
+
 ## Usage
 
 ### Quick Start

@@ -67,6 +67,16 @@ mkdir -p "$STAGE_DIR"
 trap 'rm -rf "$STAGE_DIR"' EXIT
 git -C "$REPO_ROOT" archive HEAD -- "${PAYLOAD[@]}" | tar -x -C "$STAGE_DIR"
 
+# Schema before code: the running (old) code ignores new columns, while new
+# code may already write them. So on an update, bring the database up to the
+# new ext_tables.sql first and only then replace the PHP files. A fresh
+# install has no old code serving requests, so it skips this step.
+if [ -n "$CONTAINER" ] && [ -f "$EXT_DIR/ext_emconf.php" ] && [ -f "$STAGE_DIR/ext_tables.sql" ]; then
+    echo "Updating the database schema in container '$CONTAINER' before deploying the code..."
+    cp "$STAGE_DIR/ext_tables.sql" "$EXT_DIR/ext_tables.sql"
+    docker exec -w "$CONTAINER_ROOT" "$CONTAINER" typo3/sysext/core/bin/typo3 extension:setup --extension=mcp_server
+fi
+
 mkdir -p "$EXT_DIR"
 rsync -a --delete \
     --exclude 'Resources/Private/PHP/vendor/' \

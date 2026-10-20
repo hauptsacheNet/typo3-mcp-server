@@ -6,6 +6,7 @@ namespace Hn\McpServer\Service;
 
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Log\LogManager;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use Psr\Http\Message\ServerRequestInterface;
@@ -202,13 +203,13 @@ class OAuthService
                 'client_uid' => $clientUid,
                 'client_name' => $authCode['client_name'],
                 'expires' => $expires,
-                'lifetime' => $lifetime,
                 'last_used' => $issuedAt,
                 'created_ip' => $clientIp,
                 'last_used_ip' => $clientIp,
                 'token_version' => 1,
             ]
         );
+        $this->storeTokenLifetime((int)$tokenConnection->lastInsertId(), $lifetime);
 
         return [
             'access_token' => $accessToken,
@@ -933,13 +934,13 @@ class OAuthService
                 'client_uid' => $clientUid,
                 'client_name' => $clientName,
                 'expires' => $expires,
-                'lifetime' => $lifetime,
                 'last_used' => $issuedAt,
                 'created_ip' => $clientIp,
                 'last_used_ip' => $clientIp,
                 'token_version' => 1,
             ]
         );
+        $this->storeTokenLifetime((int)$connection->lastInsertId(), $lifetime);
 
         return $accessToken;
     }
@@ -971,25 +972,25 @@ class OAuthService
             $expires = min($issuedAt + $ttl, self::MAX_TIMESTAMP);
         }
 
-        GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('tx_mcpserver_access_tokens')
-            ->insert(
-                'tx_mcpserver_access_tokens',
-                [
-                    'pid' => 0,
-                    'tstamp' => $issuedAt,
-                    'crdate' => $issuedAt,
-                    'token' => $this->hashToken($accessToken),
-                    'be_user_uid' => $beUserUid,
-                    'client_name' => $clientName,
-                    'expires' => $expires,
-                    'lifetime' => $lifetime,
-                    'last_used' => 0,
-                    'created_ip' => '',
-                    'last_used_ip' => '',
-                    'token_version' => 1,
-                ]
-            );
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens');
+        $connection->insert(
+            'tx_mcpserver_access_tokens',
+            [
+                'pid' => 0,
+                'tstamp' => $issuedAt,
+                'crdate' => $issuedAt,
+                'token' => $this->hashToken($accessToken),
+                'be_user_uid' => $beUserUid,
+                'client_name' => $clientName,
+                'expires' => $expires,
+                'last_used' => 0,
+                'created_ip' => '',
+                'last_used_ip' => '',
+                'token_version' => 1,
+            ]
+        );
+        $this->storeTokenLifetime((int)$connection->lastInsertId(), $lifetime);
 
         return [
             'access_token' => $accessToken,
@@ -997,6 +998,34 @@ class OAuthService
             'expires' => $expires,
             'expires_in' => $expires - $issuedAt,
         ];
+    }
+
+    /**
+     * Store a token's sliding window in its own statement, after the insert.
+     *
+     * The "lifetime" column comes with a schema update. Writing it in the
+     * insert would make token issuance — and with it every OAuth login — fail
+     * between deploying the code and running "extension:setup". Written
+     * separately and best-effort, a missing column only costs the sliding
+     * expiration: the token is issued with a fixed expiry and the cause is
+     * logged.
+     */
+    private function storeTokenLifetime(int $tokenUid, int $lifetime): void
+    {
+        if ($tokenUid <= 0 || $lifetime <= 0) {
+            return;
+        }
+        try {
+            GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable('tx_mcpserver_access_tokens')
+                ->update('tx_mcpserver_access_tokens', ['lifetime' => $lifetime], ['uid' => $tokenUid]);
+        } catch (\Throwable $e) {
+            GeneralUtility::makeInstance(LogManager::class)->getLogger(__CLASS__)->warning(
+                'Could not store the sliding window of an MCP access token, so it will not be extended on use. '
+                . 'Run "typo3 extension:setup --extension=mcp_server" to add the column tx_mcpserver_access_tokens.lifetime.',
+                ['exception' => $e]
+            );
+        }
     }
 
     /**
