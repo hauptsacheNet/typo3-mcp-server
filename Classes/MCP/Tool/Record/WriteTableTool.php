@@ -349,6 +349,11 @@ class WriteTableTool extends AbstractRecordTool
         if ($validationResult !== true) {
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
+
+        $workspaceError = $this->getMissingWorkspaceError($table);
+        if ($workspaceError !== null) {
+            return $this->createErrorResult($workspaceError);
+        }
         
         // Extract inline relations before converting data
         $inlineRelations = $this->extractInlineRelations($table, $data);
@@ -553,6 +558,11 @@ class WriteTableTool extends AbstractRecordTool
             return $this->createErrorResult('Validation error: ' . $validationResult);
         }
 
+        $workspaceError = $this->getMissingWorkspaceError($table);
+        if ($workspaceError !== null) {
+            return $this->createErrorResult($workspaceError);
+        }
+
         // Extract pid as a special field — it's not a TCA column, but setting it
         // on update should move the record to the new page via DataHandler's cmdmap.
         $targetPid = null;
@@ -672,6 +682,11 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function deleteRecord(string $table, int $uid): CallToolResult
     {
+        $workspaceError = $this->getMissingWorkspaceError($table);
+        if ($workspaceError !== null) {
+            return $this->createErrorResult($workspaceError);
+        }
+
         // Resolve the live UID to workspace UID
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
 
@@ -1024,6 +1039,11 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function translateRecord(string $table, int $uid, int $targetLanguageUid, array $data = []): CallToolResult
     {
+        $workspaceError = $this->getMissingWorkspaceError($table);
+        if ($workspaceError !== null) {
+            return $this->createErrorResult($workspaceError);
+        }
+
         // Check if table supports translations
         $languageField = $this->tableAccessService->getLanguageFieldName($table);
         if (!$languageField) {
@@ -2911,6 +2931,22 @@ class WriteTableTool extends AbstractRecordTool
         $data[$languageField] = 0;
 
         return $data;
+    }
+
+    /**
+     * Never fall back to live: when no workspace could be selected or created,
+     * DataHandler would write straight to live for every user that keeps the
+     * core "live editing" permission.
+     *
+     * @return string|null Error message if no workspace is active, null otherwise
+     */
+    protected function getMissingWorkspaceError(string $table): ?string
+    {
+        if (!$this->isTableWorkspaceCapable($table) || (int)($GLOBALS['BE_USER']->workspace ?? 0) > 0) {
+            return null;
+        }
+        return 'Permission denied: no workspace is available for your account and changes are never written to live, '
+            . 'so the change was not saved. Ask an administrator to add you to a workspace.';
     }
 
     /**
