@@ -6,7 +6,11 @@ namespace Hn\McpServer\Tests\Functional\Workspace\ParentVersioning;
 
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
+use TYPO3\CMS\Core\Context\Context;
+use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Workspaces\Domain\Repository\WorkspaceRepository;
@@ -85,6 +89,40 @@ final class SiblingsStayUnchangedTest extends FunctionalTestCase
 
         // the edited one is still listed as changed, with its header
         self::assertSame(['header'], array_column($this->getModuleDifferences('tt_content', self::EDITED_ELEMENT), 'field'));
+    }
+
+    /**
+     * The other path: saving the news record itself with a changed content element, the way FormEngine does it.
+     *
+     * The parent is in the datamap and the core versions it, so ParentVersioningService finds nothing left to
+     * version and its live protection never runs. Both paths have to end up with the same picture.
+     */
+    public function testEditingAContentElementThroughItsNewsFormLeavesTheSiblingUnchanged(): void
+    {
+        $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
+        $dataHandler->start(
+            [
+                'tx_news_domain_model_news' => [self::NEWS_UID => ['title' => 'Live news']],
+                'tt_content' => [self::EDITED_ELEMENT => ['header' => 'First element, edited in the news form']],
+            ],
+            [],
+            $this->setUpBackendUserInWorkspace()
+        );
+        $dataHandler->process_datamap();
+        self::assertSame([], $dataHandler->errorLog);
+
+        self::assertIsArray($this->getWorkspaceVersion('tt_content', self::UNTOUCHED_ELEMENT));
+        self::assertSame([], $this->getModuleDifferences('tt_content', self::UNTOUCHED_ELEMENT));
+        self::assertSame(['header'], array_column($this->getModuleDifferences('tt_content', self::EDITED_ELEMENT), 'field'));
+    }
+
+    private function setUpBackendUserInWorkspace(): BackendUserAuthentication
+    {
+        $backendUser = $GLOBALS['BE_USER'];
+        $backendUser->setWorkspace(1);
+        $this->get(Context::class)->setAspect('workspace', new WorkspaceAspect(1));
+
+        return $backendUser;
     }
 
     /**

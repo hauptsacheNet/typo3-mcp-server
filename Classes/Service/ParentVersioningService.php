@@ -28,7 +28,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 final class ParentVersioningService
 {
-    /** how many levels of children are protected from the core's relation rewriting */
+    /** how many levels of children are protected from the core's sorting rewrite */
     private const MAX_FAMILY_DEPTH = 10;
 
     public function __construct(
@@ -96,13 +96,9 @@ final class ParentVersioningService
         // Ancestors that already have a version also need their reference index updated when nothing gets
         // versioned: a child created standalone (not through the parent's form) is not in the index of its
         // parent's version otherwise.
-        // Versioning a parent makes the core rewrite the relation of its children
-        // (RelationHandler::writeForeignField()), which renumbers the sorting of the LIVE children and touches
-        // their tstamp. A workspace must not change live records, and the renumbering also breaks a sorting
-        // staged in the workspace, so the live values are put back afterwards.
-        $liveChildValues = $targets === [] ? [] : $this->captureLiveChildValues($targets);
+        $liveChildSortings = $targets === [] ? [] : $this->captureLiveChildSortings($targets);
         $result = $targets === [] ? [] : $this->versionTargets($targets, $workspaceId, $backendUser, $referenceIndexUpdater, $errorLog);
-        $this->restoreLiveChildValues($liveChildValues);
+        $this->restoreLiveChildSortings($liveChildSortings);
 
         foreach ($referenceUpdates as [$table, $uid]) {
             $referenceIndexUpdater->registerForUpdate($table, $uid, $workspaceId);
@@ -154,17 +150,24 @@ final class ParentVersioningService
     }
 
     /**
-     * Reads the fields of the live children of the records to be versioned that the core may rewrite while
-     * versioning their parent: the sorting field of the relation, the pointer back to the parent and tstamp.
+     * Reads the sorting of the live children of the records about to be versioned.
+     *
+     * Versioning a parent makes the core rewrite its inline relation (process_cmdmap() -> processRemapStack()
+     * -> checkValue_inline_processDBdata() -> RelationHandler::writeForeignField()), which renumbers the
+     * sorting of the LIVE children from 1. On its own that would only be cosmetic, since the order survives,
+     * but it leaves two scales in the same column: a child version pulled before the renumbering keeps the old
+     * values, while move pointers created afterwards are calculated against the new ones. A reorder staged in
+     * the workspace then publishes in the wrong order, even though the Workspaces module and ReadTable still
+     * show the staged one (they read the live row of a child that only has a plain version).
      *
      * Walks down all owning relations, since versioning a parent versions the whole family below it.
      *
      * @param array<string, array{ancestor: Ancestor, child: array{0: string, 1: int}, stage: int}> $targets
-     * @return array<string, array<int, array<string, mixed>>> table => uid => field => value
+     * @return array<string, array<string, array<int, int>>> table => sorting field => live uid => sorting
      */
-    private function captureLiveChildValues(array $targets): array
+    private function captureLiveChildSortings(array $targets): array
     {
-        $values = [];
+        $sortings = [];
         $visited = [];
         $level = [];
         foreach ($targets as $target) {
@@ -175,24 +178,17 @@ final class ParentVersioningService
             $nextLevel = [];
             foreach ($level as [$parentTable, $parentUid]) {
                 foreach ($this->parentResolver->getChildRelations($parentTable) as $relation) {
-                    $fields = array_values(array_unique(array_filter([
-                        $relation->sortByField,
-                        $relation->foreignField,
-                        $relation->foreignTableField,
-                        (string)($GLOBALS['TCA'][$relation->childTable]['ctrl']['tstamp'] ?? '') ?: null,
-                    ])));
-                    if ($fields === []) {
+                    if ($relation->sortByField === null) {
                         continue;
                     }
-                    foreach ($this->findLiveChildren($relation, $parentUid, $fields) as $child) {
+                    foreach ($this->findLiveChildren($relation, $parentUid) as $child) {
                         $childUid = (int)$child['uid'];
                         $key = $relation->childTable . ':' . $childUid;
                         if (isset($visited[$key])) {
                             continue;
                         }
                         $visited[$key] = true;
-                        unset($child['uid']);
-                        $values[$relation->childTable][$childUid] = $child;
+                        $sortings[$relation->childTable][$relation->sortByField][$childUid] = (int)$child['sorting'];
                         $nextLevel[] = [$relation->childTable, $childUid];
                     }
                 }
@@ -200,19 +196,18 @@ final class ParentVersioningService
             $level = $nextLevel;
         }
 
-        return $values;
+        return $sortings;
     }
 
     /**
-     * @param list<string> $fields
-     * @return list<array<string, mixed>> the live children of $parentUid, uid included
+     * @return list<array{uid: int, sorting: int}> the live children of $parentUid with their sorting
      */
-    private function findLiveChildren(ParentRelation $relation, int $parentUid, array $fields): array
+    private function findLiveChildren(ParentRelation $relation, int $parentUid): array
     {
         $queryBuilder = $this->connectionPool->getQueryBuilderForTable($relation->childTable);
         $queryBuilder->getRestrictions()->removeAll()->add(new DeletedRestriction());
         $queryBuilder
-            ->select('uid', ...$fields)
+            ->select('uid', $relation->sortByField . ' AS sorting')
             ->from($relation->childTable)
             ->where($queryBuilder->expr()->eq('t3ver_wsid', $queryBuilder->createNamedParameter(0, Connection::PARAM_INT)));
 
@@ -243,38 +238,35 @@ final class ParentVersioningService
     }
 
     /**
-     * Writes the captured values back wherever the versioning changed a live child.
+     * Writes the captured sorting back wherever the versioning renumbered a live child.
      *
-     * @param array<string, array<int, array<string, mixed>>> $liveChildValues
+     * @param array<string, array<string, array<int, int>>> $liveChildSortings table => field => uid => sorting
      */
-    private function restoreLiveChildValues(array $liveChildValues): void
+    private function restoreLiveChildSortings(array $liveChildSortings): void
     {
-        foreach ($liveChildValues as $table => $rowsByUid) {
-            $fields = array_keys(reset($rowsByUid) ?: []);
-            if ($fields === []) {
-                continue;
-            }
-            $queryBuilder = $this->connectionPool->getQueryBuilderForTable($table);
-            $queryBuilder->getRestrictions()->removeAll();
-            $currentRows = $queryBuilder
-                ->select('uid', ...$fields)
-                ->from($table)
-                ->where($queryBuilder->expr()->in(
-                    'uid',
-                    $queryBuilder->createNamedParameter(array_keys($rowsByUid), Connection::PARAM_INT_ARRAY)
-                ))
-                ->executeQuery()
-                ->fetchAllAssociative();
+        foreach ($liveChildSortings as $table => $sortingsByField) {
+            foreach ($sortingsByField as $field => $sortingByUid) {
+                $queryBuilder = $this->connectionPool->getQueryBuilderForTable($table);
+                $queryBuilder->getRestrictions()->removeAll();
+                $currentRows = $queryBuilder
+                    ->select('uid', $field . ' AS sorting')
+                    ->from($table)
+                    ->where($queryBuilder->expr()->in(
+                        'uid',
+                        $queryBuilder->createNamedParameter(array_keys($sortingByUid), Connection::PARAM_INT_ARRAY)
+                    ))
+                    ->executeQuery()
+                    ->fetchAllAssociative();
 
-            $connection = $this->connectionPool->getConnectionForTable($table);
-            foreach ($currentRows as $currentRow) {
-                $uid = (int)$currentRow['uid'];
-                unset($currentRow['uid']);
-                $capturedRow = $rowsByUid[$uid] ?? null;
-                if ($capturedRow === null || $capturedRow == $currentRow) {
-                    continue;
+                $connection = $this->connectionPool->getConnectionForTable($table);
+                foreach ($currentRows as $currentRow) {
+                    $uid = (int)$currentRow['uid'];
+                    $captured = $sortingByUid[$uid] ?? null;
+                    if ($captured === null || $captured === (int)$currentRow['sorting']) {
+                        continue;
+                    }
+                    $connection->update($table, [$field => $captured], ['uid' => $uid], [$field => Connection::PARAM_INT]);
                 }
-                $connection->update($table, $capturedRow, ['uid' => $uid]);
             }
         }
     }
