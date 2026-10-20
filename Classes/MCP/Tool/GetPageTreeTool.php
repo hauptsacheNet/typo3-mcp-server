@@ -16,6 +16,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\LanguageAspect;
+use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\TableAccessService;
@@ -154,16 +155,34 @@ class GetPageTreeTool extends AbstractRecordTool
         $query = $queryBuilder->select('*')
             ->from('pages');
 
+        // Non-admin users only see their DB mounts: the readable mount roots take
+        // the place of the root level, and every level is limited to readable pages
+        $pageAccess = GeneralUtility::makeInstance(PageAccessService::class);
+        if ($pageAccess->isRestricted()) {
+            if ($startPage !== 0 && !$pageAccess->isPageReadable($startPage)) {
+                throw new \InvalidArgumentException('Page not found or outside your page mounts: ' . $startPage);
+            }
+            $restriction = $pageAccess->buildRecordRestriction($queryBuilder, 'pages');
+            if ($restriction !== null) {
+                $query->andWhere($restriction);
+            }
+        }
+
         // Filter by pid (parent ID) for the starting page
-        if ($startPage === 0) {
+        if ($startPage === 0 && $pageAccess->isRestricted()) {
+            $query->andWhere(
+                $queryBuilder->expr()->in('uid', $queryBuilder->quoteArrayBasedValueListToIntegerList($pageAccess->getReadableMountRoots() ?: [-1])),
+                $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            );
+        } elseif ($startPage === 0) {
             // Root level pages have pid=0
-            $query->where(
+            $query->andWhere(
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER)),
                 $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
             );
         } else {
             // Get subpages of the specified page
-            $query->where(
+            $query->andWhere(
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($startPage, ParameterType::INTEGER)),
                 $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
             );
@@ -277,6 +296,10 @@ class GetPageTreeTool extends AbstractRecordTool
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
                 $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
             );
+        $restriction = GeneralUtility::makeInstance(PageAccessService::class)->buildRecordRestriction($queryBuilder, 'pages');
+        if ($restriction !== null) {
+            $query->andWhere($restriction);
+        }
 
         return (int)$query->executeQuery()->fetchOne();
     }
