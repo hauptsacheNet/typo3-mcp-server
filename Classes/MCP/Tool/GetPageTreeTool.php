@@ -95,10 +95,7 @@ class GetPageTreeTool extends AbstractRecordTool
 
         // Handle language parameter if provided
         if (isset($params['language'])) {
-            $languageUid = $this->languageService->getUidFromIsoCode($params['language']);
-            if ($languageUid === null) {
-                throw new \InvalidArgumentException('Unknown language code: ' . $params['language']);
-            }
+            $languageUid = $this->languageService->resolveLanguageUid($params['language'], $startPage > 0 ? $startPage : null);
         }
 
         // Language views list translated pages under their translation's uid; such a
@@ -521,11 +518,11 @@ class GetPageTreeTool extends AbstractRecordTool
 
             // Add translation status if language specified
             if ($languageUid !== null && $languageUid > 0) {
-                $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageUid) ?? (string)$languageUid);
+                $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageUid, (int)$page['uid']) ?? (string)$languageUid);
                 if (isset($page['_translationUid'])) {
                     $result .= ' [' . $isoCode . ' translation of page ' . $page['uid'] . ']';
                 } else {
-                    $defaultIsoCode = strtoupper($this->languageService->getDefaultIsoCode() ?? 'default');
+                    $defaultIsoCode = strtoupper($this->languageService->getDefaultIsoCode((int)$page['uid']) ?? 'default');
                     $result .= ' [NOT TRANSLATED, ' . $defaultIsoCode . ' original]';
                 }
             }

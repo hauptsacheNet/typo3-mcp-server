@@ -113,11 +113,12 @@ class GetPageTool extends AbstractRecordTool
         // Handle language parameter
         $languageId = 0;
         if (isset($params['language'])) {
-            // Convert ISO code to language UID
-            $languageId = $this->languageService->getUidFromIsoCode($params['language']);
-            if ($languageId === null) {
-                throw new \InvalidArgumentException('Unknown language code: ' . $params['language']);
-            }
+            // Resolve in the site of the requested page; for URLs the code has to
+            // be unambiguous across sites, since the page is not known yet
+            $languageId = $this->languageService->resolveLanguageUid(
+                $params['language'],
+                isset($params['uid']) ? (int)$params['uid'] : null
+            );
         } elseif (isset($params['languageId'])) {
             // Backward compatibility with numeric languageId
             $languageId = (int)$params['languageId'];
@@ -307,7 +308,7 @@ class GetPageTool extends AbstractRecordTool
         $result = [];
         foreach ($translations as $translation) {
             $languageId = (int)$translation['sys_language_uid'];
-            $isoCode = $this->languageService->getIsoCodeFromUid($languageId);
+            $isoCode = $this->languageService->getIsoCodeFromUid($languageId, $pageUid);
             if ($isoCode) {
                 // Workspace changes of the title show up like everywhere else
                 $workspaceTranslation = BackendUtility::getRecordWSOL('pages', (int)$translation['uid']);
@@ -315,6 +316,7 @@ class GetPageTool extends AbstractRecordTool
                     'uid' => (int)$translation['uid'],
                     'languageId' => $languageId,
                     'isoCode' => $isoCode,
+                    'label' => $this->languageService->formatLanguage($languageId, $pageUid),
                     'title' => $workspaceTranslation['title'] ?? $translation['title'],
                 ];
             }
@@ -571,8 +573,11 @@ class GetPageTool extends AbstractRecordTool
     {
         $languageField = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
         $pointerField = $GLOBALS['TCA'][$table]['ctrl']['transOrigPointerField'] ?? '';
-        $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageId) ?? (string)$languageId);
-        $defaultIsoCode = strtoupper($this->languageService->getDefaultIsoCode() ?? 'default');
+        // The records of one call share a page, and with it the site that names the languages
+        $firstRecord = reset($records);
+        $pageId = is_array($firstRecord) ? (int)($firstRecord['pid'] ?? 0) : 0;
+        $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageId, $pageId) ?? (string)$languageId);
+        $defaultIsoCode = strtoupper($this->languageService->getDefaultIsoCode($pageId) ?? 'default');
 
         // Translations by their original's uid. Fallback for translations the core
         // overlay does not select, e.g. because of frontend group restrictions.
@@ -673,8 +678,8 @@ class GetPageTool extends AbstractRecordTool
         
         // Add language/translation information
         if ($languageId > 0) {
-            $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown');
-            $result .= "Language: " . $isoCode . " (ID: $languageId)\n";
+            $result .= "Language: " . $this->languageService->formatLanguage($languageId, (int)$pageData['uid']) . "\n";
+            $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageId, (int)$pageData['uid']) ?? (string)$languageId);
             if (isset($pageData['_translationUid'])) {
                 $result .= "Translated: Yes (" . $isoCode . " translation of page " . $pageData['uid'] . ")\n";
             } else {
@@ -686,8 +691,7 @@ class GetPageTool extends AbstractRecordTool
         if ($languageId === 0) {
             $result .= $this->formatTranslationList((int)$pageData['uid'], $translations);
         } elseif (!empty($translations)) {
-            $result .= "Available Translations: "
-                . strtoupper(implode(', ', array_column($translations, 'isoCode'))) . "\n";
+            $result .= "Available Translations: " . implode(', ', array_column($translations, 'label')) . "\n";
         }
         
         $result .= "\n";
