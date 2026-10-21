@@ -93,10 +93,7 @@ class GetPageTreeTool extends AbstractRecordTool
 
         // Handle language parameter if provided
         if (isset($params['language'])) {
-            $languageUid = $this->languageService->getUidFromIsoCode($params['language']);
-            if ($languageUid === null) {
-                throw new \InvalidArgumentException('Unknown language code: ' . $params['language']);
-            }
+            $languageUid = $this->languageService->resolveLanguageUid($params['language'], $startPage > 0 ? $startPage : null);
         }
 
         // Get page tree with the specified parameters
