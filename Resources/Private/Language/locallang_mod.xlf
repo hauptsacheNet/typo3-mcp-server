@@ -34,7 +34,7 @@
 				<source>Generate New Token</source>
 			</trans-unit>
 			<trans-unit id="generate_token_hint">
-				<source>Create an access token to connect external MCP clients (valid for 30 days)</source>
+				<source>Create an access token to connect external MCP clients (valid for the configured token lifetime, 30 days by default)</source>
 			</trans-unit>
 			<trans-unit id="refresh_token">
 				<source>Refresh Token</source>

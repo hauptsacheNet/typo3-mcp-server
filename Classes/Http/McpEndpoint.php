@@ -158,6 +158,9 @@ class McpEndpoint
                 return $this->createUnauthorizedResponse('Invalid or expired token', $request);
             }
 
+            // Only a request that is actually served keeps the token alive
+            $oauthService->extendTokenOnUse($tokenInfo);
+
             // Set current request context in SiteInformationService
             $siteInformationService = $container->get(SiteInformationService::class);
             if ($siteInformationService instanceof SiteInformationService) {

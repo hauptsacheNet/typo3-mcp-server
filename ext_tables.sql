@@ -39,6 +39,7 @@ CREATE TABLE tx_mcpserver_access_tokens (
 	client_uid int(11) unsigned DEFAULT '0' NOT NULL,
 	client_name varchar(255) DEFAULT '' NOT NULL,
 	expires int(11) unsigned DEFAULT '0' NOT NULL,
+	lifetime int(11) unsigned DEFAULT '0' NOT NULL,
 	last_used int(11) unsigned DEFAULT '0' NOT NULL,
 	created_ip varchar(45) DEFAULT '' NOT NULL,
 	last_used_ip varchar(45) DEFAULT '' NOT NULL,
