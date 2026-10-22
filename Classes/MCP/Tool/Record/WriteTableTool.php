@@ -347,6 +347,9 @@ class WriteTableTool extends AbstractRecordTool
         
         // Extract inline relations before converting data
         $inlineRelations = $this->extractInlineRelations($table, $data);
+
+        // Taken before the write, which takes listed children away from their current parent.
+        $previousInlineParents = $this->findParentsOfClaimedChildren($inlineRelations);
         
         // Convert data for storage
         $data = $this->convertDataForStorage($table, $data);
@@ -521,7 +524,7 @@ class WriteTableTool extends AbstractRecordTool
         $liveUid = $this->getLiveUid($table, $parentUid);
 
         // A new inline child (e.g. tt_content pointing at a news record) changes its parent.
-        $this->inlineParentService->markModified($table, $liveUid);
+        $this->inlineParentService->markModified($table, $liveUid, $previousInlineParents);
 
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
         $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'create', $liveUid, $data, $pid));
@@ -568,8 +571,12 @@ class WriteTableTool extends AbstractRecordTool
         // Resolve the live UID to workspace UID (once, used throughout)
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
 
-        // Taken before the write, which may point the record at another inline parent.
-        $previousInlineParents = $this->inlineParentService->findParents($table, $uid);
+        // Taken before the write, which may point the record at another inline parent, or
+        // take listed children away from theirs.
+        $previousInlineParents = [
+            ...$this->inlineParentService->findParents($table, $uid),
+            ...$this->findParentsOfClaimedChildren($inlineRelations),
+        ];
 
         // Only run the field datamap if there are actual fields to write.
         // A pid-only move with no field changes leaves $data empty, and
@@ -1418,6 +1425,34 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         return $inlineRelations;
+    }
+
+    /**
+     * The current inline parents of the independent children a write lists in its inline
+     * fields (e.g. content_elements: [300] on another news). The write points those children
+     * at the written record, so their current parents lose them.
+     *
+     * @return list<array{table: string, uid: int}>
+     */
+    protected function findParentsOfClaimedChildren(array $inlineRelations): array
+    {
+        $parents = [];
+        foreach ($inlineRelations as $relationData) {
+            $foreignTable = (string)($relationData['config']['foreign_table'] ?? '');
+            if ($foreignTable === ''
+                || empty($relationData['config']['foreign_field'])
+                || $this->tableAccessService->isEmbeddedChildTable($foreignTable)
+                || !is_array($relationData['value'])
+            ) {
+                continue;
+            }
+            foreach ($relationData['value'] as $childUid) {
+                if (is_numeric($childUid) && (int)$childUid > 0) {
+                    array_push($parents, ...$this->inlineParentService->findParents($foreignTable, (int)$childUid));
+                }
+            }
+        }
+        return $parents;
     }
 
     /**

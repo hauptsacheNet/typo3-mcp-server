@@ -44,6 +44,7 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
     private const CONTENT_SECOND_ASSET_UID = 401;
     private const CONTENT_FLEXFORM_FILE_UID = 402;
     private const NEWS_MEDIA_UID = 403;
+    private const LINK_FLEXFORM_FILE_UID = 404;
 
     protected function setUp(): void
     {
@@ -94,6 +95,8 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
             [self::CONTENT_SECOND_ASSET_UID, 'tt_content', self::CONTENT_UID, 'assets', 512],
             [self::CONTENT_FLEXFORM_FILE_UID, 'tt_content', self::CONTENT_UID, 'settings.image', 256],
             [self::NEWS_MEDIA_UID, 'tx_news_domain_model_news', self::OTHER_NEWS_UID, 'fal_media', 256],
+            // A parent table without any file field in TCA, as with file fields in FlexForms only.
+            [self::LINK_FLEXFORM_FILE_UID, 'tx_news_domain_model_link', self::LINK_UID, 'settings.image', 256],
         ] as [$uid, $tablenames, $uidForeign, $fieldname, $sorting]) {
             $connectionPool->getConnectionForTable('sys_file_reference')->insert('sys_file_reference', [
                 'uid' => $uid,
@@ -208,6 +211,35 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
     }
 
     /**
+     * Listing another news' content element takes it away from that news.
+     */
+    public function testClaimingContentElementOfAnotherNewsMarksBothAsModified(): void
+    {
+        $this->write([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => self::OTHER_NEWS_UID,
+            'data' => ['content_elements' => [self::CONTENT_UID]],
+        ]);
+
+        $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::OTHER_NEWS_UID);
+        $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
+        $this->assertSame([self::SIBLING_CONTENT_UID], array_map('intval', $this->readNews(self::NEWS_UID)['content_elements']));
+    }
+
+    public function testCreatingNewsWithContentElementOfAnotherNewsMarksThatNews(): void
+    {
+        $this->write([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'data' => ['pid' => 1, 'title' => 'New news', 'content_elements' => [self::CONTENT_UID]],
+        ]);
+
+        $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
+        $this->assertNoWorkspaceVersion('tx_news_domain_model_news', self::OTHER_NEWS_UID);
+    }
+
+    /**
      * Only an embedded child changes, the parent itself gets no field write.
      */
     public function testUpdatingOnlyEmbeddedLinkMarksNewsAsModified(): void
@@ -292,6 +324,19 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
      * A reference from a FlexForm field names no TCA column in fieldname, tablenames
      * and uid_foreign still identify the parent.
      */
+    public function testUpdatingFileReferenceOfTableWithoutFileFieldsMarksItsParent(): void
+    {
+        $this->write([
+            'table' => 'sys_file_reference',
+            'action' => 'update',
+            'uid' => self::LINK_FLEXFORM_FILE_UID,
+            'data' => ['alternative' => 'Alt text'],
+        ]);
+
+        $this->assertWorkspaceVersionExists('tx_news_domain_model_link', self::LINK_UID);
+        $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
+    }
+
     public function testUpdatingFlexFormFileReferenceMarksItsParent(): void
     {
         $this->write([

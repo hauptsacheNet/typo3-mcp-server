@@ -170,9 +170,12 @@ the same explicitly after every write in a workspace:
   child, recursively up the chain (sys_file_reference → tt_content → news).
   Where a `foreign_table_field` exists (file references: `tablenames`), it and the
   foreign field identify the parent on their own; `fieldname` is not matched, since
-  a FlexForm file field is no TCA column of the parent.
+  a FlexForm file field is no TCA column of the parent, whose table may not even
+  have a file field in TCA.
 - Parents the record belonged to before the write count too: deleting a content
-  element or pointing it at another news marks the old news as well.
+  element or pointing it at another news marks the old news as well. So do the
+  former parents of independent children a write lists (`content_elements: [300]`
+  on another news takes the element away from its news).
 - Updating a parent where only its inline children change (embedded links, a
   `content_elements` uid list) marks the parent itself.
 - Parents that are not workspace-enabled (e.g. `sys_file` above `sys_file_metadata`)

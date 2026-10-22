@@ -37,6 +37,14 @@ class InlineParentService
     protected ?array $relations = null;
 
     /**
+     * Child tables shared by several parent tables, which record the parent table in a
+     * foreign_table_field (sys_file_reference.tablenames), keyed by child table.
+     *
+     * @var array<string, array{childTable: string, foreignField: string, foreignTableField: string}>|null
+     */
+    protected ?array $sharedChildTables = null;
+
+    /**
      * The inline parents a record currently belongs to, as live uids.
      *
      * Collect these before a write that can detach the record from its parent
@@ -50,8 +58,12 @@ class InlineParentService
             return [];
         }
 
-        $relations = array_filter($this->getRelations(), static fn(array $relation): bool => $relation['childTable'] === $table);
-        if ($relations === []) {
+        $relations = array_filter(
+            $this->getRelations(),
+            static fn(array $relation): bool => $relation['childTable'] === $table && $relation['foreignTableField'] === null
+        );
+        $shared = $this->getSharedChildTables()[$table] ?? null;
+        if ($relations === [] && $shared === null) {
             return [];
         }
 
@@ -70,23 +82,23 @@ class InlineParentService
             if ($parentUid <= 0) {
                 continue;
             }
-            if ($relation['foreignTableField'] !== null) {
-                // A child table shared by several parent tables records which one it belongs to
-                // (sys_file_reference.tablenames). Together with the foreign field that names the
-                // parent, whatever field it hangs in: fieldname may be a FlexForm field that is
-                // no TCA column of the parent and so matches none of its relations.
-                if ((string)($row[$relation['foreignTableField']] ?? '') !== $relation['parentTable']) {
-                    continue;
-                }
-                $parents[$relation['parentTable'] . ':' . $parentUid] = ['table' => $relation['parentTable'], 'uid' => $parentUid];
-                continue;
-            }
             foreach ($relation['foreignMatchFields'] as $matchField => $matchValue) {
                 if ((string)($row[$matchField] ?? '') !== (string)$matchValue) {
                     continue 2;
                 }
             }
             $parents[$relation['parentTable'] . ':' . $parentUid] = ['table' => $relation['parentTable'], 'uid' => $parentUid];
+        }
+
+        // A shared child names its parent table itself, and with the foreign field the parent,
+        // whatever field it hangs in: fieldname may be a FlexForm field, and a parent table may
+        // have its file fields in FlexForms only, so neither is matched against TCA columns.
+        if ($shared !== null) {
+            $parentTable = (string)($row[$shared['foreignTableField']] ?? '');
+            $parentUid = (int)($row[$shared['foreignField']] ?? 0);
+            if ($parentTable !== '' && $parentUid > 0 && isset($GLOBALS['TCA'][$parentTable])) {
+                $parents[$parentTable . ':' . $parentUid] = ['table' => $parentTable, 'uid' => $parentUid];
+            }
         }
 
         return array_values($parents);
@@ -168,9 +180,12 @@ class InlineParentService
         ]);
         // Best effort: if the user may not edit the parent (e.g. page permissions), the
         // child write itself has succeeded and stays valid, DataHandler logs the refusal.
-        $dataHandler->process_cmdmap();
-
-        $this->restoreRows($descendants);
+        // Nothing wraps this in a transaction, so restore even if DataHandler throws halfway.
+        try {
+            $dataHandler->process_cmdmap();
+        } finally {
+            $this->restoreRows($descendants);
+        }
     }
 
     /**
@@ -196,16 +211,21 @@ class InlineParentService
             }
             $visited[$parentKey] = true;
 
-            // foreign_match_fields are left out: they would miss FlexForm file references
-            // (fieldname is no TCA column), and fetching a row too many costs nothing.
-            $queried = [];
+            // foreign_match_fields are left out, and shared child tables are asked for every
+            // parent table: that also catches FlexForm file references (fieldname is no TCA
+            // column, possibly not even a file field of the parent's), and fetching a row too
+            // many costs nothing.
+            $childQueries = [];
             foreach ($this->getRelations() as $relation) {
-                $childTable = $relation['childTable'];
-                $queryKey = $childTable . ':' . $relation['foreignField'] . ':' . $relation['foreignTableField'];
-                if ($relation['parentTable'] !== $parent['table'] || isset($queried[$queryKey])) {
-                    continue;
+                if ($relation['parentTable'] === $parent['table'] && $relation['foreignTableField'] === null) {
+                    $childQueries[$relation['childTable'] . ':' . $relation['foreignField']] = $relation;
                 }
-                $queried[$queryKey] = true;
+            }
+            foreach ($this->getSharedChildTables() as $childTable => $shared) {
+                $childQueries[$childTable . ':' . $shared['foreignField'] . ':' . $shared['foreignTableField']] = $shared;
+            }
+            foreach ($childQueries as $relation) {
+                $childTable = $relation['childTable'];
                 $queryBuilder = $connectionPool->getQueryBuilderForTable($childTable);
                 $queryBuilder->getRestrictions()->removeAll()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
                 $queryBuilder
@@ -216,7 +236,7 @@ class InlineParentService
                         $queryBuilder->expr()->in('t3ver_wsid', $queryBuilder->createNamedParameter([0, $workspaceId], ArrayParameterType::INTEGER)),
                         $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
                     );
-                if ($relation['foreignTableField'] !== null) {
+                if (($relation['foreignTableField'] ?? null) !== null) {
                     $queryBuilder->andWhere(
                         $queryBuilder->expr()->eq($relation['foreignTableField'], $queryBuilder->createNamedParameter($parent['table']))
                     );
@@ -298,6 +318,29 @@ class InlineParentService
         }
 
         return $this->relations;
+    }
+
+    /**
+     * @return array<string, array{childTable: string, foreignField: string, foreignTableField: string}>
+     */
+    protected function getSharedChildTables(): array
+    {
+        if ($this->sharedChildTables !== null) {
+            return $this->sharedChildTables;
+        }
+
+        $this->sharedChildTables = [];
+        foreach ($this->getRelations() as $relation) {
+            if ($relation['foreignTableField'] !== null) {
+                $this->sharedChildTables[$relation['childTable']] = [
+                    'childTable' => $relation['childTable'],
+                    'foreignField' => $relation['foreignField'],
+                    'foreignTableField' => $relation['foreignTableField'],
+                ];
+            }
+        }
+
+        return $this->sharedChildTables;
     }
 
     protected function getWorkspaceId(): int
