@@ -38,9 +38,10 @@ class InlineParentService
 
     /**
      * Child tables shared by several parent tables, which record the parent table in a
-     * foreign_table_field (sys_file_reference.tablenames), keyed by child table.
+     * foreign_table_field (sys_file_reference.tablenames), keyed by child table. Each distinct
+     * pair of foreign field and table field is kept, relations may differ in either.
      *
-     * @var array<string, array{childTable: string, foreignField: string, foreignTableField: string}>|null
+     * @var array<string, list<array{childTable: string, foreignField: string, foreignTableField: string}>>|null
      */
     protected ?array $sharedChildTables = null;
 
@@ -62,8 +63,8 @@ class InlineParentService
             $this->getRelations(),
             static fn(array $relation): bool => $relation['childTable'] === $table && $relation['foreignTableField'] === null
         );
-        $shared = $this->getSharedChildTables()[$table] ?? null;
-        if ($relations === [] && $shared === null) {
+        $sharedPairs = $this->getSharedChildTables()[$table] ?? [];
+        if ($relations === [] && $sharedPairs === []) {
             return [];
         }
 
@@ -93,7 +94,7 @@ class InlineParentService
         // A shared child names its parent table itself, and with the foreign field the parent,
         // whatever field it hangs in: fieldname may be a FlexForm field, and a parent table may
         // have its file fields in FlexForms only, so neither is matched against TCA columns.
-        if ($shared !== null) {
+        foreach ($sharedPairs as $shared) {
             $parentTable = (string)($row[$shared['foreignTableField']] ?? '');
             $parentUid = (int)($row[$shared['foreignField']] ?? 0);
             if ($parentTable !== '' && $parentUid > 0 && isset($GLOBALS['TCA'][$parentTable])) {
@@ -221,8 +222,10 @@ class InlineParentService
                     $childQueries[$relation['childTable'] . ':' . $relation['foreignField']] = $relation;
                 }
             }
-            foreach ($this->getSharedChildTables() as $childTable => $shared) {
-                $childQueries[$childTable . ':' . $shared['foreignField'] . ':' . $shared['foreignTableField']] = $shared;
+            foreach ($this->getSharedChildTables() as $childTable => $sharedPairs) {
+                foreach ($sharedPairs as $shared) {
+                    $childQueries[$childTable . ':' . $shared['foreignField'] . ':' . $shared['foreignTableField']] = $shared;
+                }
             }
             foreach ($childQueries as $relation) {
                 $childTable = $relation['childTable'];
@@ -321,7 +324,7 @@ class InlineParentService
     }
 
     /**
-     * @return array<string, array{childTable: string, foreignField: string, foreignTableField: string}>
+     * @return array<string, list<array{childTable: string, foreignField: string, foreignTableField: string}>>
      */
     protected function getSharedChildTables(): array
     {
@@ -332,13 +335,15 @@ class InlineParentService
         $this->sharedChildTables = [];
         foreach ($this->getRelations() as $relation) {
             if ($relation['foreignTableField'] !== null) {
-                $this->sharedChildTables[$relation['childTable']] = [
+                $pairKey = $relation['foreignField'] . ':' . $relation['foreignTableField'];
+                $this->sharedChildTables[$relation['childTable']][$pairKey] = [
                     'childTable' => $relation['childTable'],
                     'foreignField' => $relation['foreignField'],
                     'foreignTableField' => $relation['foreignTableField'],
                 ];
             }
         }
+        $this->sharedChildTables = array_map(array_values(...), $this->sharedChildTables);
 
         return $this->sharedChildTables;
     }

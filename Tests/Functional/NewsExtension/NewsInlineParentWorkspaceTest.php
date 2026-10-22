@@ -337,6 +337,41 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
         $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
     }
 
+    /**
+     * Relations may share a child table through different foreign field / table field
+     * pairs. A second pair (registered here at runtime, last in TCA) must not replace the
+     * tablenames + uid_foreign pair of file references.
+     */
+    public function testAnotherSharedRelationOnTheSameChildTableKeepsFileReferenceParents(): void
+    {
+        $GLOBALS['TCA']['tx_test_other_owner'] = [
+            'ctrl' => [],
+            'columns' => [
+                'files' => [
+                    'config' => [
+                        'type' => 'inline',
+                        'foreign_table' => 'sys_file_reference',
+                        'foreign_field' => 'uid_local',
+                        'foreign_table_field' => 'fieldname',
+                    ],
+                ],
+            ],
+        ];
+        try {
+            $this->write([
+                'table' => 'sys_file_reference',
+                'action' => 'update',
+                'uid' => self::CONTENT_ASSET_UID,
+                'data' => ['alternative' => 'Alt text'],
+            ]);
+        } finally {
+            unset($GLOBALS['TCA']['tx_test_other_owner']);
+        }
+
+        $this->assertWorkspaceVersionExists('tt_content', self::CONTENT_UID);
+        $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
+    }
+
     public function testUpdatingFlexFormFileReferenceMarksItsParent(): void
     {
         $this->write([
