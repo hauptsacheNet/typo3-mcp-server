@@ -9,6 +9,7 @@ use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
+use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Workspaces\Service\WorkspaceService;
 
@@ -27,6 +28,15 @@ class WorkspaceContextService
         $currentWorkspace = $beUser->workspace ?? 0;
         if ($currentWorkspace > 0) {
             return $currentWorkspace;
+        }
+
+        // WorkspaceService::getAvailableWorkspaces() reads $GLOBALS['LANG'] for the
+        // live workspace title (TYPO3 12 DataHandler also needs it when creating the
+        // workspace). Callers outside a backend request, such as CLI or scheduler
+        // integrations, may not have set it: listing then failed and a duplicate
+        // MCP workspace was created next to the user's existing one.
+        if (!isset($GLOBALS['LANG'])) {
+            $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('default');
         }
         
         // First check if user already has access to workspaces
