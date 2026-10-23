@@ -213,14 +213,7 @@ class GetPreviewUrlToolTest extends FunctionalTestCase
 
     public function testExpiredReusedTokenIsReportedInsteadOfItsFullLifetime(): void
     {
-        $this->stageTitleChangeOnPage2();
-        $tool = $this->createTool();
-        $this->assertFalse($tool->execute(['uid' => 2])->isError);
-
-        GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('sys_preview')
-            ->update('sys_preview', ['endtime' => time() - 60], []);
-        $result = $tool->execute(['uid' => 2]);
+        $result = $this->callAgainWithReusedTokenExpiringAt(time() - 60);
 
         $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringContainsString('expired', $result->content[0]->text);
@@ -228,17 +221,32 @@ class GetPreviewUrlToolTest extends FunctionalTestCase
 
     public function testReportsRemainingLifetimeOfTheIssuedToken(): void
     {
-        $this->stageTitleChangeOnPage2();
-        $tool = $this->createTool();
-        $this->assertFalse($tool->execute(['uid' => 2])->isError);
-
-        GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('sys_preview')
-            ->update('sys_preview', ['endtime' => time() + 3 * 3600 - 60], []);
-        $result = $tool->execute(['uid' => 2]);
+        $result = $this->callAgainWithReusedTokenExpiringAt(time() + 3 * 3600 - 60);
 
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringContainsString('3 hours', $result->content[0]->text);
+    }
+
+    /**
+     * PreviewUriBuilder reuses its token per workspace and user from TYPO3 14.3 on,
+     * 13.4 creates a new one on every call, so there is nothing to age there.
+     */
+    private function callAgainWithReusedTokenExpiringAt(int $endtime): \Mcp\Types\CallToolResult
+    {
+        $this->stageTitleChangeOnPage2();
+        $tool = $this->createTool();
+        $first = $tool->execute(['uid' => 2]);
+        $this->assertFalse($first->isError, json_encode($first->jsonSerialize()));
+
+        $previews = GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable('sys_preview');
+        $previews->update('sys_preview', ['endtime' => $endtime], []);
+        $second = $tool->execute(['uid' => 2]);
+
+        if ($previews->count('*', 'sys_preview', []) > 1) {
+            $this->markTestSkipped('PreviewUriBuilder does not reuse tokens in this TYPO3 version.');
+        }
+
+        return $second;
     }
 
     private function createTool(): GetPreviewUrlTool
