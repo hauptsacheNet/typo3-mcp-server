@@ -111,6 +111,7 @@ The MCP Server provides these tools for interacting with TYPO3:
 ### Discovery & Navigation
 - **GetPageTree** - Navigate site hierarchy and explore page structure
 - **GetPage** - Get page details by URL or ID with content summary
+- **GetPreviewUrl** - Get a login-free frontend URL that renders a page including pending workspace changes, e.g. for checking edits in a browser
 - **ListTables** - Discover available TYPO3 tables and extensions
 
 ### Content Reading
