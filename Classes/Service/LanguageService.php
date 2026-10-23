@@ -145,8 +145,31 @@ class LanguageService implements SingletonInterface
     }
 
     /**
+     * Get the language UID an ISO code has in the site of a page
+     *
+     * Language UIDs are per site, so the global mapping can point to a different
+     * language than the one the page's site means by the same UID.
+     */
+    public function getUidFromIsoCodeForPage(string $isoCode, int $pageId): ?int
+    {
+        try {
+            $site = $this->siteFinder->getSiteByPageId($pageId);
+        } catch (SiteNotFoundException) {
+            return null;
+        }
+
+        foreach ($site->getAllLanguages() as $language) {
+            if ($this->extractIsoCode($language) === strtolower($isoCode)) {
+                return $language->getLanguageId();
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Get ISO code from language UID
-     * 
+     *
      * @param int $uid Language UID
      * @return string|null ISO code or null if not found
      */

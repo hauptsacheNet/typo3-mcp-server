@@ -9,7 +9,9 @@ use Hn\McpServer\Service\LanguageService as McpLanguageService;
 use Hn\McpServer\Service\SiteInformationService;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Type\Bitmask\Permission;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Workspaces\Preview\PreviewUriBuilder;
 
 /**
@@ -17,8 +19,6 @@ use TYPO3\CMS\Workspaces\Preview\PreviewUriBuilder;
  */
 class GetPreviewUrlTool extends AbstractRecordTool
 {
-    private const DEFAULT_LIFETIME_HOURS = 48;
-
     public function __construct(
         protected SiteInformationService $siteInformationService,
         protected McpLanguageService $languageService,
@@ -72,9 +72,9 @@ class GetPreviewUrlTool extends AbstractRecordTool
 
         $languageId = 0;
         if (isset($params['language'])) {
-            $languageId = $this->languageService->getUidFromIsoCode($params['language']);
+            $languageId = $this->languageService->getUidFromIsoCodeForPage($params['language'], $uid);
             if ($languageId === null) {
-                throw new \InvalidArgumentException('Unknown language code: ' . $params['language']);
+                throw new \InvalidArgumentException('Language "' . $params['language'] . '" is not available for page ' . $uid);
             }
         }
 
@@ -90,7 +90,13 @@ class GetPreviewUrlTool extends AbstractRecordTool
         $url = $this->siteInformationService->makeAbsoluteUrl(
             $this->previewUriBuilder->buildUriForPage($uid, $languageId)
         );
-        $hours = $this->getPreviewLinkLifetimeHours();
+        if (parse_url($url, PHP_URL_HOST) === null) {
+            return $this->createErrorResult('Could not determine a host for the preview URL of page ' . $uid);
+        }
+        $hours = $this->getRemainingHours($url);
+        if ($hours <= 0) {
+            return $this->createErrorResult('The preview link of this server process has expired. Restart the MCP server to get a new one.');
+        }
 
         return $this->createSuccessResult(
             "Preview URL: {$url}\n\n"
@@ -108,16 +114,17 @@ class GetPreviewUrlTool extends AbstractRecordTool
     }
 
     /**
-     * Mirrors PreviewUriBuilder's TTL fallback chain, which it does not expose.
+     * Reads the expiry from the stored token: PreviewUriBuilder caches one token per
+     * workspace and user, so it can be older than this call or ignore the configured TTL.
      */
-    private function getPreviewLinkLifetimeHours(): int
+    private function getRemainingHours(string $url): int
     {
-        $backendUser = $GLOBALS['BE_USER'];
-        $workspace = BackendUtility::getRecord('sys_workspace', (int)$backendUser->workspace, 'previewlink_lifetime');
-        if ((int)($workspace['previewlink_lifetime'] ?? 0) > 0) {
-            return (int)$workspace['previewlink_lifetime'];
-        }
+        parse_str((string)parse_url($url, PHP_URL_QUERY), $query);
+        $endtime = (int)GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('sys_preview')
+            ->select(['endtime'], 'sys_preview', ['keyword' => (string)($query['ADMCMD_prev'] ?? '')])
+            ->fetchOne();
 
-        return (int)($backendUser->getTSConfig()['options.']['workspaces.']['previewLinkTTLHours'] ?? 0) ?: self::DEFAULT_LIFETIME_HOURS;
+        return (int)ceil(($endtime - time()) / 3600);
     }
 }

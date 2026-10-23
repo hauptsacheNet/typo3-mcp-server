@@ -87,6 +87,7 @@ class GetPreviewUrlToolTest extends FunctionalTestCase
 
         $result = $this->createTool()->execute(['uid' => 2]);
 
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringNotContainsString('Test Workspace', $result->content[0]->text);
         $this->assertStringNotContainsString('workspace', strtolower(parse_url($this->extractUrl($result->content[0]->text), PHP_URL_QUERY) ?? ''));
     }
@@ -169,6 +170,77 @@ class GetPreviewUrlToolTest extends FunctionalTestCase
         $this->assertStringContainsString('https://example.com/de/', $result->content[0]->text);
     }
 
+    public function testLanguageIsResolvedWithinTheSiteOfThePage(): void
+    {
+        $this->writeSiteConfiguration([
+            0 => ['title' => 'English', 'base' => '/', 'iso' => 'en'],
+            1 => ['title' => 'German', 'base' => '/de/', 'iso' => 'de'],
+        ]);
+        $this->writeSiteConfiguration([
+            0 => ['title' => 'English', 'base' => '/', 'iso' => 'en'],
+            1 => ['title' => 'French', 'base' => '/fr/', 'iso' => 'fr'],
+        ], 'news-site', 7, 'https://news.example.com/');
+        $this->stageTitleChange(2);
+        $this->stageTitleChange(8);
+
+        $french = $this->createTool()->execute(['uid' => 8, 'language' => 'fr']);
+        $this->assertFalse($french->isError, json_encode($french->jsonSerialize()));
+        $this->assertStringContainsString('https://news.example.com/fr/', $french->content[0]->text);
+
+        $notInSite = $this->createTool()->execute(['uid' => 2, 'language' => 'fr']);
+        $this->assertTrue($notInSite->isError);
+    }
+
+    public function testRelativePreviewUrlIsRejected(): void
+    {
+        $this->writeSiteConfiguration([0 => ['title' => 'English', 'base' => '/', 'iso' => 'en']], 'test-site', 1, '/');
+        $this->stageTitleChangeOnPage2();
+        $tool = new GetPreviewUrlTool(
+            new class () extends SiteInformationService {
+                public function makeAbsoluteUrl(?string $url): ?string
+                {
+                    return $url;
+                }
+            },
+            GeneralUtility::makeInstance(LanguageService::class),
+            GeneralUtility::makeInstance(PreviewUriBuilder::class),
+        );
+
+        $result = $tool->execute(['uid' => 2]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testExpiredReusedTokenIsReportedInsteadOfItsFullLifetime(): void
+    {
+        $this->stageTitleChangeOnPage2();
+        $tool = $this->createTool();
+        $this->assertFalse($tool->execute(['uid' => 2])->isError);
+
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('sys_preview')
+            ->update('sys_preview', ['endtime' => time() - 60], []);
+        $result = $tool->execute(['uid' => 2]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('expired', $result->content[0]->text);
+    }
+
+    public function testReportsRemainingLifetimeOfTheIssuedToken(): void
+    {
+        $this->stageTitleChangeOnPage2();
+        $tool = $this->createTool();
+        $this->assertFalse($tool->execute(['uid' => 2])->isError);
+
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('sys_preview')
+            ->update('sys_preview', ['endtime' => time() + 3 * 3600 - 60], []);
+        $result = $tool->execute(['uid' => 2]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('3 hours', $result->content[0]->text);
+    }
+
     private function createTool(): GetPreviewUrlTool
     {
         return new GetPreviewUrlTool(
@@ -180,13 +252,18 @@ class GetPreviewUrlToolTest extends FunctionalTestCase
 
     private function stageTitleChangeOnPage2(): void
     {
+        $this->stageTitleChange(2);
+    }
+
+    private function stageTitleChange(int $uid): void
+    {
         GeneralUtility::makeInstance(WorkspaceContextService::class)->switchToOptimalWorkspace($GLOBALS['BE_USER']);
 
         $result = (new WriteTableTool())->execute([
             'action' => 'update',
             'table' => 'pages',
-            'uid' => 2,
-            'data' => ['title' => 'About - Workspace Draft'],
+            'uid' => $uid,
+            'data' => ['title' => 'Workspace Draft'],
         ]);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
     }
@@ -201,9 +278,9 @@ class GetPreviewUrlToolTest extends FunctionalTestCase
     /**
      * @param array<int, array{title: string, base: string, iso: string}> $languages
      */
-    private function writeSiteConfiguration(array $languages): void
+    private function writeSiteConfiguration(array $languages, string $identifier = 'test-site', int $rootPageId = 1, string $base = 'https://example.com/'): void
     {
-        $siteDir = $this->instancePath . '/typo3conf/sites/test-site';
+        $siteDir = $this->instancePath . '/typo3conf/sites/' . $identifier;
         GeneralUtility::mkdir_deep($siteDir);
 
         $configured = [];
@@ -222,8 +299,8 @@ class GetPreviewUrlToolTest extends FunctionalTestCase
         }
 
         GeneralUtility::writeFile($siteDir . '/config.yaml', Yaml::dump([
-            'rootPageId' => 1,
-            'base' => 'https://example.com/',
+            'rootPageId' => $rootPageId,
+            'base' => $base,
             'websiteTitle' => 'Test Site',
             'languages' => $configured,
             'routes' => [],
