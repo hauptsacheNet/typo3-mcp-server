@@ -210,9 +210,10 @@ class SearchTool extends AbstractRecordTool
         // Handle language parameter
         $languageId = null;
         if (isset($params['language'])) {
-            $languageId = $this->languageService->getUidFromIsoCode($params['language']);
-            if ($languageId === null) {
-                throw new ValidationException(['Unknown language code: ' . $params['language']]);
+            try {
+                $languageId = $this->languageService->resolveLanguageUid($params['language'], $pageId);
+            } catch (\InvalidArgumentException $e) {
+                throw new ValidationException([$e->getMessage()], $e);
             }
         }
         
@@ -884,8 +885,7 @@ class SearchTool extends AbstractRecordTool
         }
 
         if ($languageId !== null) {
-            $isoCode = $this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown';
-            $result .= "Language Filter: " . strtoupper($isoCode) . " (ID: $languageId)\n";
+            $result .= "Language Filter: " . $this->languageService->formatLanguage($languageId) . "\n";
         }
 
         $result .= "\n";
@@ -974,8 +974,7 @@ class SearchTool extends AbstractRecordTool
         if ($this->tableHasLanguageSupport($table) && isset($record['sys_language_uid'])) {
             $recordLangId = (int)$record['sys_language_uid'];
             if ($recordLangId > 0) {
-                $langCode = $this->languageService->getIsoCodeFromUid($recordLangId) ?? 'unknown';
-                $result .= "  🌐 Language: " . strtoupper($langCode) . "\n";
+                $result .= "  🌐 Language: " . $this->languageService->formatLanguage($recordLangId, $table === 'pages' ? (int)($record['uid'] ?? 0) : (int)($record['pid'] ?? 0)) . "\n";
             } elseif ($recordLangId === -1) {
                 $result .= "  🌐 Language: All\n";
             }

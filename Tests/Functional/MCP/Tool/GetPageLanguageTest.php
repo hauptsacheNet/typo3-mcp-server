@@ -228,7 +228,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         $this->assertStringContainsString('Subtitle: Erfahren Sie mehr über unser Unternehmen', $output);
         
         // Should show language information
-        $this->assertStringContainsString('Language: DE (ID: 1)', $output);
+        $this->assertStringContainsString('Language: de (1, German)', $output);
         $this->assertStringContainsString('Translated: Yes', $output);
         
         // Should show German content
@@ -263,7 +263,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         $this->assertStringContainsString('Subtitle: En savoir plus sur notre entreprise', $output);
         
         // Should show language information
-        $this->assertStringContainsString('Language: FR (ID: 2)', $output);
+        $this->assertStringContainsString('Language: fr (2, French)', $output);
         $this->assertStringContainsString('Translated: Yes', $output);
         
         // French has no content translations, should show default content
@@ -291,7 +291,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         
         // Should show available translations
-        $this->assertStringContainsString('Available Translations: DE, FR', $output);
+        $this->assertStringContainsString('Available Translations: de (1, German), fr (2, French)', $output);
     }
 
     /**
@@ -334,7 +334,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         
         // Should work with numeric languageId
         $this->assertStringContainsString('Title: Über uns', $output);
-        $this->assertStringContainsString('Language: DE (ID: 1)', $output);
+        $this->assertStringContainsString('Language: de (1, German)', $output);
     }
 
     /**
