@@ -91,7 +91,8 @@ class WriteTableTool extends AbstractRecordTool
                             'Uses the same field syntax as ReadTable output. ' .
                             'The target page is also specified here as "pid" — required on "create" (the page the record is created on); ' .
                             'on "update" setting "pid" moves the record to that page (combine with "position" to control where on the new page it lands; e.g. data: {"pid": 1} moves the record to page 1). ' .
-                            ($hasMultipleLanguages ? 'Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' : '') .
+                            ($hasMultipleLanguages ? 'Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' .
+                                '"update" never changes the language of a record; to translate a record use "translate", which creates a linked translation. ' : '') .
                             'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
                             'For embedded tables (e.g. file references), the array fully replaces the existing list: ' .
                             'children present in the previous record but missing from the new array are deleted. ' .
@@ -1207,6 +1208,27 @@ class WriteTableTool extends AbstractRecordTool
         // Build merged record context for dynamic select item resolution (itemsProcFunc, TSconfig)
         if ($action === 'update' && $uid) {
             $existingRecord = BackendUtility::getRecord($table, $uid) ?? [];
+
+            // An update must never move a record into another language. An LLM that
+            // "translates" by updating the original would otherwise turn the
+            // default-language record itself into the translation: once published, the
+            // page vanishes from the default-language site, and the backend form can't
+            // change it back. Repeating the current value is harmless and stays allowed.
+            $languageControlFields = array_filter([
+                $this->tableAccessService->getLanguageFieldName($table),
+                $this->tableAccessService->getTranslationParentFieldName($table),
+            ]);
+            foreach ($languageControlFields as $controlField) {
+                if (!array_key_exists($controlField, $data) || !array_key_exists($controlField, $existingRecord)) {
+                    continue;
+                }
+                $newValue = $data[$controlField];
+                if (!is_numeric($newValue) || (int)$newValue !== (int)$existingRecord[$controlField]) {
+                    return "Field '{$controlField}': the language of an existing record can't be changed. "
+                        . "Use action 'translate' to create a translation.";
+                }
+            }
+
             $mergedRecord = array_merge($existingRecord, $data);
         } else {
             $mergedRecord = array_merge($data, ['pid' => $pid]);
