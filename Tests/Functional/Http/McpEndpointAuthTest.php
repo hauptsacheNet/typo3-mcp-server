@@ -9,6 +9,7 @@ use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Message\ResponseInterface;
+use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Http\Stream;
 use TYPO3\CMS\Core\Http\Uri;
@@ -54,15 +55,24 @@ class McpEndpointAuthTest extends AbstractFunctionalTest
 
     private mixed $previousRequest;
 
+    private mixed $previousExtensionSettings;
+
     protected function setUp(): void
     {
         parent::setUp();
         $this->previousRequest = $GLOBALS['TYPO3_REQUEST'] ?? null;
+        // Load the full extension configuration once, so every key exists:
+        // a missing one makes core sync the templates and write the current
+        // values - including the sliding setting of a test - into the test
+        // instance's settings.php, where the next test would read them.
+        GeneralUtility::makeInstance(ExtensionConfiguration::class)->get('mcp_server');
+        $this->previousExtensionSettings = $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server'] ?? null;
     }
 
     protected function tearDown(): void
     {
         $GLOBALS['TYPO3_REQUEST'] = $this->previousRequest;
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server'] = $this->previousExtensionSettings;
         parent::tearDown();
     }
 
@@ -269,6 +279,72 @@ class McpEndpointAuthTest extends AbstractFunctionalTest
             $invalidTokenResponse->getHeaderLine('WWW-Authenticate'),
             $response->getHeaderLine('WWW-Authenticate')
         );
+    }
+
+    public function testServedRequestExtendsTokenWithSlidingExpiration(): void
+    {
+        $this->enableSlidingExpiration();
+        $token = $this->createAccessToken();
+        $this->setTokenExpiry(time() + 100);
+
+        $response = $this->dispatch([
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'tools/list',
+            'params' => ['_meta' => self::modernMeta()],
+        ], $token, self::modernHeaders('tools/list'));
+
+        $this->assertSame(200, $response->getStatusCode(), (string)$response->getBody());
+        $row = $this->tokenRow();
+        $this->assertSame((int)$row['last_used'] + 30 * 86400, (int)$row['expires']);
+    }
+
+    /**
+     * A token whose user is no longer available must not be kept alive by the
+     * rejected requests: otherwise re-enabling the user months later would
+     * revive it.
+     *
+     * @param array<string, int> $userChange
+     */
+    #[DataProvider('unavailableUserProvider')]
+    public function testRejectedRequestOfUnavailableUserDoesNotExtendToken(array $userChange): void
+    {
+        $this->enableSlidingExpiration();
+        $token = $this->createAccessToken();
+        $expiresSoon = time() + 100;
+        $this->setTokenExpiry($expiresSoon);
+        $this->getConnectionForTable('be_users')->update('be_users', $userChange, ['uid' => 1]);
+
+        $response = $this->dispatch([
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'tools/list',
+            'params' => ['_meta' => self::modernMeta()],
+        ], $token);
+
+        $this->assertSame(401, $response->getStatusCode(), (string)$response->getBody());
+        $this->assertSame($expiresSoon, (int)$this->tokenRow()['expires']);
+    }
+
+    private function enableSlidingExpiration(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server'] = array_merge(
+            $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server'] ?? [],
+            ['tokenLifetimeDays' => '30', 'tokenSlidingExpiration' => '1', 'tokenMaxLifetimeDays' => '0']
+        );
+    }
+
+    private function setTokenExpiry(int $expires): void
+    {
+        $this->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->update('tx_mcpserver_access_tokens', ['expires' => $expires], ['client_name' => 'endpoint-auth-test']);
+    }
+
+    private function tokenRow(): array
+    {
+        return $this->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->select(['*'], 'tx_mcpserver_access_tokens', ['client_name' => 'endpoint-auth-test'])
+            ->fetchAssociative();
     }
 
     private function createAccessToken(): string
