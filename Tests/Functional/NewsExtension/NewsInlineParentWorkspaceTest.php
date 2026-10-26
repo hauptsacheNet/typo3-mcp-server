@@ -136,12 +136,12 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
     /**
      * Versioning a parent makes DataHandler version its children along and renumber the
      * sorting of their live rows, down to the file references of a sibling content
-     * element. Live must stay exactly as it was.
+     * element. Live must stay as it was, except the tstamp a backend form save bumps too.
      */
     public function testMarkingNewsAsModifiedLeavesLiveRowsUntouched(): void
     {
         $tables = ['tx_news_domain_model_news', 'tx_news_domain_model_link', 'tt_content', 'sys_file_reference'];
-        $liveBefore = array_map($this->getLiveRows(...), $tables);
+        $liveBefore = array_map($this->getLiveRowsWithoutTstamp(...), $tables);
 
         $this->write([
             'table' => 'tt_content',
@@ -152,7 +152,37 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
 
         $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
         $this->assertWorkspaceVersionExists('sys_file_reference', self::CONTENT_ASSET_UID);
-        $this->assertSame($liveBefore, array_map($this->getLiveRows(...), $tables));
+        $this->assertSame($liveBefore, array_map($this->getLiveRowsWithoutTstamp(...), $tables));
+    }
+
+    /**
+     * The workspace module lists a version as modified as soon as any TCA column differs
+     * from live, and tt_content and the news tables have tstamp as a TCA column. Like on
+     * a backend form save, the children versioned along must carry the live tstamp, so
+     * only the parent and the actually changed record show up as modified.
+     */
+    public function testChildrenVersionedAlongKeepTheLiveTstamp(): void
+    {
+        $this->write([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => self::SIBLING_CONTENT_UID,
+            'data' => ['header' => 'Changed header'],
+        ]);
+
+        foreach ([
+            ['tt_content', self::CONTENT_UID],
+            ['tx_news_domain_model_link', self::LINK_UID],
+            ['sys_file_reference', self::CONTENT_ASSET_UID],
+        ] as [$table, $liveUid]) {
+            $this->assertSame(
+                (int)$this->getLiveRow($table, $liveUid)['tstamp'],
+                (int)$this->getWorkspaceVersionRow($table, $liveUid)['tstamp'],
+                "$table:$liveUid version must carry the live tstamp"
+            );
+        }
+        // The parent is no inline child, its live row is not touched at all.
+        $this->assertSame(1734875000, (int)$this->getLiveRow('tx_news_domain_model_news', self::NEWS_UID)['tstamp']);
     }
 
     public function testUpdatingUnrelatedContentElementMarksNoNews(): void
@@ -476,6 +506,31 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
             )
             ->executeQuery()
             ->fetchAllAssociative();
+    }
+
+    private function getWorkspaceVersionRow(string $table, int $liveUid): array
+    {
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
+        $queryBuilder->getRestrictions()->removeAll();
+        $row = $queryBuilder
+            ->select('*')
+            ->from($table)
+            ->where(
+                $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($liveUid)),
+                $queryBuilder->expr()->eq('t3ver_wsid', $queryBuilder->createNamedParameter((int)$GLOBALS['BE_USER']->workspace))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+        $this->assertIsArray($row, "$table:$liveUid must have a workspace version");
+        return $row;
+    }
+
+    private function getLiveRowsWithoutTstamp(string $table): array
+    {
+        return array_map(static function (array $row): array {
+            unset($row['tstamp']);
+            return $row;
+        }, $this->getLiveRows($table));
     }
 
     private function getLiveRows(string $table): array

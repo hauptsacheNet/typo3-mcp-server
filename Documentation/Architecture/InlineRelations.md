@@ -190,11 +190,17 @@ stages unchanged versions of its other content elements too.
 While doing so, `insertNewCopyVersion()` passes the children's live uids through
 `RelationHandler::writeForeignField()`, which renumbers their `sorting` (1, 2, 3…, in
 workspace order) and bumps `tstamp` directly on the live rows. A backend form save
-does the same, but live must not change before publishing (and after a staged
-reorder the live order would flip). `InlineParentService` therefore fetches the
-parent's inline descendants (live rows and rows created in the workspace) before
-versioning and writes back every column that changed afterwards, so only new
-version rows remain.
+does the same, but after a staged reorder the live order would flip before
+publishing. `InlineParentService` therefore fetches the parent's inline descendants
+(live rows and rows created in the workspace) before versioning and writes back
+every column that changed afterwards, except `tstamp`.
+
+The bumped `tstamp` is kept on purpose, as on a backend form save: the children's
+versions get the same `tstamp` when they are created, so the workspace module lists
+them as unchanged. With the old live `tstamp` restored, every content element and
+news link versioned along would show up as modified, because `tt_content` (via
+EXT:news) and the news tables have `tstamp` as a TCA column and the workspace module
+compares all TCA columns.
 
 ### 5. Sorting and Positioning
 - Sorting is handled through `sorting` or `sorting_foreign` fields

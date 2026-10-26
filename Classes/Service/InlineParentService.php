@@ -164,7 +164,8 @@ class InlineParentService
         // Versioning the parent also versions its inline children, and while doing so
         // RelationHandler::writeForeignField() renumbers the sorting (and bumps tstamp) of
         // the children it was handed: the live rows, in workspace order. Restore them so
-        // that only new version rows remain, live must not change before publishing.
+        // that a staged reorder can't change the live order before publishing. The bumped
+        // tstamp stays, as on a backend form save (see restoreRows()).
         $descendants = $this->fetchDescendantRows($table, $uid);
 
         $dataHandler = GeneralUtility::makeInstance(DataHandler::class);
@@ -256,14 +257,24 @@ class InlineParentService
     }
 
     /**
-     * Write back every column that changed since the rows were fetched.
+     * Write back every column that changed since the rows were fetched, except tstamp.
+     *
+     * A backend form save leaves the bumped tstamp on the live rows, so the unchanged
+     * versions of the children carry the same tstamp as live and the workspace module
+     * lists them as unchanged. Restoring it would list every one of them as modified
+     * (tt_content and the news tables have tstamp as a TCA column).
      *
      * @param array<string, array{table: string, row: array<string, mixed>}> $rows
      */
     protected function restoreRows(array $rows): void
     {
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $schemaFactory = GeneralUtility::makeInstance(TcaSchemaFactory::class);
         foreach ($rows as ['table' => $table, 'row' => $before]) {
+            $schema = $schemaFactory->get($table);
+            if ($schema->hasCapability(TcaSchemaCapability::UpdatedAt)) {
+                unset($before[$schema->getCapability(TcaSchemaCapability::UpdatedAt)->getFieldName()]);
+            }
             $connection = $connectionPool->getConnectionForTable($table);
             $after = $connection->select(['*'], $table, ['uid' => (int)$before['uid']])->fetchAssociative();
             if (!is_array($after)) {
