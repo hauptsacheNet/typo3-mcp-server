@@ -1214,16 +1214,25 @@ class WriteTableTool extends AbstractRecordTool
             // default-language record itself into the translation: once published, the
             // page vanishes from the default-language site, and the backend form can't
             // change it back. Repeating the current value is harmless and stays allowed.
+            // Compare against the workspace version, which is what ReadTable shows and
+            // what this update writes to; it may differ from the live row.
+            $currentRecord = $existingRecord;
+            if ($currentRecord !== []) {
+                BackendUtility::workspaceOL($table, $currentRecord);
+                if (!is_array($currentRecord)) {
+                    $currentRecord = $existingRecord;
+                }
+            }
             $languageControlFields = array_filter([
                 $this->tableAccessService->getLanguageFieldName($table),
                 $this->tableAccessService->getTranslationParentFieldName($table),
             ]);
             foreach ($languageControlFields as $controlField) {
-                if (!array_key_exists($controlField, $data) || !array_key_exists($controlField, $existingRecord)) {
+                if (!array_key_exists($controlField, $data) || !array_key_exists($controlField, $currentRecord)) {
                     continue;
                 }
                 $newValue = $data[$controlField];
-                if (!is_numeric($newValue) || (int)$newValue !== (int)$existingRecord[$controlField]) {
+                if (!is_numeric($newValue) || (int)$newValue !== (int)$currentRecord[$controlField]) {
                     return "Field '{$controlField}': the language of an existing record can't be changed. "
                         . "Use action 'translate' to create a translation.";
                 }

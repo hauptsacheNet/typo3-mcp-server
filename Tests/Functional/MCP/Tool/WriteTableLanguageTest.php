@@ -647,6 +647,44 @@ class WriteTableLanguageTest extends FunctionalTestCase
         $this->assertEquals(0, $record['sys_language_uid']);
     }
 
+    /**
+     * The check compares against the workspace version (what ReadTable shows and
+     * what the update writes to), not the live row, which may differ from it.
+     */
+    public function testUpdateComparesLanguageAgainstWorkspaceVersion(): void
+    {
+        $tool = new WriteTableTool();
+
+        // Create a workspace version of page 2, then give it another language than
+        // live, as a draft that was moved into another language before this check existed.
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['title' => 'Draft'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $connection = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class)
+            ->getConnectionForTable('pages');
+        $connection->update('pages', ['sys_language_uid' => 1], ['t3ver_oid' => 2]);
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['title' => 'Back to live language', 'sys_language_uid' => 'en'],
+        ]);
+        $this->assertTrue($result->isError, 'A value that differs from the workspace version must be rejected');
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['title' => 'Draft updated', 'sys_language_uid' => 'de'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
     private function countWorkspaceVersions(string $table, int $liveUid): int
     {
         $queryBuilder = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class)
