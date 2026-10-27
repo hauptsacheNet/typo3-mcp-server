@@ -106,11 +106,12 @@ class GetPageTool extends AbstractRecordTool
         // Handle language parameter
         $languageId = 0;
         if (isset($params['language'])) {
-            // Convert ISO code to language UID
-            $languageId = $this->languageService->getUidFromIsoCode($params['language']);
-            if ($languageId === null) {
-                throw new \InvalidArgumentException('Unknown language code: ' . $params['language']);
-            }
+            // Resolve in the site of the requested page; for URLs the code has to
+            // be unambiguous across sites, since the page is not known yet
+            $languageId = $this->languageService->resolveLanguageUid(
+                $params['language'],
+                isset($params['uid']) ? (int)$params['uid'] : null
+            );
         } elseif (isset($params['languageId'])) {
             // Backward compatibility with numeric languageId
             $languageId = (int)$params['languageId'];
@@ -281,11 +282,12 @@ class GetPageTool extends AbstractRecordTool
         $result = [];
         foreach ($translations as $translation) {
             $languageId = (int)$translation['sys_language_uid'];
-            $isoCode = $this->languageService->getIsoCodeFromUid($languageId);
+            $isoCode = $this->languageService->getIsoCodeFromUid($languageId, $pageUid);
             if ($isoCode) {
                 $result[] = [
                     'languageId' => $languageId,
                     'isoCode' => $isoCode,
+                    'label' => $this->languageService->formatLanguage($languageId, $pageUid),
                     'title' => $translation['title'],
                 ];
             }
@@ -511,8 +513,7 @@ class GetPageTool extends AbstractRecordTool
         
         // Add language/translation information
         if ($languageId > 0) {
-            $isoCode = $this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown';
-            $result .= "Language: " . strtoupper($isoCode) . " (ID: $languageId)\n";
+            $result .= "Language: " . $this->languageService->formatLanguage($languageId, (int)($pageData['uid'] ?? 0)) . "\n";
             $result .= "Translated: " . (($pageData['_translated'] ?? false) ? 'Yes' : 'No') . "\n";
         }
         
@@ -521,7 +522,7 @@ class GetPageTool extends AbstractRecordTool
             $result .= "Available Translations: ";
             $translationList = [];
             foreach ($translations as $translation) {
-                $translationList[] = strtoupper($translation['isoCode']);
+                $translationList[] = $translation['label'];
             }
             $result .= implode(', ', $translationList) . "\n";
         }

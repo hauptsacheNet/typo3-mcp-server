@@ -229,9 +229,17 @@ class ReadTableTool extends AbstractRecordTool
         // Convert language ISO code to UID if provided
         $languageUid = null;
         if ($language !== null) {
-            $languageUid = $this->languageService->getUidFromIsoCode($language);
-            if ($languageUid === null) {
-                throw new ValidationException(["Unknown language code: {$language}"]);
+            // Resolve in the site of the requested page (or of the first requested
+            // record): the same code can stand for different languages per site
+            $contextPageId = $pid;
+            if ($contextPageId === null && !empty($uids)) {
+                $firstRecord = BackendUtility::getRecord($table, $uids[0], 'pid');
+                $contextPageId = $table === 'pages' ? $uids[0] : (is_array($firstRecord) ? (int)$firstRecord['pid'] : null);
+            }
+            try {
+                $languageUid = $this->languageService->resolveLanguageUid($language, $contextPageId);
+            } catch (\InvalidArgumentException $e) {
+                throw new ValidationException([$e->getMessage()], $e);
             }
         }
 
@@ -1226,7 +1234,7 @@ class ReadTableTool extends AbstractRecordTool
 
                     $translationData[$recordUid] = [
                         'sourceUid' => $parentUid,
-                        'sourceLanguage' => $this->languageService->getIsoCodeFromUid(0) ?? 'default',
+                        'sourceLanguage' => $this->languageService->getIsoCodeFromUid(0, $table === 'pages' ? $parentUid : (int)($parentRecord['pid'] ?? 0)) ?? 'default',
                         'inheritedFields' => $inheritedValues
                     ];
                 }
