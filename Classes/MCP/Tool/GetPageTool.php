@@ -23,6 +23,7 @@ use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
+use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
 use Hn\McpServer\Utility\RecordFormattingUtility;
@@ -131,6 +132,11 @@ class GetPageTool extends AbstractRecordTool
 
         if ($uid <= 0) {
             throw new \InvalidArgumentException('Invalid page UID or URL. Please provide a valid page ID or URL.');
+        }
+
+        // Same answer for missing pages and pages outside the user's DB mounts
+        if (!GeneralUtility::makeInstance(PageAccessService::class)->isPageReadable($uid)) {
+            throw new \InvalidArgumentException('Page not found or outside your page mounts: ' . $uid);
         }
 
         // Get page data (with language overlay if applicable)

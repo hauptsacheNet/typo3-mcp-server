@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\MCP\Tool\Record;
 
 use Hn\McpServer\MCP\Tool\AbstractTool;
+use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\CallToolResult;
@@ -39,6 +40,8 @@ abstract class AbstractRecordTool extends AbstractTool
         if (isset($GLOBALS['BE_USER'])) {
             $this->workspaceContextService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
         }
+
+        GeneralUtility::makeInstance(PageAccessService::class)->reset();
     }
     
     /**
