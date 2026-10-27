@@ -560,4 +560,142 @@ class WriteTableLanguageTest extends FunctionalTestCase
         $this->assertEquals(1, $record['sys_language_uid']); // Still German
         $this->assertEquals($originalUid, $record['l18n_parent']); // Still linked to original
     }
+
+    /**
+     * "Translating" a page by updating the original must not move the
+     * default-language page into another language: once published, the page
+     * would vanish from the default-language site.
+     */
+    public function testUpdateCannotChangeLanguageOfPage(): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['title' => 'Über uns', 'sys_language_uid' => 'de'],
+        ]);
+
+        $this->assertTrue($result->isError, 'Changing the language on update must fail');
+        $this->assertStringContainsString("Use action 'translate'", $result->content[0]->text);
+        $this->assertSame(0, $this->countWorkspaceVersions('pages', 2), 'A rejected update must not create a workspace version');
+    }
+
+    public function testUpdateCannotChangeLanguageOfContentElement(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => ['header' => 'Willkommen', 'sys_language_uid' => 1],
+        ]);
+
+        $this->assertTrue($result->isError, 'Changing the language on update must fail');
+        $this->assertStringContainsString("Use action 'translate'", $result->content[0]->text);
+        $this->assertSame(0, $this->countWorkspaceVersions('tt_content', 100), 'A rejected update must not create a workspace version');
+    }
+
+    public function testUpdateCannotChangeTranslationParent(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/tt_content.csv');
+        $tool = new WriteTableTool();
+
+        $translateResult = $tool->execute([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Willkommen'],
+        ]);
+        $this->assertFalse($translateResult->isError, json_encode($translateResult->jsonSerialize()));
+        $germanUid = json_decode($translateResult->content[0]->text, true)['translationUid'];
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $germanUid,
+            'data' => ['l18n_parent' => 101],
+        ]);
+
+        $this->assertTrue($result->isError, 'Changing the translation parent on update must fail');
+        $this->assertStringContainsString("Use action 'translate'", $result->content[0]->text);
+        $record = \TYPO3\CMS\Backend\Utility\BackendUtility::getRecord('tt_content', $germanUid);
+        $this->assertEquals(100, $record['l18n_parent']);
+    }
+
+    /**
+     * Echoing the record's current language back (as ReadTable returned it) is not a change.
+     */
+    public function testUpdateAcceptsUnchangedLanguage(): void
+    {
+        $tool = new WriteTableTool();
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['title' => 'About us', 'sys_language_uid' => 'en'],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $record = \TYPO3\CMS\Backend\Utility\BackendUtility::getRecord('pages', 2);
+        \TYPO3\CMS\Backend\Utility\BackendUtility::workspaceOL('pages', $record);
+        $this->assertEquals('About us', $record['title']);
+        $this->assertEquals(0, $record['sys_language_uid']);
+    }
+
+    /**
+     * The check compares against the workspace version (what ReadTable shows and
+     * what the update writes to), not the live row, which may differ from it.
+     */
+    public function testUpdateComparesLanguageAgainstWorkspaceVersion(): void
+    {
+        $tool = new WriteTableTool();
+
+        // Create a workspace version of page 2, then give it another language than
+        // live, as a draft that was moved into another language before this check existed.
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['title' => 'Draft'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $connection = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class)
+            ->getConnectionForTable('pages');
+        $connection->update('pages', ['sys_language_uid' => 1], ['t3ver_oid' => 2]);
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['title' => 'Back to live language', 'sys_language_uid' => 'en'],
+        ]);
+        $this->assertTrue($result->isError, 'A value that differs from the workspace version must be rejected');
+
+        $result = $tool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['title' => 'Draft updated', 'sys_language_uid' => 'de'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    private function countWorkspaceVersions(string $table, int $liveUid): int
+    {
+        $queryBuilder = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class)
+            ->getQueryBuilderForTable($table);
+        $queryBuilder->getRestrictions()->removeAll();
+
+        return (int)$queryBuilder
+            ->count('uid')
+            ->from($table)
+            ->where($queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($liveUid, \Doctrine\DBAL\ParameterType::INTEGER)))
+            ->executeQuery()
+            ->fetchOne();
+    }
 }
