@@ -25,6 +25,7 @@ use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
+use Hn\McpServer\Service\RecordUrlService;
 use Hn\McpServer\Utility\RecordFormattingUtility;
 use Hn\McpServer\Service\TableAccessService;
 
@@ -35,6 +36,7 @@ class GetPageTool extends AbstractRecordTool
 {
     protected SiteInformationService $siteInformationService;
     protected McpLanguageService $languageService;
+    protected RecordUrlService $recordUrlService;
     
     public function __construct(
         SiteInformationService $siteInformationService,
@@ -43,6 +45,7 @@ class GetPageTool extends AbstractRecordTool
         parent::__construct();
         $this->siteInformationService = $siteInformationService;
         $this->languageService = $languageService;
+        $this->recordUrlService = GeneralUtility::makeInstance(RecordUrlService::class);
     }
 
     /**
@@ -54,7 +57,8 @@ class GetPageTool extends AbstractRecordTool
         $domainsText = $this->siteInformationService->getAvailableDomainsText();
         
         $schema = [
-            'description' => 'Get detailed information about a TYPO3 page including its records. Can fetch by page ID or URL. Shows content in the specified language when available.',
+            'description' => 'Get detailed information about a TYPO3 page including its records. Can fetch by page ID or URL. Shows content in the specified language when available.'
+                . ($this->recordUrlService->isPreviewLinkEnabled() ? ' When the page or its content has unpublished changes, a temporary preview URL showing them without login is included.' : ''),
             'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
@@ -136,8 +140,8 @@ class GetPageTool extends AbstractRecordTool
         // Get page data (with language overlay if applicable)
         $pageData = $this->getPageData($uid, $languageId);
         
-        // Get page URL using SiteInformationService
-        $pageUrl = $this->siteInformationService->generatePageUrl((int)$pageData['uid'], $languageId);
+        // Live URL, plus a preview URL when the page or its content has unpublished changes
+        $pageUrls = $this->recordUrlService->getUrls('pages', [$pageData['_versioning']], $languageId)[0] ?? [];
         
         // Get records on this page (filtered by language if specified)
         $recordsInfo = $this->getPageRecords($uid, $languageId);
@@ -146,7 +150,7 @@ class GetPageTool extends AbstractRecordTool
         $translations = $this->getPageTranslations($uid);
         
         // Build a text representation of the page information
-        $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrl, $languageId, $translations);
+        $result = $this->formatPageInfo($pageData, $recordsInfo, $pageUrls, $languageId, $translations);
 
         $result = $this->getWorkspaceHint() . $result;
 
@@ -210,6 +214,16 @@ class GetPageTool extends AbstractRecordTool
         if (isset($page['t3ver_oid']) && $page['t3ver_oid'] > 0) {
             $page['uid'] = (int)$page['t3ver_oid'];
         }
+
+        // Versioning state of the default language page for URL resolution, kept
+        // apart because a language overlay replaces the t3ver_* fields below
+        $page['_versioning'] = [
+            'uid' => (int)$page['uid'],
+            'pid' => (int)$page['pid'],
+            't3ver_oid' => (int)($page['t3ver_oid'] ?? 0),
+            't3ver_wsid' => (int)($page['t3ver_wsid'] ?? 0),
+            't3ver_state' => (int)($page['t3ver_state'] ?? 0),
+        ];
 
         // Apply language overlay if language is specified
         if ($languageId > 0) {
@@ -482,7 +496,7 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Format page information as readable text
      */
-    protected function formatPageInfo(array $pageData, array $recordsInfo, ?string $pageUrl = null, int $languageId = 0, array $translations = []): string
+    protected function formatPageInfo(array $pageData, array $recordsInfo, array $pageUrls = [], int $languageId = 0, array $translations = []): string
     {
         $result = "PAGE INFORMATION\n";
         $result .= "================\n\n";
@@ -491,8 +505,17 @@ class GetPageTool extends AbstractRecordTool
         $result .= "UID: " . $pageData['uid'] . "\n";
         $result .= "Title: " . $pageData['title'] . "\n";
         
-        if ($pageUrl !== null) {
-            $result .= "URL: " . $pageUrl . "\n";
+        if (isset($pageUrls['frontend_url'])) {
+            $result .= "URL: " . $pageUrls['frontend_url'] . "\n";
+        } elseif (isset($pageUrls['preview_url'])) {
+            $result .= "URL: none yet, the page is not published\n";
+        }
+        if (isset($pageUrls['preview_url'])) {
+            $endtime = $this->recordUrlService->getPreviewLinkEndtime();
+            $result .= "Preview URL: " . $pageUrls['preview_url'] . "\n";
+            $result .= "  (shows this page including unpublished changes, no login needed"
+                . ($endtime !== null ? ", valid until " . date('Y-m-d H:i', $endtime) : '')
+                . "; it grants read access to all unpublished changes, share it only with people who may see them)\n";
         }
         
         if (!empty($pageData['nav_title'])) {

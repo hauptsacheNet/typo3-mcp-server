@@ -6,8 +6,6 @@ namespace Hn\McpServer\Service;
 
 use Hn\McpServer\Http\RequestUrlTrait;
 use Psr\Http\Message\ServerRequestInterface;
-use TYPO3\CMS\Core\Exception\SiteNotFoundException;
-use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -149,83 +147,6 @@ class SiteInformationService
     }
 
     /**
-     * Generate URL for a page with multiple fallback strategies
-     * 
-     * @param int $pageId The page ID
-     * @param int $languageId The language ID (default: 0)
-     * @return string|null The generated URL or null if generation fails
-     */
-    public function generatePageUrl(int $pageId, int $languageId = 0): ?string
-    {
-        try {
-            $site = $this->siteFinder->getSiteByPageId($pageId);
-            
-            if ($site instanceof Site) {
-                // Get the appropriate language
-                try {
-                    $language = $languageId > 0 ? $site->getLanguageById($languageId) : $site->getDefaultLanguage();
-                } catch (\Throwable $e) {
-                    // Fall back to default language if specified language not found
-                    $language = $site->getDefaultLanguage();
-                }
-                
-                // Generate the URI
-                $uri = $site->getRouter()->generateUri($pageId, ['_language' => $language]);
-                $generatedUrl = (string)$uri;
-                
-                // Check if the generated URL is missing a host (e.g., just a path like "/page")
-                if (!empty($generatedUrl) && strpos($generatedUrl, 'http') !== 0) {
-                    // Try to add host from site configuration
-                    $host = $site->getBase()->getHost();
-                    
-                    // If site base is just "/" or empty, try to get host from current request
-                    if (empty($host) || $host === '/') {
-                        $host = $this->getHostFromRequest();
-                    }
-                    
-                    if (!empty($host)) {
-                        // Determine scheme
-                        $scheme = 'https';
-                        if ($this->currentRequest !== null) {
-                            $scheme = $this->currentRequest->getUri()->getScheme() ?: 'https';
-                        }
-                        
-                        // Build full URL
-                        $generatedUrl = $scheme . '://' . $host . $generatedUrl;
-                    }
-                }
-                
-                return $generatedUrl;
-            }
-        } catch (\Throwable $e) {
-            // Log error but continue to fallback strategies
-            // error_log('SiteInformationService: Error generating URL for page ' . $pageId . ': ' . $e->getMessage());
-        }
-        
-        // Fallback: Try to get page record and build URL from slug
-        try {
-            $page = $this->getPageRecord($pageId);
-            if ($page && !empty($page['slug'])) {
-                $host = $this->getHostFromRequest();
-                if (!empty($host)) {
-                    $scheme = 'https';
-                    if ($this->currentRequest !== null) {
-                        $scheme = $this->currentRequest->getUri()->getScheme() ?: 'https';
-                    }
-                    return $scheme . '://' . $host . $page['slug'];
-                }
-                
-                // If no host available, return just the slug
-                return $page['slug'];
-            }
-        } catch (\Throwable $e) {
-            // Ignore and return null
-        }
-        
-        return null;
-    }
-
-    /**
      * Get formatted text listing all available domains for tool descriptions
      * 
      * @return string Formatted text describing available domains
@@ -243,55 +164,5 @@ class SiteInformationService
         }
         
         return 'Available domains: ' . implode(', ', $domains);
-    }
-
-    /**
-     * Get host from current request
-     * 
-     * @return string|null
-     */
-    protected function getHostFromRequest(): ?string
-    {
-        if ($this->currentRequest === null) {
-            return null;
-        }
-        
-        // Try Host header first
-        $host = $this->currentRequest->getHeaderLine('Host');
-        if (!empty($host)) {
-            return $host;
-        }
-        
-        // Try to get from URI
-        $uri = $this->currentRequest->getUri();
-        $host = $uri->getHost();
-        if (!empty($host)) {
-            return $host;
-        }
-        
-        return null;
-    }
-
-    /**
-     * Get page record by ID
-     * 
-     * @param int $pageId
-     * @return array|null
-     */
-    protected function getPageRecord(int $pageId): ?array
-    {
-        $connectionPool = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class);
-        $queryBuilder = $connectionPool->getQueryBuilderForTable('pages');
-        
-        $page = $queryBuilder
-            ->select('uid', 'slug', 'title')
-            ->from('pages')
-            ->where(
-                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($pageId, \Doctrine\DBAL\ParameterType::INTEGER))
-            )
-            ->executeQuery()
-            ->fetchAssociative();
-            
-        return $page ?: null;
     }
 }

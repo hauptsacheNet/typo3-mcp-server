@@ -279,6 +279,15 @@ The `GetPage` tool intelligently handles various URL formats:
 - **Domain validation**: Ensures URLs match configured sites
 - **Fallback strategies**: Router → slug lookup → ID
 
+### Record URLs and Preview Links
+
+Pages, content elements and every record type with a `TCEMAIN.preview.<table>` Page TSconfig
+(the configuration behind the backend "View" button, e.g. for news) carry a `frontend_url`.
+Records with unpublished changes additionally carry a `preview_url`: a temporary, login-free
+workspace preview link that shows the draft. `WriteTable` returns it right after an edit,
+`GetPage` and `GetPageTree` show both for pages. Details, token handling and cost:
+[Record URLs](Documentation/Architecture/RecordUrls.md).
+
 ### Relation Handling
 
 Relations are transparently resolved and can be set using simple syntax:

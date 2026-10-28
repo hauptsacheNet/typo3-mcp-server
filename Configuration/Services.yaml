@@ -47,6 +47,10 @@ services:
   Hn\McpServer\Service\SiteInformationService:
     public: true
     
+  # Make RecordUrlService public for tools instantiated via makeInstance
+  Hn\McpServer\Service\RecordUrlService:
+    public: true
+
   # Make SiteInstructionsService public for server access
   Hn\McpServer\Server\SiteInstructionsService:
     public: true
@@ -62,6 +66,17 @@ services:
         event: Hn\McpServer\Event\AfterRecordReadEvent
         method: onRecordRead
         identifier: 'mcp-server/file-enrichment-read'
+
+  Hn\McpServer\EventListener\RecordUrlListener:
+    tags:
+      - name: event.listener
+        event: Hn\McpServer\Event\AfterSchemaLoadEvent
+        method: onSchemaLoad
+        identifier: 'mcp-server/record-url-schema'
+      - name: event.listener
+        event: Hn\McpServer\Event\AfterRecordReadEvent
+        method: onRecordRead
+        identifier: 'mcp-server/record-url-read'
 
   Hn\McpServer\EventListener\SysFileMountRestrictionListener:
     tags:
