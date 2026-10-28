@@ -99,6 +99,11 @@ The defaults work out of the box. All settings live in the extension configurati
 | `maxFileSizeMb`              | `500`               | Upper limit in MiB for files fetched from a URL or received through an upload link |
 | `additionalReadOnlyTables`   | `sys_file`          | Non-workspace-capable tables exposed read-only — this is what lets the AI browse your files |
 | `additionalStandaloneTables` | `sys_file_metadata` | `hideTable` tables exposed as independent tables — this is what makes file metadata such as titles and alt texts editable |
+| `workspacePreviewLinks`      | `1`                 | Adds login-free workspace preview links to pages and records with unpublished changes, so the AI can show the result of its edits. Anyone with such a link sees all unpublished changes of the workspace until it expires |
+
+Records other than pages and content elements (news, events, ...) get a frontend URL once
+`TCEMAIN.preview.<table>` is configured in Page TSconfig — the same setting that powers the
+"View" button in the backend. See [Record URLs](Documentation/Architecture/RecordUrls.md).
 
 ## Usage
 
@@ -166,6 +171,7 @@ Tools are defined in the `Classes/MCP/Tool` directory. Each tool follows the MCP
   - [Workspace Transparency](Documentation/Architecture/WorkspaceTransparency.md) - How workspace complexity is hidden from AI
   - [Language Overlays](Documentation/Architecture/LanguageOverlays.md) - Multi-language content handling
   - [Inline Relations](Documentation/Architecture/InlineRelations.md) - Managing TYPO3's complex relation types
+  - [Record URLs](Documentation/Architecture/RecordUrls.md) - Frontend URLs of records and workspace preview links
 
 ## License
 

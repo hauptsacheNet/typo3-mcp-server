@@ -6,3 +6,6 @@ additionalStandaloneTables = sys_file_metadata
 
 # cat=mcp/files; type=int+; label=Maximum file size (MiB): Upper limit for files fetched from URLs or received through pre-signed uploads via the UploadFile tool. Default: 500
 maxFileSizeMb = 500
+
+# cat=mcp/urls; type=boolean; label=Workspace preview links: Add login-free preview links (ADMCMD_prev, as created by the workspace module) to pages and records with unpublished changes, so the AI can show the result of its edits. Anyone with such a link can see all unpublished changes of the workspace until it expires (sys_workspace "Preview link lifetime", default 48 hours). Disable to only output URLs of the live website.
+workspacePreviewLinks = 1

@@ -11,6 +11,7 @@ use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
+use Hn\McpServer\Service\RecordUrlService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -58,11 +59,14 @@ class WriteTableTool extends AbstractRecordTool
         $languageHint = $hasMultipleLanguages
             ? ' Language fields (sys_language_uid) can be provided as ISO codes (e.g., "de", "fr") instead of numeric IDs.'
             : '';
+        $previewHint = GeneralUtility::makeInstance(RecordUrlService::class)->isPreviewLinkEnabled()
+            ? ' For records shown on the website, the result contains a preview_url: a temporary link that shows the unpublished change without login, offer it to the user to review the change.'
+            : '';
 
         return [
             'description' => 'Create, update, translate, or delete records in a TYPO3 workspace. ' .
                 'Changes are NOT published live — they land in a workspace and stay invisible to website visitors until a human editor publishes them in the TYPO3 backend. ' .
-                'This tool cannot publish; if the user wants the change live, tell them to publish the workspace in the TYPO3 backend (or ask an editor to), never claim the change is already live.' . $languageHint . ' ' .
+                'This tool cannot publish; if the user wants the change live, tell them to publish the workspace in the TYPO3 backend (or ask an editor to), never claim the change is already live.' . $previewHint . $languageHint . ' ' .
                 'Before creating or updating content, always use GetPage to understand the page structure, existing content, and writing style. ' .
                 'Check existing content elements with ReadTable to ensure new content fits the page\'s tone and doesn\'t duplicate existing elements. ' .
                 'For content creation, verify the appropriate colPos by examining existing content layout. ' .
@@ -535,7 +539,7 @@ class WriteTableTool extends AbstractRecordTool
             'action' => 'create',
             'table' => $table,
             'uid' => $liveUid,
-        ]);
+        ] + $this->getRecordUrls($table, $liveUid));
     }
     
     /**
@@ -654,12 +658,13 @@ class WriteTableTool extends AbstractRecordTool
             $eventDispatcher->dispatch(new AfterRecordWriteEvent($table, 'update', $uid, $data, null));
         }
 
-        // Return the result with the original live UID
+        // Return the result with the original live UID. The URLs are left to the
+        // caller when this is the inner step of translateRecord().
         return $this->createJsonResult([
             'action' => 'update',
             'table' => $table,
             'uid' => $uid, // Return the live UID that was passed in
-        ]);
+        ] + ($dispatchEvent ? $this->getRecordUrls($table, $uid) : []));
     }
     
     /**
@@ -1169,7 +1174,28 @@ class WriteTableTool extends AbstractRecordTool
             'sourceUid' => $uid,
             'translationUid' => $newTranslationUid ?: 'Translation created but UID not found',
             'targetLanguage' => $targetIsoCode,
-        ]);
+        ] + ($newTranslationUid ? $this->getRecordUrls($table, (int)$newTranslationUid) : []));
+    }
+
+    /**
+     * frontend_url / preview_url of a record that was just written, so the result
+     * of an edit can be shown right away. Empty for records without a frontend view.
+     *
+     * @return array{frontend_url?: string, preview_url?: string}
+     */
+    protected function getRecordUrls(string $table, int $uid): array
+    {
+        try {
+            $record = BackendUtility::getRecordWSOL($table, $uid);
+            if (!is_array($record)) {
+                return [];
+            }
+            return GeneralUtility::makeInstance(RecordUrlService::class)->getUrls($table, [$record])[0] ?? [];
+        } catch (\Throwable $e) {
+            // The write itself succeeded, a missing link must not turn it into an error
+            $this->logException($e, sprintf('resolving URLs of %s:%d', $table, $uid));
+            return [];
+        }
     }
 
     /**

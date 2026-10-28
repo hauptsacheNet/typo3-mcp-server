@@ -371,7 +371,7 @@ class TableAccessService implements SingletonInterface
 
         // Allow extensions to add, remove, or reconfigure fields
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
-        $event = $eventDispatcher->dispatch(new AfterSchemaLoadEvent($table, $type, $fields));
+        $event = $eventDispatcher->dispatch(new AfterSchemaLoadEvent($table, $type, $fields, $pid));
         $fields = $event->getFields();
 
         // Re-apply field-level access restrictions to any fields added by
