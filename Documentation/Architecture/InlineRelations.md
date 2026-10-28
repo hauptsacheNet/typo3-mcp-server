@@ -154,7 +154,49 @@ $writeTool->execute([
 - No manual workspace management is needed in tests or usage
 - Workspace transparency is maintained - tools work consistently across workspaces
 
-### 4. Sorting and Positioning
+### 4. Inline Parents Are Marked as Modified
+In the TYPO3 backend an inline child is edited through its parent's form, so saving
+it versions the parent as well and the workspace module lists the parent as modified
+(e.g. a news record when one of its content elements changed). WriteTable writes
+children on their own and only sends changed fields, so `InlineParentService` does
+the same explicitly after every write in a workspace:
+
+- The written record and every inline ancestor get a workspace version if they
+  don't have one yet (`version` / `new` cmdmap, like DataHandler on a form save).
+  Records created in the workspace, or already versioned, deleted or moved in it,
+  are left alone.
+- Parents are resolved from the child's `foreign_field` (respecting
+  `foreign_table_field` and `foreign_match_fields`), on the workspace state of the
+  child, recursively up the chain (sys_file_reference → tt_content → news).
+  Where a `foreign_table_field` exists (file references: `tablenames`), it and the
+  foreign field identify the parent on their own; `fieldname` is not matched, since
+  a FlexForm file field is no TCA column of the parent, whose table may not even
+  have a file field in TCA.
+- Parents the record belonged to before the write count too: deleting a content
+  element or pointing it at another news marks the old news as well. So do the
+  former parents of independent children a write lists (`content_elements: [300]`
+  on another news takes the element away from its news).
+- Updating a parent where only its inline children change (embedded links, a
+  `content_elements` uid list) marks the parent itself.
+- Parents that are not workspace-enabled (e.g. `sys_file` above `sys_file_metadata`)
+  or not modifiable by the user are skipped. Relations without `foreign_field`
+  (uid list on the parent) can't be resolved from the child and are not covered.
+
+The parent version is an unchanged copy, so reads stay transparent. As on a backend
+form save, DataHandler versions the parent's workspace-aware inline children along
+with it (`copyRecord_processRelation()`), so the first change below a news record
+stages unchanged versions of its other content elements too.
+
+While doing so, `insertNewCopyVersion()` passes the children's live uids through
+`RelationHandler::writeForeignField()`, which renumbers their `sorting` (1, 2, 3…, in
+workspace order) and bumps `tstamp` directly on the live rows. A backend form save
+does the same, but live must not change before publishing (and after a staged
+reorder the live order would flip). `InlineParentService` therefore fetches the
+parent's inline descendants (live rows and rows created in the workspace) before
+versioning and writes back every column that changed afterwards, so only new
+version rows remain.
+
+### 5. Sorting and Positioning
 - Sorting is handled through `sorting` or `sorting_foreign` fields
 - Position management (before/after) not fully implemented for inline relations
 

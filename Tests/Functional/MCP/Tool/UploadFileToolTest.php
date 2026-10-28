@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
+use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Promise\FulfilledPromise;
+use GuzzleHttp\Promise\RejectedPromise;
 use GuzzleHttp\Psr7\Response;
 use Hn\McpServer\MCP\Tool\File\UploadFileTool;
 use Hn\McpServer\Service\SiteInformationService;
+use Hn\McpServer\Tests\Functional\Fixtures\ThrowingOnlineMediaHelper;
 use PHPUnit\Framework\Attributes\DataProvider;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Http\NormalizedParams;
@@ -39,6 +42,19 @@ class UploadFileToolTest extends FunctionalTestCase
     protected array $testExtensionsToLoad = [
         'mcp_server',
     ];
+
+    /**
+     * Request options of every request that reached the mocked HTTP layer.
+     *
+     * @var list<array<string, mixed>>
+     */
+    protected array $recordedHttpOptions = [];
+
+    /**
+     * Body bytes the mocked HTTP layer had received when the last request
+     * completed or was aborted.
+     */
+    protected int $transferredBytes = 0;
 
     protected function setUp(): void
     {
@@ -72,9 +88,18 @@ class UploadFileToolTest extends FunctionalTestCase
         $GLOBALS['TYPO3_CONF_VARS']['HTTP']['handler'] = [
             'mcp_test_mock' => function (callable $handler) use ($responses) {
                 return function ($request, array $options) use ($responses) {
+                    $this->recordedHttpOptions[] = $options;
                     $url = (string)$request->getUri();
                     foreach ($responses as $prefix => $response) {
                         if (str_starts_with($url, $prefix)) {
+                            try {
+                                $this->simulateTransfer($response, $options);
+                            } catch (\Throwable $e) {
+                                // How Guzzle 8's curl handler reports a failing progress callback
+                                return new RejectedPromise(
+                                    new RequestException('An error was encountered during the progress event', $request, previous: $e)
+                                );
+                            }
                             return new FulfilledPromise($response);
                         }
                     }
@@ -85,12 +110,59 @@ class UploadFileToolTest extends FunctionalTestCase
     }
 
     /**
+     * Report the transfer of the body in 64 KiB steps to a "progress" callback
+     * the way the curl handler does. An exception thrown by the callback
+     * aborts the transfer, like it does with curl.
+     *
+     * @param array<string, mixed> $options
+     */
+    protected function simulateTransfer(Response $response, array $options): void
+    {
+        $size = (int)$response->getBody()->getSize();
+        if (isset($options['progress'])) {
+            $announced = (int)$response->getHeaderLine('Content-Length');
+            for ($received = 0; ; $received = min($received + 65536, $size)) {
+                $this->transferredBytes = $received;
+                $options['progress']($announced, $received, 0, 0);
+                if ($received >= $size) {
+                    break;
+                }
+            }
+        }
+        $this->transferredBytes = $size;
+    }
+
+    /**
      * A real (valid) 1x1 transparent PNG so TYPO3's resource consistency check
      * (content must match the file extension) passes.
      */
     protected function pngBytes(): string
     {
         return base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==');
+    }
+
+    /**
+     * The tool with a deterministic DNS lookup: every host name resolves to
+     * the given (public) IP, IP literals are validated as usual.
+     */
+    protected function createToolResolvingHostsTo(string $ip): UploadFileTool
+    {
+        return new class ($ip) extends UploadFileTool {
+            public function __construct(private readonly string $fixedIp)
+            {
+                parent::__construct();
+            }
+
+            protected function assertPublicHttpUrl(string $url): ?string
+            {
+                $host = trim((string)parse_url($url, PHP_URL_HOST), '[]');
+                if ($host === '' || filter_var($host, FILTER_VALIDATE_IP)) {
+                    return parent::assertPublicHttpUrl($url);
+                }
+                $this->assertPublicIp($this->fixedIp);
+                return $this->fixedIp;
+            }
+        };
     }
 
     protected function executeUpload(array $params): array
@@ -396,6 +468,98 @@ class UploadFileToolTest extends FunctionalTestCase
         $this->assertEquals($bytes, $file->getContents());
     }
 
+    public function testHostNameDownloadIsPinnedWithoutForcingTheStreamHandler(): void
+    {
+        // A host name URL gets its vetted IP pinned via CURLOPT_RESOLVE. That
+        // option only exists for the curl handler; "stream" => true would route
+        // the request to the StreamHandler, which ignores the pin (Guzzle 7.11+)
+        // or rejects the "curl" option outright (Guzzle 8), so the two must
+        // never be combined.
+        if (!defined('CURLOPT_RESOLVE')) {
+            $this->markTestSkipped('IP pinning requires ext-curl.');
+        }
+        $bytes = $this->pngBytes();
+        $this->mockHttpResponses([
+            'https://files.example.org/images/pinned.png' => new Response(200, ['Content-Type' => 'image/png'], $bytes),
+        ]);
+
+        $result = $this->createToolResolvingHostsTo('203.0.113.10')->execute([
+            'url' => 'https://files.example.org/images/pinned.png',
+            'targetFolder' => '/user_upload/',
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $data = json_decode($result->content[0]->text, true);
+        // The file system is not reset between tests, so only the prefix is stable
+        $this->assertStringStartsWith('pinned', $data['fileName']);
+
+        $this->assertCount(1, $this->recordedHttpOptions);
+        $options = $this->recordedHttpOptions[0];
+        $this->assertSame(
+            ['files.example.org:443:203.0.113.10'],
+            $options['curl'][\CURLOPT_RESOLVE] ?? null,
+            'The vetted IP must be pinned for the curl handler'
+        );
+        $this->assertFalse(
+            (bool)($options['stream'] ?? false),
+            'A pinned download must not set "stream", which forces the StreamHandler and drops the curl pin'
+        );
+    }
+
+    /**
+     * @return array<string, array{0: array<string, string>}>
+     */
+    public static function oversizedResponseHeaderProvider(): array
+    {
+        return [
+            'announced via Content-Length' => [['Content-Length' => (string)(3 * 1048576)]],
+            'chunked, no Content-Length' => [[]],
+        ];
+    }
+
+    #[DataProvider('oversizedResponseHeaderProvider')]
+    public function testOversizedPinnedDownloadIsAbortedDuringTheTransfer(array $headers): void
+    {
+        // A pinned download is not streamed, so the size limit has to be
+        // enforced while the handler receives the body, not afterwards.
+        if (!defined('CURLOPT_RESOLVE')) {
+            $this->markTestSkipped('IP pinning requires ext-curl.');
+        }
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server']['maxFileSizeMb'] = 1;
+        $body = str_repeat('x', 3 * 1048576);
+        $this->mockHttpResponses([
+            'https://files.example.org/huge.bin' => new Response(200, ['Content-Type' => 'application/octet-stream'] + $headers, $body),
+        ]);
+
+        $result = $this->createToolResolvingHostsTo('203.0.113.10')->execute([
+            'url' => 'https://files.example.org/huge.bin',
+            'fileName' => 'huge.bin',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertTrue($result->isError, 'Expected an error result, got: ' . json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('exceeds the maximum size of 1 MiB', $result->content[0]->text);
+        $this->assertLessThanOrEqual(
+            1048576 + 65536,
+            $this->transferredBytes,
+            'The transfer must be aborted once it exceeds the size limit instead of buffering the whole body'
+        );
+    }
+
+    public function testIpLiteralDownloadIsStreamed(): void
+    {
+        // Nothing to pin for an IP literal, so the body is streamed and the
+        // size limit is enforced while reading it.
+        $this->mockHttpResponses([
+            'http://203.0.113.10/images/photo.png' => new Response(200, ['Content-Type' => 'image/png'], $this->pngBytes()),
+        ]);
+
+        $this->executeUpload(['url' => 'http://203.0.113.10/images/photo.png', 'targetFolder' => '/user_upload/']);
+
+        $this->assertCount(1, $this->recordedHttpOptions);
+        $this->assertArrayNotHasKey('curl', $this->recordedHttpOptions[0]);
+        $this->assertTrue($this->recordedHttpOptions[0]['stream'] ?? false);
+    }
+
     public function testUrlUploadFollowsRedirects(): void
     {
         $this->mockHttpResponses([
@@ -612,6 +776,83 @@ class UploadFileToolTest extends FunctionalTestCase
 
         $this->assertEquals($first['uid'], $second['uid'], 'Same video should not create a second asset');
         $this->assertTrue($second['deduplicated']);
+    }
+
+    public function testThrowingThirdPartyOnlineMediaHelperDoesNotBreakUrlUploads(): void
+    {
+        // Real-world case: a project helper for a media database only supports
+        // creation from a JSON payload and throws from transformUrlToFile()
+        // instead of returning null. Every non-YouTube/Vimeo URL upload failed
+        // with "An unexpected error occurred" because the registry loop
+        // reached that helper.
+        $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers']['broken'] = ThrowingOnlineMediaHelper::class;
+        ThrowingOnlineMediaHelper::$calls = 0;
+        $this->mockHttpResponses([
+            'http://203.0.113.10/images/skipped-helper.png' => new Response(200, ['Content-Type' => 'image/png'], $this->pngBytes()),
+        ]);
+
+        $data = $this->executeUpload([
+            'url' => 'http://203.0.113.10/images/skipped-helper.png',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertEquals('skipped-helper.png', $data['fileName']);
+        $this->assertArrayNotHasKey('onlineMedia', $data);
+        $this->assertSame(1, ThrowingOnlineMediaHelper::$calls, 'The broken helper must be consulted once and then skipped');
+    }
+
+    public function testSkippedHelperFailureIsReportedWhenTheFallbackDownloadFailsToo(): void
+    {
+        // The throwing helper might have been the one responsible for the URL
+        // (e.g. a YouTube helper whose API call failed). If the plain download
+        // does not work out either, the caller must learn about the helper
+        // failure instead of only seeing an unrelated download error.
+        $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers']['broken'] = ThrowingOnlineMediaHelper::class;
+        $this->mockHttpResponses([]); // everything 404s
+
+        $result = GeneralUtility::makeInstance(UploadFileTool::class)->execute([
+            'url' => 'http://203.0.113.10/videos/clip',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertTrue($result->isError);
+        $message = $result->content[0]->text;
+        $this->assertStringContainsString('HTTP status 404', $message);
+        $this->assertStringContainsString('".broken"', $message);
+        $this->assertStringContainsString('requires more than just an url', $message);
+    }
+
+    public function testSuccessfulDownloadIsNotBurdenedWithSkippedHelperNotes(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers']['broken'] = ThrowingOnlineMediaHelper::class;
+        $this->mockHttpResponses([
+            'http://203.0.113.10/images/clean-result.png' => new Response(200, ['Content-Type' => 'image/png'], $this->pngBytes()),
+        ]);
+
+        $data = $this->executeUpload([
+            'url' => 'http://203.0.113.10/images/clean-result.png',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertEquals('clean-result.png', $data['fileName']);
+        $this->assertStringNotContainsString('skipped', json_encode($data));
+    }
+
+    public function testOnlineMediaHelpersBehindAThrowingOneAreStillConsulted(): void
+    {
+        // The broken helper comes first, so YouTube is only recognized if the
+        // lookup continues past the exception instead of giving up.
+        $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers'] =
+            ['broken' => ThrowingOnlineMediaHelper::class] + $GLOBALS['TYPO3_CONF_VARS']['SYS']['fal']['onlineMediaHelpers'];
+        $this->mockHttpResponses([]);
+
+        $data = $this->executeUpload([
+            'url' => 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+            'targetFolder' => '/user_upload/',
+        ]);
+
+        $this->assertTrue($data['onlineMedia']);
+        $this->assertStringEndsWith('.youtube', $data['fileName']);
     }
 
     // ---------------------------------------------------------------

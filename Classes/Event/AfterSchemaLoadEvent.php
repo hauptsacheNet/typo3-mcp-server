@@ -27,11 +27,14 @@ final class AfterSchemaLoadEvent
      * @param string $table The table name
      * @param string $type The record type (e.g. CType value, empty for default)
      * @param array<string, array> $fields Field name => TCA-shaped config array
+     * @param int|null $pid Page whose TSconfig applies, null when the schema is not
+     *                      resolved for a particular page (then the first site root applies)
      */
     public function __construct(
         private readonly string $table,
         private readonly string $type,
         private array $fields,
+        private readonly ?int $pid = null,
     ) {}
 
     public function getTable(): string
@@ -42,6 +45,11 @@ final class AfterSchemaLoadEvent
     public function getType(): string
     {
         return $this->type;
+    }
+
+    public function getPid(): ?int
+    {
+        return $this->pid;
     }
 
     /**

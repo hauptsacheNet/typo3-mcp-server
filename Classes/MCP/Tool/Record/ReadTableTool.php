@@ -8,6 +8,8 @@ use Doctrine\DBAL\ParameterType;
 use Hn\McpServer\Event\AfterRecordReadEvent;
 use Hn\McpServer\Event\BeforeRecordReadEvent;
 use Hn\McpServer\Exception\DatabaseException;
+use Hn\McpServer\Database\Query\RecordFilterBuilder;
+use Hn\McpServer\Exception\McpException;
 use Hn\McpServer\Exception\ValidationException;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -68,8 +70,35 @@ class ReadTableTool extends AbstractRecordTool
                 'description' => 'Filter by record UID. Pass a single integer for one record, or an array of integers to fetch several at once — useful when reading inline-relation hints like "metadata: [1, 5]". Use the pid filter to read all records of a page.',
             ],
             'where' => [
-                'type' => 'string',
-                'description' => 'SQL WHERE condition for filtering (without the WHERE keyword)',
+                'type' => 'array',
+                'description' => 'Additional filters, all of which must match (AND). Each entry is '
+                    . '{"field": "<field name>", "operator": "<operator>", "value": <value>}, e.g. '
+                    . '[{"field": "CType", "operator": "=", "value": "textmedia"}, '
+                    . '{"field": "header", "operator": "contains", "value": "Setup"}]. '
+                    . 'Operators: "=", "!=", "<", "<=", ">", ">=" compare a single value; "in" and "notIn" '
+                    . 'take an array; "contains", "startsWith" and "endsWith" match text; "isNull" and '
+                    . '"isNotNull" take no value. Values are typed: a field holding numbers needs numbers. '
+                    . 'Any field ReadTable returns can be filtered on: the fields GetTableSchema lists for any '
+                    . 'record type, plus uid, pid and control fields such as tstamp, crdate and sorting. '
+                    . 'Date fields are compared as Unix timestamps in seconds, even though results show them as ISO dates. '
+                    . 'This is not SQL: a condition string is rejected.',
+                'items' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'field' => [
+                            'type' => 'string',
+                            'description' => 'Field name to filter on: a readable field of the table, or a control field like "uid", "pid", "tstamp", "crdate", "sorting".',
+                        ],
+                        'operator' => [
+                            'type' => 'string',
+                            'enum' => ['=', '!=', '<', '<=', '>', '>=', 'in', 'notIn', 'contains', 'startsWith', 'endsWith', 'isNull', 'isNotNull'],
+                        ],
+                        'value' => [
+                            'description' => 'The value to compare against. An array for "in"/"notIn"; omitted for "isNull"/"isNotNull".',
+                        ],
+                    ],
+                    'required' => ['field', 'operator'],
+                ],
             ],
             'limit' => [
                 'type' => 'integer',
@@ -143,7 +172,38 @@ class ReadTableTool extends AbstractRecordTool
                 fn($n) => $n > 0
             ));
         }
-        $condition = $params['where'] ?? '';
+        $filters = $params['where'] ?? [];
+        if (is_string($filters)) {
+            // Clients that still hold the earlier tool schema (where: string)
+            // serialize the clause array into a JSON string; claude.ai caches
+            // connector schemas, so this happens after every deploy. Decoded
+            // JSON goes through exactly the same validation as an array — a
+            // single JSON object included, which is then refused with the list
+            // shape instead of the SQL-string message.
+            $decoded = json_decode($filters, true);
+            if (is_array($decoded)) {
+                $filters = $decoded;
+            }
+        }
+        if (is_string($filters)) {
+            // The parameter used to take a raw SQL condition, guarded by a
+            // keyword blocklist that did not list SELECT and never checked
+            // field access. Rejected rather than translated: a string cannot be
+            // parsed into clauses without building the SQL parser this change
+            // exists to avoid, and silently accepting one would keep the hole
+            // open. The message carries the shape so the next attempt lands.
+            // The condition is deliberately not echoed back: the shape is what
+            // teaches the caller, and repeating their SQL only puts it into
+            // logs and transcripts.
+            throw new ValidationException([
+                'The "where" parameter takes filter objects, not an SQL string. Pass clauses instead, e.g. '
+                . '[{"field": "CType", "operator": "=", "value": "textmedia"}]. '
+                . 'Operators: =, !=, <, <=, >, >=, in, notIn, contains, startsWith, endsWith, isNull, isNotNull.',
+            ]);
+        }
+        if (!is_array($filters)) {
+            throw new ValidationException(['The "where" parameter must be an array of filter objects.']);
+        }
         $limit = isset($params['limit']) ? (int)$params['limit'] : 20;
         $offset = isset($params['offset']) ? (int)$params['offset'] : 0;
         $language = $params['language'] ?? null;
@@ -180,7 +240,7 @@ class ReadTableTool extends AbstractRecordTool
             $table,
             $pid,
             $uids,
-            $condition,
+            $filters,
             $limit,
             $offset,
             $languageUid,
@@ -206,7 +266,7 @@ class ReadTableTool extends AbstractRecordTool
         string $table,
         ?int $pid,
         ?array $uids,
-        string $condition,
+        array $filters,
         int $limit,
         int $offset,
         ?int $languageUid = null,
@@ -254,26 +314,11 @@ class ReadTableTool extends AbstractRecordTool
             $this->applyUidFilter($queryBuilder, $table, $uids);
         }
 
-        // Apply custom condition if specified
-        if (!empty($condition)) {
-            // Basic SQL injection protection
-            $disallowedKeywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'TRUNCATE', 'ALTER', 'CREATE'];
-            $containsDisallowed = false;
-
-            foreach ($disallowedKeywords as $keyword) {
-                if (stripos($condition, $keyword) !== false) {
-                    $containsDisallowed = true;
-                    break;
-                }
-            }
-
-            if ($containsDisallowed) {
-                throw new \InvalidArgumentException('The condition contains disallowed SQL keywords');
-            }
-
-            // Add the condition directly
-            $queryBuilder->andWhere($condition);
-        }
+        // Apply the caller's filters. Field, operator and value are each
+        // validated and the value is bound as a parameter, so nothing the
+        // caller sent is concatenated into SQL.
+        $filterBuilder = GeneralUtility::makeInstance(RecordFilterBuilder::class, $this->tableAccessService);
+        $filterBuilder->apply($queryBuilder, $table, $filters, $pid);
 
         // Apply default sorting from TCA
         $this->applyDefaultSorting($queryBuilder, $table);
@@ -319,9 +364,9 @@ class ReadTableTool extends AbstractRecordTool
             $this->applyUidFilter($countQueryBuilder, $table, $uids);
         }
 
-        if (!empty($condition)) {
-            $countQueryBuilder->andWhere($condition);
-        }
+        // Applied again rather than reused: named parameters belong to a single
+        // query builder, so the count query needs its own binding.
+        $filterBuilder->apply($countQueryBuilder, $table, $filters, $pid);
 
         // Allow listeners to add restrictions (e.g. file mounts, tenant scopes)
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
@@ -474,7 +519,19 @@ class ReadTableTool extends AbstractRecordTool
         $essentialFields = $this->tableAccessService->getEssentialFields($table);
         $typeField = $this->tableAccessService->getTypeFieldName($table);
         $recordType = ($typeField && isset($record[$typeField])) ? (string)$record[$typeField] : '';
-        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType);
+
+        // Resolve TCEFORM visibility at the record's own page, the same rule the
+        // write side applies: for a page record that page itself, for anything else
+        // the page it lives on. Left to its default this resolves at the first
+        // site's root page instead, so a field an installation disables globally and
+        // re-enables further down the tree is dropped from the result without any
+        // error, and the caller sees a record that looks like it has no such value.
+        // uid has been mapped to the live uid above, which is the one TSconfig is
+        // defined against. (#120)
+        $tsConfigPid = $table === 'pages'
+            ? (int)($record['uid'] ?? 0)
+            : (int)($record['pid'] ?? 0);
+        $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType, $tsConfigPid);
         $allowedFields = array_unique(array_merge(array_keys($availableFields), $essentialFields));
 
         // Process each field
@@ -953,7 +1010,9 @@ class ReadTableTool extends AbstractRecordTool
 
         $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
 
-        // Apply restrictions including workspace delete placeholders
+        // Apply restrictions including workspace delete placeholders and move pointers:
+        // a child moved or reordered in the workspace is selected once, as its move
+        // pointer, which carries the workspace sorting the ORDER BY below relies on.
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
