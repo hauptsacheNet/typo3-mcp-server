@@ -6,6 +6,7 @@ namespace Hn\McpServer\Service;
 
 use Hn\McpServer\Http\RequestUrlTrait;
 use Psr\Http\Message\ServerRequestInterface;
+use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -123,6 +124,11 @@ class SiteInformationService
             if (!empty($host) && $host !== '/') {
                 $domains[] = $host;
             }
+
+            // Domains of a decoupled frontend (EXT:headless): visitors know the site by these
+            foreach ($this->getFrontendHosts($site) as $frontendHost) {
+                $domains[] = $frontendHost;
+            }
             
             // Check if the site has base variants (method may not exist in all TYPO3 versions)
             if (method_exists($site, 'getBaseVariants')) {
@@ -144,6 +150,44 @@ class SiteInformationService
         }
 
         return array_unique($domains);
+    }
+
+    /**
+     * Whether a URL host belongs to the site: its base, or the frontendBase of a
+     * decoupled frontend (EXT:headless) that serves the same page tree.
+     */
+    public function isSiteHost(Site $site, string $host): bool
+    {
+        $baseHost = $site->getBase()->getHost();
+        return $baseHost === '' || $baseHost === $host || in_array($host, $this->getFrontendHosts($site), true);
+    }
+
+    /**
+     * Hosts of the `frontendBase` settings EXT:headless reads from the site
+     * configuration: site-wide, per language and in their base variants.
+     *
+     * @return string[]
+     */
+    public function getFrontendHosts(Site $site): array
+    {
+        $configuration = $site->getConfiguration();
+        $configurations = [$configuration, ...($configuration['baseVariants'] ?? [])];
+        foreach ($configuration['languages'] ?? [] as $language) {
+            $configurations[] = $language;
+            foreach ($language['baseVariants'] ?? [] as $variant) {
+                $configurations[] = $variant;
+            }
+        }
+
+        $hosts = [];
+        foreach ($configurations as $entry) {
+            $frontendBase = trim((string)($entry['frontendBase'] ?? ''));
+            $host = $frontendBase !== '' ? parse_url($frontendBase, PHP_URL_HOST) : null;
+            if (is_string($host) && $host !== '') {
+                $hosts[] = $host;
+            }
+        }
+        return array_values(array_unique($hosts));
     }
 
     /**

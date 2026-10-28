@@ -6,6 +6,8 @@ namespace Hn\McpServer\Service;
 
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Event\AfterRecordUrlGeneratedEvent;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Context\Context;
@@ -35,7 +37,9 @@ use TYPO3\CMS\Core\Versioning\VersionState;
  * routing (route enhancers, slugs) makes of previewPageId, fieldToParameterMap
  * and additionalGetParameters. Records without a viewable target page (e.g.
  * content in a sysfolder, a table without TCEMAIN.preview) get no URL instead
- * of a misleading link to the site root.
+ * of a misleading link to the site root. AfterRecordUrlGeneratedEvent lets
+ * listeners move a URL to where visitors see the site, e.g. the decoupled
+ * frontend of EXT:headless (HeadlessFrontendUrlListener).
  *
  * Two URLs are resolved per record:
  * - frontend_url: the record on the live website. Missing for records that so
@@ -84,6 +88,7 @@ class RecordUrlService
         protected readonly SiteFinder $siteFinder,
         protected readonly ConnectionPool $connectionPool,
         protected readonly SiteInformationService $siteInformationService,
+        protected readonly EventDispatcherInterface $eventDispatcher,
     ) {}
 
     /**
@@ -319,13 +324,19 @@ class RecordUrlService
             $url = null;
             $site = $this->getSite($pageId);
             try {
-                $uri = $site?->getRouter($context)->generateUri(
-                    $pageId,
-                    $target['parameters'],
-                    '',
-                    RouterInterface::ABSOLUTE_URL
-                );
-                $url = $uri !== null ? $this->siteInformationService->makeAbsoluteUrl((string)$uri) : null;
+                if ($site !== null) {
+                    $parameters = $target['parameters'];
+                    $language = $site->getLanguageById((int)($parameters['_language'] ?? 0));
+                    $parameters['_language'] = $language;
+                    $uri = $site->getRouter($context)->generateUri($pageId, $parameters, '', RouterInterface::ABSOLUTE_URL);
+                    $url = (string)$this->siteInformationService->makeAbsoluteUrl((string)$uri);
+
+                    // Let listeners move the URL to where visitors actually see the site (EXT:headless)
+                    $event = $this->eventDispatcher->dispatch(
+                        new AfterRecordUrlGeneratedEvent($url, $site, $language, $pageId, $workspaceId > 0)
+                    );
+                    $url = $event->getUrl();
+                }
             } catch (InvalidRouteArgumentsException|\InvalidArgumentException) {
                 // Unknown language or arguments the route rejects: no link
             }

@@ -707,10 +707,12 @@ class GetPageTool extends AbstractRecordTool
         // This handles cases like "www.example.com" or "www.example.com/about".
         if (!str_contains($url, '://') && !str_starts_with($url, '/')) {
             foreach ($siteFinder->getAllSites() as $site) {
-                $siteHost = $site->getBase()->getHost();
-                if (!empty($siteHost) && str_starts_with($url, $siteHost)) {
-                    $url = 'https://' . $url;
-                    break;
+                $siteHosts = [$site->getBase()->getHost(), ...$this->siteInformationService->getFrontendHosts($site)];
+                foreach ($siteHosts as $siteHost) {
+                    if (!empty($siteHost) && str_starts_with($url, $siteHost)) {
+                        $url = 'https://' . $url;
+                        break 2;
+                    }
                 }
             }
         }
@@ -729,12 +731,9 @@ class GetPageTool extends AbstractRecordTool
             // Try to find the root page from any site
             foreach ($siteFinder->getAllSites() as $site) {
                 // Check if this URL belongs to this site (if host is specified)
-                if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
-                        continue;
-                    }
+                // A site without host (base is just "/") matches any host
+                if (isset($parsedUrl['host']) && !$this->siteInformationService->isSiteHost($site, $parsedUrl['host'])) {
+                    continue;
                 }
                 return $site->getRootPageId();
             }
@@ -748,9 +747,8 @@ class GetPageTool extends AbstractRecordTool
             try {
                 // Check if this URL belongs to this site (if host is specified)
                 if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
+                    // A site without host (base is just "/") matches any host
+                    if (!$this->siteInformationService->isSiteHost($site, $parsedUrl['host'])) {
                         continue;
                     }
                     $matchedAnySite = true;

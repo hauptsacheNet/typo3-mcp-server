@@ -83,6 +83,28 @@ check page access with uncached queries, and the workspace builder (13.4) writes
 semantics with public APIs (`BackendUtility::getPagesTSconfig()`, the site router,
 `PageRepository`) and batch-level memoization.
 
+### Decoupled frontends (EXT:headless)
+
+The router builds URLs on the site `base`. In a headless site that base serves JSON;
+visitors use the `frontendBase` configured in the site (site-wide, per language, per base
+variant). EXT:headless rewrites the backend's view-button URLs to it, but on paths
+`RecordUrlService` does not take: in 5.x (TYPO3 14) through `AfterPageUriGeneratedEvent`,
+only during a backend request; in 4.x (TYPO3 13) through `AfterPagePreviewUriGeneratedEvent`,
+only in the live workspace, plus an XClass of the workspace `PreviewUriBuilder`. MCP calls
+are neither backend requests nor in the live workspace, so the assistant got JSON URLs.
+
+`RecordUrlService` therefore dispatches its own `AfterRecordUrlGeneratedEvent` for every
+URL it generates (live and preview, before the token is appended), and
+`HeadlessFrontendUrlListener` applies the calls both EXT:headless versions make for the
+view button: `HeadlessModeInterface::overrideBackendRequestBySite()` and
+`HeadlessFrontendUrlInterface::getFrontendUrlWithSite()`. The site's headless mode decides
+like it does for the view button: `headless: 1` rewrites, `headless: 2` (mixed) only with
+the site setting `headless.preview.overrideMode: 1`. EXT:headless stays an optional
+dependency. Other decoupled setups can listen to the same event.
+
+`GetPage` accepts URLs on the `frontendBase` hosts as well, and lists them among the
+available domains, so a link the assistant handed out can be passed back to it.
+
 ### Preview tokens
 
 A preview token grants read access to **all** unpublished changes of the workspace, without
