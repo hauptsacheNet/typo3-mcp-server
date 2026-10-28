@@ -12,6 +12,7 @@ use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\RecordUrlService;
+use Hn\McpServer\MCP\McpApps;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -124,7 +125,9 @@ class WriteTableTool extends AbstractRecordTool
             'annotations' => [
                 'readOnlyHint' => false,
                 'idempotentHint' => false
-            ]
+            ],
+            // Hosts with MCP Apps show the change next to the call, with preview, publish and discard
+            '_meta' => McpApps::getToolMeta(McpApps::CHANGE_REVIEW_URI),
         ];
     }
 

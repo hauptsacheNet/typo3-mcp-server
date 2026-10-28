@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TYPO3 change review</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: var(--color-background-primary, #ffffff);
+    --bg-muted: var(--color-background-secondary, #f5f5f4);
+    --text: var(--color-text-primary, #1c1917);
+    --text-muted: var(--color-text-secondary, #57534e);
+    --border: var(--color-border-primary, #d6d3d1);
+    --border-muted: var(--color-border-tertiary, #e7e5e4);
+    --ins-bg: var(--color-background-success, #dcfce7);
+    --ins-text: var(--color-text-success, #166534);
+    --del-bg: var(--color-background-danger, #fee2e2);
+    --del-text: var(--color-text-danger, #991b1b);
+    --info-text: var(--color-text-info, #1e40af);
+    --info-bg: var(--color-background-info, #dbeafe);
+    --warn-text: var(--color-text-warning, #92400e);
+    --warn-bg: var(--color-background-warning, #fef3c7);
+    --radius: var(--border-radius-md, 8px);
+    --font: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+    --size: var(--font-text-sm-size, 14px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: var(--color-background-primary, #1c1917);
+      --bg-muted: var(--color-background-secondary, #292524);
+      --text: var(--color-text-primary, #f5f5f4);
+      --text-muted: var(--color-text-secondary, #a8a29e);
+      --border: var(--color-border-primary, #44403c);
+      --border-muted: var(--color-border-tertiary, #292524);
+      --ins-bg: var(--color-background-success, #14532d);
+      --ins-text: var(--color-text-success, #bbf7d0);
+      --del-bg: var(--color-background-danger, #7f1d1d);
+      --del-text: var(--color-text-danger, #fecaca);
+      --info-text: var(--color-text-info, #bfdbfe);
+      --info-bg: var(--color-background-info, #1e3a8a);
+      --warn-text: var(--color-text-warning, #fde68a);
+      --warn-bg: var(--color-background-warning, #78350f);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: var(--color-background-primary, #1c1917);
+    --bg-muted: var(--color-background-secondary, #292524);
+    --text: var(--color-text-primary, #f5f5f4);
+    --text-muted: var(--color-text-secondary, #a8a29e);
+    --border: var(--color-border-primary, #44403c);
+    --border-muted: var(--color-border-tertiary, #292524);
+    --ins-bg: var(--color-background-success, #14532d);
+    --ins-text: var(--color-text-success, #bbf7d0);
+    --del-bg: var(--color-background-danger, #7f1d1d);
+    --del-text: var(--color-text-danger, #fecaca);
+    --info-text: var(--color-text-info, #bfdbfe);
+    --info-bg: var(--color-background-info, #1e3a8a);
+    --warn-text: var(--color-text-warning, #fde68a);
+    --warn-bg: var(--color-background-warning, #78350f);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: var(--size)/1.45 var(--font); }
+  #app { padding: 12px 14px; }
+  .head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .head h1 { font-size: 1.05em; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+  .muted { color: var(--text-muted); }
+  .badge { display: inline-block; font-size: .78em; font-weight: 600; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+  .badge.new { background: var(--ins-bg); color: var(--ins-text); }
+  .badge.deleted { background: var(--del-bg); color: var(--del-text); }
+  .badge.changed, .badge.moved { background: var(--info-bg); color: var(--info-text); }
+  .badge.unchanged { background: var(--bg-muted); color: var(--text-muted); }
+  .fields { margin: 8px 0 0; padding: 0; list-style: none; }
+  .fields li { padding: 6px 0; border-top: 1px solid var(--border-muted); }
+  .fields li:first-child { border-top: 0; }
+  .label { font-weight: 600; font-size: .9em; color: var(--text-muted); }
+  .value { white-space: pre-wrap; overflow-wrap: anywhere; }
+  ins { background: var(--ins-bg); color: var(--ins-text); text-decoration: none; border-radius: 3px; }
+  del { background: var(--del-bg); color: var(--del-text); border-radius: 3px; }
+  .relation { margin-top: 10px; }
+  .relation > .label { display: block; margin-bottom: 4px; }
+  .child { margin: 6px 0 0; padding: 8px 10px; border: 1px solid var(--border-muted); border-radius: var(--radius); background: var(--bg-muted); }
+  .child .head h2 { font-size: 1em; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  button { font: inherit; padding: 6px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
+  button:hover:not(:disabled) { background: var(--bg-muted); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.primary { background: var(--ins-bg); color: var(--ins-text); border-color: transparent; font-weight: 600; }
+  button.danger { color: var(--del-text); }
+  button.confirm { background: var(--warn-bg); color: var(--warn-text); border-color: transparent; font-weight: 600; }
+  .notice { margin-top: 10px; padding: 8px 10px; border-radius: var(--radius); background: var(--bg-muted); }
+  .notice.error { background: var(--del-bg); color: var(--del-text); }
+  .notice.success { background: var(--ins-bg); color: var(--ins-text); }
+  .hint { font-size: .85em; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div id="app"><p class="muted" data-i18n="loading"></p></div>
+<script>
+(function () {
+  'use strict';
+
+  var REVIEW_TOOL = 'ReviewChange';
+  var PROTOCOL_VERSION = '2026-01-26';
+
+  var I18N = {
+    en: {
+      loading: 'Loading change…',
+      state_new: 'New', state_changed: 'Changed', state_deleted: 'Deleted', state_moved: 'Moved', state_unchanged: 'Unchanged',
+      preview: 'Preview', open: 'Open page', publish: 'Publish', discard: 'Discard',
+      confirmPublish: 'Publish live now?', confirmDiscard: 'Discard change?',
+      empty: '(empty)', nothingPending: 'There are no unpublished changes for this record (anymore).',
+      published: 'Published. The change is live now.', discarded: 'Discarded. The live version is unchanged.',
+      noFieldChanges: 'No field changes.', unavailable: 'Publishing and discarding are not available in this client. Use the TYPO3 workspace module.',
+      noPublishAccess: 'You are not allowed to publish this change. An editor can publish it in the TYPO3 workspace module.',
+      failed: 'The tool call failed.', noRecord: 'This tool call did not change a record.',
+      modelPublished: 'The user published the change to {title} ({table}:{uid}) via the review widget. It is live now.',
+      modelDiscarded: 'The user discarded the change to {title} ({table}:{uid}) via the review widget. The live version is unchanged and the draft is gone.'
+    },
+    de: {
+      loading: 'Änderung wird geladen…',
+      state_new: 'Neu', state_changed: 'Geändert', state_deleted: 'Gelöscht', state_moved: 'Verschoben', state_unchanged: 'Unverändert',
+      preview: 'Vorschau', open: 'Seite öffnen', publish: 'Übernehmen', discard: 'Verwerfen',
+      confirmPublish: 'Jetzt live veröffentlichen?', confirmDiscard: 'Änderung verwerfen?',
+      empty: '(leer)', nothingPending: 'Für diesen Datensatz gibt es keine unveröffentlichten Änderungen (mehr).',
+      published: 'Übernommen. Die Änderung ist jetzt live.', discarded: 'Verworfen. Die Live-Version bleibt unverändert.',
+      noFieldChanges: 'Keine Feldänderungen.', unavailable: 'Übernehmen und Verwerfen sind in diesem Client nicht verfügbar. Bitte das TYPO3-Workspace-Modul nutzen.',
+      noPublishAccess: 'Du darfst diese Änderung nicht veröffentlichen. Ein Redakteur kann sie im TYPO3-Workspace-Modul veröffentlichen.',
+      failed: 'Der Tool-Aufruf ist fehlgeschlagen.', noRecord: 'Dieser Tool-Aufruf hat keinen Datensatz geändert.',
+      modelPublished: 'The user published the change to {title} ({table}:{uid}) via the review widget. It is live now.',
+      modelDiscarded: 'The user discarded the change to {title} ({table}:{uid}) via the review widget. The live version is unchanged and the draft is gone.'
+    }
+  };
+
+  var lang = 'en';
+  var hostCapabilities = {};
+  var target = null;        // {table, uid} of the written record
+  var review = null;        // last ReviewChange payload
+  var busy = false;
+  var confirming = null;    // 'publish' | 'discard'
+  var outcome = null;       // {type: 'success'|'error'|'info', text}
+  var nextId = 1;
+  var pending = {};
+  var app = document.getElementById('app');
+
+  function t(key, vars) {
+    var text = (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
+    if (vars) {
+      text = text.replace(/\{(\w+)\}/g, function (m, name) { return vars[name] !== undefined ? String(vars[name]) : m; });
+    }
+    return text;
+  }
+
+  // --- JSON-RPC over postMessage (MCP Apps, view side) ---------------------------------
+
+  function send(message) {
+    window.parent.postMessage(message, '*');
+  }
+
+  function request(method, params) {
+    var id = nextId++;
+    return new Promise(function (resolve, reject) {
+      pending[id] = { resolve: resolve, reject: reject };
+      send({ jsonrpc: '2.0', id: id, method: method, params: params || {} });
+    });
+  }
+
+  function notify(method, params) {
+    send({ jsonrpc: '2.0', method: method, params: params || {} });
+  }
+
+  window.addEventListener('message', function (event) {
+    if (event.source !== window.parent) {
+      return;
+    }
+    var msg = event.data;
+    if (!msg || msg.jsonrpc !== '2.0') {
+      return;
+    }
+    if (msg.id !== undefined && msg.method === undefined) {
+      var waiting = pending[msg.id];
+      if (waiting) {
+        delete pending[msg.id];
+        if (msg.error) {
+          waiting.reject(msg.error);
+        } else {
+          waiting.resolve(msg.result);
+        }
+      }
+      return;
+    }
+    handleHostMessage(msg);
+  });
+
+  function handleHostMessage(msg) {
+    switch (msg.method) {
+      case 'ui/notifications/tool-input':
+        // The written record is only known once the result arrives (uid of a created record).
+        break;
+      case 'ui/notifications/tool-result':
+        onToolResult(msg.params || {});
+        break;
+      case 'ui/notifications/host-context-changed':
+        applyHostContext(msg.params || {});
+        break;
+      case 'ui/resource-teardown':
+        if (msg.id !== undefined) {
+          send({ jsonrpc: '2.0', id: msg.id, result: {} });
+        }
+        break;
+      case 'ping':
+        if (msg.id !== undefined) {
+          send({ jsonrpc: '2.0', id: msg.id, result: {} });
+        }
+        break;
+      default:
+        if (msg.id !== undefined) {
+          send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'Method not found' } });
+        }
+    }
+  }
+
+  function applyHostContext(context) {
+    if (context.theme) {
+      document.documentElement.setAttribute('data-theme', context.theme);
+      document.documentElement.style.colorScheme = context.theme;
+    }
+    var variables = context.styles && context.styles.variables;
+    if (variables) {
+      Object.keys(variables).forEach(function (name) {
+        if (variables[name]) {
+          document.documentElement.style.setProperty(name, variables[name]);
+        }
+      });
+    }
+    if (context.locale) {
+      var short = String(context.locale).toLowerCase().split(/[-_]/)[0];
+      if (I18N[short]) {
+        lang = short;
+        document.documentElement.lang = short;
+      }
+      render();
+    }
+  }
+
+  // --- Size reporting -----------------------------------------------------------------
+
+  var lastHeight = 0;
+  var sizeScheduled = false;
+  function reportSize() {
+    if (sizeScheduled) {
+      return;
+    }
+    sizeScheduled = true;
+    requestAnimationFrame(function () {
+      sizeScheduled = false;
+      var html = document.documentElement;
+      var previous = html.style.height;
+      html.style.height = 'max-content';
+      var height = Math.ceil(html.getBoundingClientRect().height);
+      html.style.height = previous;
+      if (height !== lastHeight) {
+        lastHeight = height;
+        notify('ui/notifications/size-changed', { width: Math.ceil(window.innerWidth), height: height });
+      }
+    });
+  }
+  if (typeof ResizeObserver !== 'undefined') {
+    var observer = new ResizeObserver(reportSize);
+    observer.observe(document.documentElement);
+    observer.observe(document.body);
+  }
+
+  // --- Tool results -------------------------------------------------------------------
+
+  function resultData(result) {
+    if (result && result.structuredContent && typeof result.structuredContent === 'object') {
+      return result.structuredContent;
+    }
+    var content = (result && result.content) || [];
+    for (var i = 0; i < content.length; i++) {
+      if (content[i].type === 'text') {
+        try {
+          return JSON.parse(content[i].text);
+        } catch (e) {
+          return { message: content[i].text };
+        }
+      }
+    }
+    return null;
+  }
+
+  function onToolResult(result) {
+    var data = resultData(result);
+    if (result.isError || !data) {
+      outcome = { type: 'error', text: (data && data.message) || t('failed') };
+      render();
+      return;
+    }
+    var uid = data.translationUid !== undefined ? data.translationUid : data.uid;
+    if (!data.table || typeof uid !== 'number') {
+      outcome = { type: 'info', text: t('noRecord') };
+      render();
+      return;
+    }
+    target = { table: data.table, uid: uid };
+    load('show');
+  }
+
+  function load(action) {
+    busy = true;
+    render();
+    return request('tools/call', { name: REVIEW_TOOL, arguments: { action: action, table: target.table, uid: target.uid } })
+      .then(function (result) {
+        var data = resultData(result);
+        if (result.isError || !data || !data.record) {
+          throw { message: (data && data.message) || t('failed') };
+        }
+        review = data;
+        if (action === 'publish' || action === 'discard') {
+          outcome = { type: 'success', text: t(action === 'publish' ? 'published' : 'discarded') };
+          tellModel(action);
+        }
+      })
+      .catch(function (error) {
+        if (action === 'show' && !review) {
+          // The host refuses app tool calls: show what the write tool returned at least.
+          review = { unavailable: true };
+        }
+        outcome = { type: 'error', text: (error && error.message) || t('failed') };
+        if (action === 'show') {
+          outcome = { type: 'info', text: t('unavailable') };
+        }
+      })
+      .then(function () {
+        busy = false;
+        confirming = null;
+        render();
+      });
+  }
+
+  function tellModel(action) {
+    if (!hostCapabilities.updateModelContext || !review || !review.record) {
+      return;
+    }
+    var record = review.record;
+    var text = t(action === 'publish' ? 'modelPublished' : 'modelDiscarded', {
+      title: record.title ? '"' + record.title + '"' : record.tableLabel,
+      table: record.table,
+      uid: record.uid
+    });
+    request('ui/update-model-context', { content: [{ type: 'text', text: text }] }).catch(function () {});
+  }
+
+  function openLink(url) {
+    request('ui/open-link', { url: url }).catch(function () {
+      window.open(url, '_blank', 'noopener');
+    });
+  }
+
+  // --- Rendering ----------------------------------------------------------------------
+
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (key) {
+      if (key === 'text') {
+        node.textContent = attrs[key];
+      } else if (key === 'onclick') {
+        node.addEventListener('click', attrs[key]);
+      } else if (key === 'disabled') {
+        node.disabled = !!attrs[key];
+      } else {
+        node.setAttribute(key, attrs[key]);
+      }
+    });
+    (children || []).forEach(function (child) {
+      if (child !== null && child !== undefined) {
+        node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+      }
+    });
+    return node;
+  }
+
+  function tokenize(text) {
+    // Words, whitespace and single punctuation marks, so "Friday" -> "Friday," only marks the comma
+    return String(text).match(/\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu) || [];
+  }
+
+  // Word diff via the longest common subsequence; long texts fall back to before/after.
+  function diff(before, after) {
+    var a = tokenize(before);
+    var b = tokenize(after);
+    if (a.length * b.length > 250000) {
+      return null;
+    }
+    var rows = a.length + 1;
+    var cols = b.length + 1;
+    var table = new Uint16Array(rows * cols);
+    for (var i = a.length - 1; i >= 0; i--) {
+      for (var j = b.length - 1; j >= 0; j--) {
+        table[i * cols + j] = a[i] === b[j]
+          ? table[(i + 1) * cols + j + 1] + 1
+          : Math.max(table[(i + 1) * cols + j], table[i * cols + j + 1]);
+      }
+    }
+    var parts = [];
+    var x = 0, y = 0;
+    function push(type, text) {
+      var last = parts[parts.length - 1];
+      if (last && last.type === type) {
+        last.text += text;
+      } else {
+        parts.push({ type: type, text: text });
+      }
+    }
+    while (x < a.length && y < b.length) {
+      if (a[x] === b[y]) {
+        push('same', a[x]); x++; y++;
+      } else if (table[(x + 1) * cols + y] >= table[x * cols + y + 1]) {
+        push('del', a[x]); x++;
+      } else {
+        push('ins', b[y]); y++;
+      }
+    }
+    while (x < a.length) { push('del', a[x++]); }
+    while (y < b.length) { push('ins', b[y++]); }
+    return parts;
+  }
+
+  function renderValue(field) {
+    var before = field.before === null || field.before === undefined ? '' : String(field.before);
+    var after = field.after === null || field.after === undefined ? '' : String(field.after);
+    var value = el('div', { 'class': 'value' });
+    if (before === '' || after === '') {
+      if (before !== '') { value.appendChild(el('del', { text: before })); }
+      if (after !== '') { value.appendChild(el('ins', { text: after })); }
+      if (before === '' && after === '') { value.appendChild(el('span', { 'class': 'muted', text: t('empty') })); }
+      return value;
+    }
+    var parts = diff(before, after);
+    if (!parts) {
+      value.appendChild(el('del', { text: before }));
+      value.appendChild(document.createTextNode('\n'));
+      value.appendChild(el('ins', { text: after }));
+      return value;
+    }
+    parts.forEach(function (part) {
+      value.appendChild(part.type === 'same' ? document.createTextNode(part.text) : el(part.type, { text: part.text }));
+    });
+    return value;
+  }
+
+  function renderFields(record) {
+    if (!record.fields || record.fields.length === 0) {
+      return null;
+    }
+    return el('ul', { 'class': 'fields' }, record.fields.map(function (field) {
+      return el('li', {}, [el('div', { 'class': 'label', text: field.label }), renderValue(field)]);
+    }));
+  }
+
+  // A parent that is only part of the change through its children gets no badge.
+  function badge(record) {
+    return record.state === 'unchanged' ? null : el('span', { 'class': 'badge ' + record.state, text: t('state_' + record.state) });
+  }
+
+  function renderRelations(record) {
+    return (record.relations || []).map(function (relation) {
+      return el('div', { 'class': 'relation' }, [el('span', { 'class': 'label', text: relation.label })].concat(
+        relation.records.map(function (child) {
+          return el('div', { 'class': 'child' }, [
+            el('div', { 'class': 'head' }, [
+              badge(child),
+              el('h2', { text: child.title || child.tableLabel }),
+              el('span', { 'class': 'muted', text: child.tableLabel })
+            ]),
+            renderFields(child)
+          ].concat(renderRelations(child)));
+        })
+      ));
+    });
+  }
+
+  function render() {
+    app.textContent = '';
+    if (!review || review.unavailable) {
+      if (!outcome) {
+        app.appendChild(el('p', { 'class': 'muted', text: t('loading') }));
+      }
+    } else {
+      var record = review.record;
+      app.appendChild(el('div', { 'class': 'head' }, [
+        badge(record),
+        el('h1', { text: record.title || record.tableLabel }),
+        el('span', { 'class': 'muted', text: record.tableLabel + ' #' + record.uid })
+      ]));
+      var fields = renderFields(record);
+      if (fields) {
+        app.appendChild(fields);
+      } else if (review.pending && record.state === 'changed' && (record.relations || []).length === 0) {
+        app.appendChild(el('p', { 'class': 'muted hint', text: t('noFieldChanges') }));
+      }
+      renderRelations(record).forEach(function (node) { app.appendChild(node); });
+
+      var actions = [];
+      var link = review.preview_url || review.frontend_url;
+      if (link) {
+        actions.push(el('button', { type: 'button', text: (review.preview_url ? t('preview') : t('open')) + ' ↗', onclick: function () { openLink(link); } }));
+      }
+      if (review.pending && review.canPublish) {
+        actions.push(el('button', {
+          type: 'button',
+          'class': confirming === 'publish' ? 'confirm' : 'primary',
+          'data-action': 'publish',
+          disabled: busy,
+          text: confirming === 'publish' ? t('confirmPublish') : t('publish'),
+          onclick: function () { act('publish'); }
+        }));
+      }
+      if (review.pending && review.canDiscard) {
+        actions.push(el('button', {
+          type: 'button',
+          'class': confirming === 'discard' ? 'confirm' : 'danger',
+          'data-action': 'discard',
+          disabled: busy,
+          text: confirming === 'discard' ? t('confirmDiscard') : t('discard'),
+          onclick: function () { act('discard'); }
+        }));
+      }
+      if (actions.length) {
+        app.appendChild(el('div', { 'class': 'actions' }, actions));
+      }
+      if (review.pending && !review.canPublish) {
+        app.appendChild(el('p', { 'class': 'muted hint', text: t('noPublishAccess') }));
+      }
+      if (!review.pending && !outcome) {
+        app.appendChild(el('div', { 'class': 'notice', text: t('nothingPending') }));
+      }
+    }
+    if (outcome) {
+      app.appendChild(el('div', { 'class': 'notice ' + outcome.type, role: 'status', text: outcome.text }));
+    }
+    reportSize();
+  }
+
+  function act(action) {
+    if (busy || !target) {
+      return;
+    }
+    // Both actions are final, so each takes a second click.
+    if (confirming !== action) {
+      confirming = action;
+      outcome = null;
+      render();
+      return;
+    }
+    outcome = null;
+    load(action);
+  }
+
+  // --- Start --------------------------------------------------------------------------
+
+  render();
+  request('ui/initialize', {
+    protocolVersion: PROTOCOL_VERSION,
+    appInfo: { name: 'TYPO3 change review', version: '1.0.0' },
+    appCapabilities: { availableDisplayModes: ['inline'] }
+  }).then(function (result) {
+    hostCapabilities = (result && result.hostCapabilities) || {};
+    applyHostContext((result && result.hostContext) || {});
+    notify('ui/notifications/initialized', {});
+    render();
+  }).catch(function () {
+    notify('ui/notifications/initialized', {});
+  });
+})();
+</script>
+</body>
+</html>

@@ -45,6 +45,8 @@ With the TYPO3 MCP Server, your AI assistant can help you:
 - **Upload From Your Machine**: "Upload the team photo from my Desktop and add it to the about page" - You get a single-use upload link, so the file goes directly to TYPO3 instead of through the AI's context
 
 All these operations happen safely in workspaces, giving you full control to review before publishing!
+In AI clients that support [MCP Apps](Documentation/Architecture/McpApps.md), every change appears right in the chat
+with what changed, a preview link and buttons to publish or discard it.
 
 > 💡 **Want to know how it works?** Check out our [Technical Overview](TECHNICAL_OVERVIEW.md) for detailed information about the implementation, available tools, and real-world examples with actual tool calls.
 
@@ -172,6 +174,7 @@ Tools are defined in the `Classes/MCP/Tool` directory. Each tool follows the MCP
   - [Language Overlays](Documentation/Architecture/LanguageOverlays.md) - Multi-language content handling
   - [Inline Relations](Documentation/Architecture/InlineRelations.md) - Managing TYPO3's complex relation types
   - [Record URLs](Documentation/Architecture/RecordUrls.md) - Frontend URLs of records and workspace preview links
+  - [MCP Apps](Documentation/Architecture/McpApps.md) - Reviewing, publishing and discarding changes right in the chat
 
 ## License
 

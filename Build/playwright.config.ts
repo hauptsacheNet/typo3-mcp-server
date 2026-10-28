@@ -25,6 +25,11 @@ export default defineConfig({
       testMatch: /helper\/login\.setup\.ts/,
     },
     {
+      // MCP Apps views in a mocked host, no TYPO3 needed
+      name: 'views',
+      testMatch: /views\/.*\.spec\.ts/,
+    },
+    {
       name: 'e2e',
       testMatch: /e2e\/.*\.spec\.ts/,
       dependencies: ['login setup'],

@@ -123,6 +123,11 @@ The MCP Server provides these tools for interacting with TYPO3:
 - **WriteTable** - Create, update, or delete records (safely in workspace)
 - **UploadFile** - Add new files to the file storage from a URL (including YouTube/Vimeo), from raw text content, or via a single-use upload token for local files (`/mcp_upload`, see below); never overwrites or deletes existing files
 
+### Change Review (MCP Apps)
+- **ReviewChange** - Not visible to the AI: called by the change review view that clients with
+  MCP Apps show next to every `WriteTable` call, to show the change and to publish or discard it
+  on the user's click. See [MCP Apps](Documentation/Architecture/McpApps.md).
+
 > Each tool provides detailed schema information when called. See the Real-World Scenarios below for practical examples.
 
 ## Real-World Scenarios
@@ -365,8 +370,8 @@ While the MCP Server is powerful, some features are still in development:
 
 ### Direct Workspace Management
 - Cannot create/delete workspaces
-- Cannot manually publish changes
-- Must use TYPO3 backend for workspace operations
+- The AI cannot publish changes. In clients with MCP Apps the user can publish or discard a single
+  change in the chat, otherwise the TYPO3 backend is needed
 
 ### Bulk Operations Optimization
 - Large batch operations may be slow

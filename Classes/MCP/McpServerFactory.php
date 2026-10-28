@@ -4,12 +4,19 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP;
 
+use Hn\McpServer\MCP\Tool\AppOnlyToolInterface;
+use Mcp\Server\McpServerException;
 use Mcp\Server\Server;
 use Mcp\Server\InitializationOptions;
 use Mcp\Server\NotificationOptions;
 use Mcp\Types\CallToolResult;
+use Mcp\Types\ExtensionIds;
+use Mcp\Types\ListResourcesResult;
 use Mcp\Types\ListToolsResult;
+use Mcp\Types\ReadResourceResult;
+use Mcp\Types\Resource;
 use Mcp\Types\TextContent;
+use Mcp\Types\TextResourceContents;
 use Mcp\Types\Tool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Utility\ExtensionManagementUtility;
@@ -81,12 +88,19 @@ class McpServerFactory
         $toolRegistry = $this->toolRegistry;
         $debug = $debugLogger ?? static fn($msg) => null;
 
+        // MCP Apps: views rendered by the host next to tool calls (Documentation/Architecture/McpApps.md)
+        $server->declareExtension(ExtensionIds::UI, ['mimeTypes' => [McpApps::MIME_TYPE]]);
+
         // Register tool/list handler
-        $server->registerHandler('tools/list', static function () use ($toolRegistry, $debug) {
+        $server->registerHandler('tools/list', static function () use ($server, $toolRegistry, $debug) {
             $debug('Handling tools/list request');
             $tools = [];
+            $appsSupported = McpApps::isSupportedByClient($server);
 
             foreach ($toolRegistry->getTools() as $tool) {
+                if ($tool instanceof AppOnlyToolInterface && !$appsSupported) {
+                    continue;
+                }
                 // Normalize to plain arrays first: getSchema() may hand back a
                 // \stdClass for an empty "properties" object, which
                 // ToolInputSchema::fromArray() rejects. The round trip preserves
@@ -104,13 +118,16 @@ class McpServerFactory
         });
 
         // Register tool/call handler
-        $server->registerHandler('tools/call', static function ($params) use ($toolRegistry, $debug) {
+        $server->registerHandler('tools/call', static function ($params) use ($server, $toolRegistry, $debug) {
             $toolName = $params->name;
             $arguments = $params->arguments;
 
             $debug('Handling tools/call request for tool: ' . $toolName);
 
             $tool = $toolRegistry->getTool($toolName);
+            if ($tool instanceof AppOnlyToolInterface && !McpApps::isSupportedByClient($server)) {
+                $tool = null;
+            }
             if (!$tool) {
                 throw new \InvalidArgumentException('Tool not found: ' . $toolName);
             }
@@ -124,6 +141,34 @@ class McpServerFactory
                     true
                 );
             }
+        });
+
+        $server->registerHandler('resources/list', static function () {
+            $resources = [];
+            foreach (McpApps::getViews() as $uri => $view) {
+                $resource = new Resource(
+                    name: $view['name'],
+                    uri: $uri,
+                    description: $view['description'],
+                    mimeType: McpApps::MIME_TYPE,
+                );
+                $resource->setExtraField('_meta', McpApps::getViewMeta());
+                $resources[] = $resource;
+            }
+            return new ListResourcesResult($resources);
+        });
+
+        $server->registerHandler('resources/read', static function ($params) use ($server, $debug) {
+            $uri = (string)$params->uri;
+            $debug('Handling resources/read request for: ' . $uri);
+
+            $html = McpApps::getViewHtml($uri);
+            if ($html === null) {
+                throw McpServerException::unknownResource($uri, $server->clientSupportsFeature('resource_not_found_invalid_params'));
+            }
+            $contents = new TextResourceContents(text: $html, uri: $uri, mimeType: McpApps::MIME_TYPE);
+            $contents->setExtraField('_meta', McpApps::getViewMeta());
+            return new ReadResourceResult([$contents]);
         });
     }
 }

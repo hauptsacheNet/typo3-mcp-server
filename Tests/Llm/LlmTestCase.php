@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Llm;
 
+use Hn\McpServer\MCP\Tool\AppOnlyToolInterface;
 use Hn\McpServer\MCP\Tool\ToolInterface;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Tests\Llm\Client\LlmClientInterface;
@@ -274,6 +275,10 @@ abstract class LlmTestCase extends FunctionalTestCase
         $functions = [];
         
         foreach ($toolRegistry->getTools() as $tool) {
+            // Only MCP Apps views call these, hosts never offer them to the model
+            if ($tool instanceof AppOnlyToolInterface) {
+                continue;
+            }
             $schema = $tool->getSchema();
             
             $functions[] = [
