@@ -32,6 +32,9 @@ class McpAppsEndpointTest extends AbstractFunctionalTest
     protected function setUp(): void
     {
         parent::setUp();
+        // All requests run in this one process, where WorkspaceService caches the available
+        // workspaces at runtime: a workspace created by the first request would stay unknown.
+        $this->importCSVDataSet(__DIR__ . '/../Fixtures/sys_workspace.csv');
         $this->previousRequest = $GLOBALS['TYPO3_REQUEST'] ?? null;
     }
 
@@ -154,8 +157,10 @@ class McpAppsEndpointTest extends AbstractFunctionalTest
         $body = json_decode((string)$response->getBody(), true);
         $this->assertFalse($body['result']['isError'] ?? true, (string)$response->getBody());
         $review = $body['result']['structuredContent'];
-        $this->assertTrue($review['pending']);
+        $this->assertTrue($review['pending'], json_encode($review));
         $this->assertSame('changed', $review['record']['state']);
+        $this->assertSame('Welcome Header', $this->connectionPool->getConnectionForTable('tt_content')
+            ->select(['header'], 'tt_content', ['uid' => 100])->fetchOne(), 'Live must stay untouched');
         $this->assertContains('Reviewed header', array_column($review['record']['fields'], 'after'));
     }
 

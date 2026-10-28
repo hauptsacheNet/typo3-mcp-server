@@ -312,6 +312,9 @@ class WorkspaceChangeService
         }
         $pid = (int)($version['pid'] ?? 0);
 
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        $bookkeepingFields = array_filter([$ctrl['tstamp'] ?? null, $ctrl['crdate'] ?? null, $ctrl['origUid'] ?? null, $ctrl['transOrigDiffSourceField'] ?? null, $ctrl['sortby'] ?? null]);
+
         $fields = [];
         if ($live !== null && (int)$live['pid'] !== $pid) {
             $fields[] = [
@@ -325,6 +328,7 @@ class WorkspaceChangeService
             $config = $columns[$field]['config'] ?? null;
             if (!is_array($config)
                 || in_array($field, self::IGNORED_COLUMNS, true)
+                || in_array($field, $bookkeepingFields, true)
                 || str_starts_with($field, 't3ver_')
                 || in_array($config['type'] ?? '', ['inline', 'file', 'passthrough', 'none'], true)
                 || !$this->tableAccessService->canAccessField($table, $field, $type, $pid)
@@ -337,7 +341,10 @@ class WorkspaceChangeService
             }
             $after = $this->formatValue($table, $field, $version[$field] ?? null, $version);
             $before = $live !== null ? $this->formatValue($table, $field, $live[$field] ?? null, $live) : '';
-            if ($before === $after) {
+            // DataHandler fills an empty slug of a live record when it versions the record,
+            // that is not a change of the editor (and of an unchanged parent).
+            $isGeneratedSlug = $live !== null && ($config['type'] ?? '') === 'slug' && $before === '';
+            if ($before === $after || $isGeneratedSlug) {
                 continue;
             }
             $fields[] = [

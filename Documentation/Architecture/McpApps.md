@@ -47,7 +47,9 @@ stages unchanged copies of the parent and its other children, those are left out
 record has a state (`new`, `changed`, `moved`, `deleted`, `unchanged` for a parent that
 is only versioned because a child changed) and its changed fields with TCA labels and
 display values (`BackendUtility::getProcessedValue()`; rich text as plain text, FlexForms
-as `setting: value` lines). Only fields the user may access are shown.
+as `setting: value` lines). Only fields the user may access are shown. Bookkeeping fields
+(`tstamp`, `crdate`, sorting, …) and slugs that DataHandler generates for a live record with
+an empty slug when versioning it are no change of the editor and left out.
 
 Publish and discard act on the whole root: the root version and every version below it,
 including the unchanged staged copies, go into one DataHandler command map
