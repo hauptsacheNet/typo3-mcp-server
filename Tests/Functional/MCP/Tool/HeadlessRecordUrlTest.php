@@ -126,6 +126,33 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
         $this->assertContains('www.example.de', $domains);
     }
 
+    /**
+     * EXT:headless reads a frontendBase without scheme as domain.
+     */
+    public function testFrontendBaseWithoutSchemeIsAcceptedByGetPage(): void
+    {
+        $this->writeSiteConfiguration(1, '', null, 'www.example.com');
+
+        $this->assertContains('www.example.com', GeneralUtility::makeInstance(SiteInformationService::class)->getAllDomains());
+        $text = $this->executeGetPage(['url' => 'https://www.example.com/about/team']);
+        $this->assertStringContainsString('UID: 4' . "\n", $text);
+    }
+
+    /**
+     * A frontend served below a path: EXT:headless prefixes the page path with it,
+     * GetPage has to strip it again.
+     */
+    public function testFrontendBaseWithPathRoundTrips(): void
+    {
+        $this->writeSiteConfiguration(1, '', null, 'https://www.example.com/app/');
+
+        $record = $this->readRecord('pages', 4);
+        $this->assertSame('https://www.example.com/app/about/team', $record['frontend_url'] ?? null);
+
+        $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => $record['frontend_url']]));
+        $this->assertStringContainsString('UID: 1' . "\n", $this->executeGetPage(['url' => 'https://www.example.com/app/']));
+    }
+
     private function readRecord(string $table, int $uid): array
     {
         $result = (new ReadTableTool())->execute(['table' => $table, 'uid' => $uid]);
@@ -150,9 +177,14 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
      * @param int $headlessMode 0 = off, 1 = full, 2 = mixed
      * @param string $germanFrontendBase Frontend domain of the German language, none when empty
      * @param int|null $previewOverrideMode Site setting headless.preview.overrideMode, unset when null
+     * @param string $frontendBase Site-wide frontendBase
      */
-    private function writeSiteConfiguration(int $headlessMode, string $germanFrontendBase = '', ?int $previewOverrideMode = null): void
-    {
+    private function writeSiteConfiguration(
+        int $headlessMode,
+        string $germanFrontendBase = '',
+        ?int $previewOverrideMode = null,
+        string $frontendBase = 'https://www.example.com/'
+    ): void {
         $german = [
             'title' => 'German',
             'enabled' => true,
@@ -174,7 +206,7 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
         GeneralUtility::writeFile($siteDir . '/config.yaml', Yaml::dump([
             'rootPageId' => 1,
             'base' => 'https://api.example.com/',
-            'frontendBase' => 'https://www.example.com/',
+            'frontendBase' => $frontendBase,
             'headless' => $headlessMode,
             'websiteTitle' => 'Test Site',
             'languages' => [
