@@ -6,6 +6,7 @@ namespace Hn\McpServer\Service;
 
 use Hn\McpServer\Http\RequestUrlTrait;
 use Psr\Http\Message\ServerRequestInterface;
+use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -123,6 +124,11 @@ class SiteInformationService
             if (!empty($host) && $host !== '/') {
                 $domains[] = $host;
             }
+
+            // Domains of a decoupled frontend (EXT:headless): visitors know the site by these
+            foreach ($this->getFrontendHosts($site) as $frontendHost) {
+                $domains[] = $frontendHost;
+            }
             
             // Check if the site has base variants (method may not exist in all TYPO3 versions)
             if (method_exists($site, 'getBaseVariants')) {
@@ -144,6 +150,83 @@ class SiteInformationService
         }
 
         return array_unique($domains);
+    }
+
+    /**
+     * Whether a URL host belongs to the site: its base, or the frontendBase of a
+     * decoupled frontend (EXT:headless) that serves the same page tree.
+     */
+    public function isSiteHost(Site $site, string $host): bool
+    {
+        $baseHost = $site->getBase()->getHost();
+        return $baseHost === '' || $baseHost === $host || in_array($host, $this->getFrontendHosts($site), true);
+    }
+
+    /**
+     * Hosts of the `frontendBase` settings EXT:headless reads from the site
+     * configuration: site-wide, per language and in their base variants.
+     *
+     * @return string[]
+     */
+    public function getFrontendHosts(Site $site): array
+    {
+        $hosts = array_map(static fn(array $frontendBase): string => $frontendBase['host'], $this->getFrontendBases($site));
+        return array_values(array_unique($hosts));
+    }
+
+    /**
+     * Map a path of a decoupled frontend URL to the site's own path. EXT:headless
+     * builds frontend URLs as frontendBase path + page path below the site base,
+     * so "https://www.example.com/app/about" for a frontendBase
+     * "https://www.example.com/app" is "/about" below the site base.
+     * Paths on other hosts are returned unchanged.
+     */
+    public function mapFrontendPathToSite(Site $site, string $host, string $path): string
+    {
+        foreach ($this->getFrontendBases($site) as $frontendBase) {
+            $prefix = $frontendBase['path'];
+            if ($frontendBase['host'] !== $host || $prefix === '') {
+                continue;
+            }
+            if ($path !== $prefix && !str_starts_with($path, $prefix . '/')) {
+                continue;
+            }
+            $sitePath = rtrim($site->getBase()->getPath(), '/');
+            return $sitePath . '/' . ltrim(substr($path, strlen($prefix)), '/');
+        }
+        return $path;
+    }
+
+    /**
+     * Host and path (without trailing slash) of every `frontendBase` of the site.
+     * Values without scheme ("www.example.com") are read as domain, as EXT:headless does.
+     *
+     * @return array<int, array{host: string, path: string}>
+     */
+    protected function getFrontendBases(Site $site): array
+    {
+        $configuration = $site->getConfiguration();
+        $configurations = [$configuration, ...($configuration['baseVariants'] ?? [])];
+        foreach ($configuration['languages'] ?? [] as $language) {
+            $configurations[] = $language;
+            foreach ($language['baseVariants'] ?? [] as $variant) {
+                $configurations[] = $variant;
+            }
+        }
+
+        $frontendBases = [];
+        foreach ($configurations as $entry) {
+            $frontendBase = trim((string)($entry['frontendBase'] ?? ''));
+            if ($frontendBase !== '' && !str_contains($frontendBase, '//') && $frontendBase[0] !== '/') {
+                $frontendBase = '//' . $frontendBase;
+            }
+            $host = $frontendBase !== '' ? parse_url($frontendBase, PHP_URL_HOST) : null;
+            if (is_string($host) && $host !== '') {
+                $path = (string)parse_url($frontendBase, PHP_URL_PATH);
+                $frontendBases[] = ['host' => $host, 'path' => rtrim($path, '/')];
+            }
+        }
+        return $frontendBases;
     }
 
     /**

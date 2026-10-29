@@ -103,7 +103,8 @@ The defaults work out of the box. All settings live in the extension configurati
 
 Records other than pages and content elements (news, events, ...) get a frontend URL once
 `TCEMAIN.preview.<table>` is configured in Page TSconfig — the same setting that powers the
-"View" button in the backend. See [Record URLs](Documentation/Architecture/RecordUrls.md).
+"View" button in the backend. With EXT:headless the URLs point at the decoupled frontend
+(`frontendBase`). See [Record URLs](Documentation/Architecture/RecordUrls.md).
 
 ## Usage
 

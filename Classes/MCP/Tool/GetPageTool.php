@@ -707,10 +707,12 @@ class GetPageTool extends AbstractRecordTool
         // This handles cases like "www.example.com" or "www.example.com/about".
         if (!str_contains($url, '://') && !str_starts_with($url, '/')) {
             foreach ($siteFinder->getAllSites() as $site) {
-                $siteHost = $site->getBase()->getHost();
-                if (!empty($siteHost) && str_starts_with($url, $siteHost)) {
-                    $url = 'https://' . $url;
-                    break;
+                $siteHosts = [$site->getBase()->getHost(), ...$this->siteInformationService->getFrontendHosts($site)];
+                foreach ($siteHosts as $siteHost) {
+                    if (!empty($siteHost) && str_starts_with($url, $siteHost)) {
+                        $url = 'https://' . $url;
+                        break 2;
+                    }
                 }
             }
         }
@@ -724,17 +726,14 @@ class GetPageTool extends AbstractRecordTool
         // Normalize: ensure leading slash, strip trailing slash (slugs in DB have no trailing slash)
         $path = '/' . trim($path, '/');
 
-        // Special handling for home page
+        // Special handling for home page (a frontendBase with a path is resolved below)
         if ($path === '/') {
             // Try to find the root page from any site
             foreach ($siteFinder->getAllSites() as $site) {
                 // Check if this URL belongs to this site (if host is specified)
-                if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
-                        continue;
-                    }
+                // A site without host (base is just "/") matches any host
+                if (isset($parsedUrl['host']) && !$this->siteInformationService->isSiteHost($site, $parsedUrl['host'])) {
+                    continue;
                 }
                 return $site->getRootPageId();
             }
@@ -743,22 +742,28 @@ class GetPageTool extends AbstractRecordTool
         // Try each site to find a match using the router
         $allSites = $siteFinder->getAllSites();
         $matchedAnySite = false;
+        $slugPath = $path;
         
         foreach ($allSites as $site) {
             try {
                 // Check if this URL belongs to this site (if host is specified)
                 if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
+                    // A site without host (base is just "/") matches any host
+                    if (!$this->siteInformationService->isSiteHost($site, $parsedUrl['host'])) {
                         continue;
                     }
                     $matchedAnySite = true;
                 }
                 
+                // A decoupled frontend (EXT:headless) may serve the site below a path of its own
+                $sitePath = isset($parsedUrl['host'])
+                    ? $this->siteInformationService->mapFrontendPathToSite($site, $parsedUrl['host'], $path)
+                    : $path;
+                $slugPath = $sitePath;
+
                 // Try to resolve the path/slug using the site's router
                 $router = $site->getRouter();
-                $request = $this->createServerRequest($site, $path, $languageId);
+                $request = $this->createServerRequest($site, $sitePath, $languageId);
                 $pageArguments = $router->matchRequest($request);
                 
                 if ($pageArguments instanceof PageArguments) {
@@ -787,7 +792,7 @@ class GetPageTool extends AbstractRecordTool
         $page = $queryBuilder->select('uid')
             ->from('pages')
             ->where(
-                $queryBuilder->expr()->eq('slug', $queryBuilder->createNamedParameter($path))
+                $queryBuilder->expr()->eq('slug', $queryBuilder->createNamedParameter($slugPath))
             )
             ->executeQuery()
             ->fetchAssociative();

@@ -78,6 +78,12 @@ services:
         method: onRecordRead
         identifier: 'mcp-server/record-url-read'
 
+  Hn\McpServer\EventListener\HeadlessFrontendUrlListener:
+    tags:
+      - name: event.listener
+        event: Hn\McpServer\Event\AfterRecordUrlGeneratedEvent
+        identifier: 'mcp-server/headless-frontend-url'
+
   Hn\McpServer\EventListener\SysFileMountRestrictionListener:
     tags:
       - name: event.listener
