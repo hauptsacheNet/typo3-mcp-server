@@ -9,6 +9,10 @@ use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
+use TYPO3\CMS\Core\Context\Context;
+use TYPO3\CMS\Core\Context\LanguageAspect;
+use TYPO3\CMS\Core\Context\VisibilityAspect;
+use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
@@ -188,6 +192,41 @@ abstract class AbstractRecordTool extends AbstractTool
             return '';
         }
         return '[WORKSPACE: "' . $info['title'] . '" — Edits are staged as drafts, not yet live.]' . "\n\n";
+    }
+
+    /**
+     * PageRepository that overlays records with their translation in the given language.
+     *
+     * Always uses OVERLAYS_MIXED regardless of the site's fallbackType, see
+     * Documentation/Architecture/LanguageOverlays.md. Hidden and scheduled translations
+     * are included like in the backend; otherwise they would look untranslated.
+     */
+    protected function createLanguageOverlayRepository(int $languageId): PageRepository
+    {
+        $context = clone GeneralUtility::makeInstance(Context::class);
+        $context->setAspect('language', new LanguageAspect(
+            $languageId,
+            $languageId,
+            LanguageAspect::OVERLAYS_MIXED,
+            [$languageId]
+        ));
+        $context->setAspect('visibility', new VisibilityAspect(true, true, false, true));
+        return GeneralUtility::makeInstance(PageRepository::class, $context);
+    }
+
+    /**
+     * Live uid of the translation record a language overlay was taken from,
+     * or null when the row was not overlaid.
+     *
+     * The overlay copies the translation's t3ver_oid into the row, so a workspace
+     * version of the translation maps back to its live uid like everywhere else.
+     */
+    protected function getOverlayTranslationUid(array $overlaidRow): ?int
+    {
+        if (!isset($overlaidRow['_LOCALIZED_UID'])) {
+            return null;
+        }
+        return (int)($overlaidRow['t3ver_oid'] ?? 0) ?: (int)$overlaidRow['_LOCALIZED_UID'];
     }
 
 }

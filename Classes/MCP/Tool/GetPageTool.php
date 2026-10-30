@@ -20,8 +20,6 @@ use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Routing\PageArguments;
 use TYPO3\CMS\Core\Exception\Page\PageNotFoundException;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
-use TYPO3\CMS\Core\Context\Context;
-use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
@@ -137,6 +135,16 @@ class GetPageTool extends AbstractRecordTool
             throw new \InvalidArgumentException('Invalid page UID or URL. Please provide a valid page ID or URL.');
         }
 
+        // Language views list translated pages under the translation's uid; such a uid
+        // shows its default-language page in the translation's language
+        $translatedPage = BackendUtility::getRecordWSOL('pages', $uid);
+        if ((int)($translatedPage['sys_language_uid'] ?? 0) > 0 && (int)($translatedPage['l10n_parent'] ?? 0) > 0) {
+            $uid = (int)$translatedPage['l10n_parent'];
+            if (!isset($params['language']) && !isset($params['languageId'])) {
+                $languageId = (int)$translatedPage['sys_language_uid'];
+            }
+        }
+
         // Get page data (with language overlay if applicable)
         $pageData = $this->getPageData($uid, $languageId);
         
@@ -225,25 +233,19 @@ class GetPageTool extends AbstractRecordTool
             't3ver_state' => (int)($page['t3ver_state'] ?? 0),
         ];
 
-        // Apply language overlay if language is specified
+        // Apply language overlay if language is specified. The overlay keeps the
+        // default-language uid in 'uid' (needed for URLs and the record lookup);
+        // the translation record's uid is kept apart in '_translationUid'.
         if ($languageId > 0) {
-            // Create a context with the specified language for PageRepository overlay
-            $context = GeneralUtility::makeInstance(Context::class);
-            $languageAspect = new LanguageAspect(
-                $languageId,
-                $languageId,
-                LanguageAspect::OVERLAYS_MIXED,
-                [$languageId]
-            );
-            $context->setAspect('language', $languageAspect);
-
-            $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
+            $pageRepository = $this->createLanguageOverlayRepository($languageId);
             $overlaidPage = $pageRepository->getPageOverlay($page, $languageId);
+            $translationUid = $this->getOverlayTranslationUid($overlaidPage);
 
             // Add our custom metadata
-            if ($overlaidPage !== $page) {
+            if ($translationUid !== null) {
                 // Page was overlaid
                 $overlaidPage['_translated'] = true;
+                $overlaidPage['_translationUid'] = $translationUid;
                 $overlaidPage['_language_uid'] = $languageId;
                 if (isset($page['title']) && isset($overlaidPage['title']) && $page['title'] !== $overlaidPage['title']) {
                     $overlaidPage['_original_title'] = $page['title'];
@@ -315,23 +317,28 @@ class GetPageTool extends AbstractRecordTool
     {
         // Get all tables that can be on a page
         $tables = $this->getContentTables();
-        
+        $pageRepository = $languageId > 0 ? $this->createLanguageOverlayRepository($languageId) : null;
+
         $recordsInfo = [];
-        
+
         foreach ($tables as $table) {
             $tableInfo = $this->getTableRecordsInfo($table, $pageId);
-            
+
+            if (!empty($tableInfo['records']) && $this->tableHasLanguageSupport($table)) {
+                $records = $pageRepository !== null
+                    ? $this->overlayRecordsForLanguage($table, $tableInfo['records'], $languageId, $pageRepository)
+                    : $this->filterDefaultLanguageRecords($table, $tableInfo['records']);
+                // The count query covers all languages
+                $tableInfo = [
+                    'total' => count($records),
+                    'records' => $records,
+                ];
+            }
             if (!empty($tableInfo['records'])) {
-                // Filter records by language for tables that have language support
-                if ($this->tableHasLanguageSupport($table)) {
-                    $tableInfo = $this->filterRecordsByLanguage($tableInfo, $languageId);
-                }
-                if (!empty($tableInfo['records'])) {
-                    $recordsInfo[$table] = $tableInfo;
-                }
+                $recordsInfo[$table] = $tableInfo;
             }
         }
-        
+
         return $recordsInfo;
     }
     
@@ -465,32 +472,89 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
-     * Filter records by language
+     * Keep only default-language and "all languages" records
      */
-    protected function filterRecordsByLanguage(array $tableInfo, int $languageId): array
+    protected function filterDefaultLanguageRecords(string $table, array $records): array
     {
-        $filteredRecords = [];
-        
-        foreach ($tableInfo['records'] as $record) {
-            $recordLang = (int)($record['sys_language_uid'] ?? 0);
-            
-            if ($languageId === 0) {
-                // Default language: only show records with sys_language_uid = 0
-                if ($recordLang === 0 || $recordLang === -1) {
-                    $filteredRecords[] = $record;
-                }
-            } else {
-                // Specific language: show records in that language or default language
-                if ($recordLang === $languageId || $recordLang === 0 || $recordLang === -1) {
-                    $filteredRecords[] = $record;
+        $languageField = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
+        return array_values(array_filter(
+            $records,
+            static fn(array $record): bool => (int)($record[$languageField] ?? 0) <= 0
+        ));
+    }
+
+    /**
+     * Show the records of one table as they appear in the given language.
+     *
+     * Every default-language record is overlaid with its translation by the core.
+     * A translated record is listed once, under the translation's uid; untranslated
+     * ones keep their own uid. Records only existing in the language (free mode)
+     * are kept; other translations are covered by their original or orphaned.
+     * '_languageLabel' tells the client which record it is looking at.
+     *
+     * @param array $records Workspace-overlaid rows with live uids, in display order
+     */
+    protected function overlayRecordsForLanguage(string $table, array $records, int $languageId, PageRepository $pageRepository): array
+    {
+        $languageField = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
+        $pointerField = $GLOBALS['TCA'][$table]['ctrl']['transOrigPointerField'] ?? '';
+        $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageId) ?? (string)$languageId);
+        $defaultIsoCode = strtoupper($this->languageService->getDefaultIsoCode() ?? 'default');
+
+        // Loaded translations by their original's uid. Fallback for translations the core
+        // overlay does not select, e.g. because of frontend group restrictions.
+        $loadedTranslations = [];
+        if ($pointerField !== '') {
+            foreach ($records as $record) {
+                $originalUid = (int)($record[$pointerField] ?? 0);
+                if ((int)($record[$languageField] ?? 0) === $languageId && $originalUid > 0) {
+                    $loadedTranslations[$originalUid] ??= $record;
                 }
             }
         }
-        
-        return [
-            'total' => count($filteredRecords),
-            'records' => $filteredRecords,
-        ];
+
+        $entries = [];
+        $listedTranslationUids = [];
+        foreach ($records as $record) {
+            $recordLanguage = (int)($record[$languageField] ?? 0);
+            if ($recordLanguage === -1) {
+                $record['_languageLabel'] = 'all languages';
+                $entries[] = $record;
+            } elseif ($recordLanguage === 0) {
+                $originalUid = (int)$record['uid'];
+                $overlaid = $pageRepository->getLanguageOverlay($table, $record);
+                $translationUid = is_array($overlaid) ? $this->getOverlayTranslationUid($overlaid) : null;
+                if ($translationUid === null && isset($loadedTranslations[$originalUid])) {
+                    $overlaid = $loadedTranslations[$originalUid];
+                    $translationUid = (int)$overlaid['uid'];
+                }
+                if ($translationUid !== null) {
+                    $overlaid['uid'] = $translationUid;
+                    $overlaid['_languageLabel'] = $isoCode . ', translates ' . $originalUid;
+                    $listedTranslationUids[$translationUid] = true;
+                    $entries[] = $overlaid;
+                } else {
+                    $record['_languageLabel'] = $defaultIsoCode . ' original, not translated';
+                    $entries[] = $record;
+                }
+            } elseif ($recordLanguage === $languageId) {
+                // Decided below, once all overlays are known
+                $entries[] = $record;
+            }
+        }
+
+        $result = [];
+        foreach ($entries as $entry) {
+            if (!isset($entry['_languageLabel'])) {
+                $isConnectedTranslation = $pointerField !== '' && (int)($entry[$pointerField] ?? 0) > 0;
+                if ($isConnectedTranslation || isset($listedTranslationUids[(int)$entry['uid']])) {
+                    continue;
+                }
+                $entry['_languageLabel'] = $isoCode;
+            }
+            $result[] = $entry;
+        }
+        return $result;
     }
     
     /**
@@ -501,8 +565,9 @@ class GetPageTool extends AbstractRecordTool
         $result = "PAGE INFORMATION\n";
         $result .= "================\n\n";
         
-        // Basic page info
-        $result .= "UID: " . $pageData['uid'] . "\n";
+        // Basic page info. In a language view the translation record is the one to
+        // edit, so its uid is the primary one.
+        $result .= "UID: " . ($pageData['_translationUid'] ?? $pageData['uid']) . "\n";
         $result .= "Title: " . $pageData['title'] . "\n";
         
         if (isset($pageUrls['frontend_url'])) {
@@ -534,9 +599,14 @@ class GetPageTool extends AbstractRecordTool
         
         // Add language/translation information
         if ($languageId > 0) {
-            $isoCode = $this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown';
-            $result .= "Language: " . strtoupper($isoCode) . " (ID: $languageId)\n";
-            $result .= "Translated: " . (($pageData['_translated'] ?? false) ? 'Yes' : 'No') . "\n";
+            $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown');
+            $result .= "Language: " . $isoCode . " (ID: $languageId)\n";
+            if (isset($pageData['_translationUid'])) {
+                $result .= "Translated: Yes (" . $isoCode . " translation of page " . $pageData['uid'] . ")\n";
+            } else {
+                $result .= "Translated: No (default-language record — use WriteTable action \"translate\" to create the "
+                    . $isoCode . " translation)\n";
+            }
         }
         
         // Show available translations
@@ -576,7 +646,7 @@ class GetPageTool extends AbstractRecordTool
             if ($displayCount > 0) {
                 foreach ($records as $record) {
                     $title = RecordFormattingUtility::getRecordTitle($table, $record);
-                    $result .= "- [" . $record['uid'] . "] " . $title . "\n";
+                    $result .= "- [" . $record['uid'] . "] " . $title . $this->formatLanguageLabel($record) . "\n";
                 }
                 
                 if ($displayCount < $totalCount) {
@@ -592,6 +662,14 @@ class GetPageTool extends AbstractRecordTool
         return $result;
     }
     
+    /**
+     * Language label of a record in a language view, e.g. " (EN, translates 504)"
+     */
+    protected function formatLanguageLabel(array $record): string
+    {
+        return isset($record['_languageLabel']) ? ' (' . $record['_languageLabel'] . ')' : '';
+    }
+
     /**
      * Format content elements grouped by column position
      */
@@ -636,7 +714,8 @@ class GetPageTool extends AbstractRecordTool
                 $title = RecordFormattingUtility::getRecordTitle('tt_content', $element);
                 $cType = $element['CType'] ?? 'unknown';
                 $cTypeLabel = RecordFormattingUtility::getContentTypeLabel($cType);
-                $result .= "- [" . $element['uid'] . "] " . $title . " (Type: " . $cTypeLabel . " [" . $cType . "])\n";
+                $result .= "- [" . $element['uid'] . "] " . $title . $this->formatLanguageLabel($element)
+                    . " (Type: " . $cTypeLabel . " [" . $cType . "])\n";
                 
                 // Show important fields based on content type
                 switch ($cType) {

@@ -14,8 +14,6 @@ use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
-use TYPO3\CMS\Core\Context\Context;
-use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\RecordUrlService;
@@ -184,22 +182,9 @@ class GetPageTreeTool extends AbstractRecordTool
         // Execute the query
         $pages = $query->executeQuery()->fetchAllAssociative();
 
-        // Set up context for language and visibility
-        $context = GeneralUtility::makeInstance(Context::class);
-
-        // Set up language aspect if needed
-        if ($languageUid !== null && $languageUid > 0) {
-            $languageAspect = new LanguageAspect(
-                $languageUid,
-                $languageUid,
-                LanguageAspect::OVERLAYS_MIXED,
-                [$languageUid]
-            );
-            $context->setAspect('language', $languageAspect);
-        }
-
-        // Create PageRepository with context
-        $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
+        $pageRepository = $languageUid !== null && $languageUid > 0
+            ? $this->createLanguageOverlayRepository($languageUid)
+            : null;
 
         // Process the result
         $pageTree = [];
@@ -242,15 +227,17 @@ class GetPageTreeTool extends AbstractRecordTool
             ];
 
             // Get language overlay if language specified
-            if ($languageUid !== null && $languageUid > 0) {
+            if ($pageRepository !== null) {
                 $overlaidPage = $pageRepository->getPageOverlay($page, $languageUid);
+                $translationUid = $this->getOverlayTranslationUid($overlaidPage);
 
-                if ($overlaidPage !== $page) {
+                if ($translationUid !== null) {
                     // Apply overlay data
                     $pageData['title'] = $overlaidPage['title'] ?: $pageData['title'];
                     $pageData['nav_title'] = $overlaidPage['nav_title'] ?: $pageData['nav_title'];
                     $pageData['hidden'] = (bool)$overlaidPage['hidden'];
                     $pageData['_translated'] = true;
+                    $pageData['_translationUid'] = $translationUid;
                 } else {
                     $pageData['_translated'] = false;
                 }
@@ -502,7 +489,9 @@ class GetPageTreeTool extends AbstractRecordTool
             
             // Add translation status if language specified
             if ($languageUid !== null && $languageUid > 0) {
-                if (isset($page['_translated'])) {
+                if (isset($page['_translationUid'])) {
+                    $result .= ' [TRANSLATED: ' . $page['_translationUid'] . ']';
+                } elseif (isset($page['_translated'])) {
                     $result .= $page['_translated'] ? ' [TRANSLATED]' : ' [NOT TRANSLATED]';
                 }
             }
