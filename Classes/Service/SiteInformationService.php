@@ -6,6 +6,7 @@ namespace Hn\McpServer\Service;
 
 use Hn\McpServer\Http\RequestUrlTrait;
 use Psr\Http\Message\ServerRequestInterface;
+use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -124,6 +125,11 @@ class SiteInformationService
                 $domains[] = $host;
             }
             
+            // Languages may be served on a domain of their own
+            foreach ($this->getSiteHosts($site) as $languageHost) {
+                $domains[] = $languageHost;
+            }
+            
             // Check if the site has base variants (method may not exist in all TYPO3 versions)
             if (method_exists($site, 'getBaseVariants')) {
                 foreach ($site->getBaseVariants() ?? [] as $variant) {
@@ -144,6 +150,29 @@ class SiteInformationService
         }
 
         return array_unique($domains);
+    }
+
+    /**
+     * Hosts the site is served on: its base and the bases of its languages,
+     * which may use a domain of their own.
+     *
+     * @return string[]
+     */
+    public function getSiteHosts(Site $site): array
+    {
+        $hosts = [$site->getBase()->getHost()];
+        foreach ($site->getAllLanguages() as $language) {
+            $hosts[] = $language->getBase()->getHost();
+        }
+        return array_values(array_unique(array_filter($hosts)));
+    }
+
+    /**
+     * Whether a URL host belongs to the site. A site without host (base is just "/") matches any host.
+     */
+    public function isSiteHost(Site $site, string $host): bool
+    {
+        return $site->getBase()->getHost() === '' || in_array($host, $this->getSiteHosts($site), true);
     }
 
     /**

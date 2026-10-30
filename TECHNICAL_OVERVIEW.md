@@ -275,9 +275,15 @@ The `GetPage` tool intelligently handles various URL formats:
 
 - **Full URLs**: `https://example.com/about-us`
 - **Paths**: `/about-us` or `about-us`  
-- **Multi-language**: Detects language from URL
-- **Domain validation**: Ensures URLs match configured sites
-- **Fallback strategies**: Router → slug lookup → ID
+- **Multi-language**: Detects the language from the URL (`/de/ueber-uns`, a language domain) and shows the page in it, unless `language` is given explicitly
+- **Domain validation**: Ensures URLs match configured sites (site base and language domains)
+- **Fallback strategies**: Router → exact slug lookup
+
+URLs are resolved like a frontend request: the core `SiteMatcher` finds site and language by
+their bases (site base path, language prefix or domain), then the site's `PageRouter` matches
+the rest (slugs, route enhancers such as `.html` suffixes). The router runs in the current
+workspace with hidden pages included, so slugs changed in the workspace resolve to the live uid.
+Only when the router finds nothing, the slug is looked up directly in the database.
 
 ### Record URLs and Preview Links
 

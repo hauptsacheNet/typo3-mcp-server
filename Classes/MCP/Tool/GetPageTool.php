@@ -18,10 +18,17 @@ use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Routing\PageArguments;
+use TYPO3\CMS\Core\Routing\RouteNotFoundException;
+use TYPO3\CMS\Core\Routing\SiteMatcher;
+use TYPO3\CMS\Core\Routing\SiteRouteResult;
+use TYPO3\CMS\Core\Http\NormalizedParams;
+use TYPO3\CMS\Core\Http\ServerRequest;
+use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Core\Exception\Page\PageNotFoundException;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\LanguageAspect;
+use TYPO3\CMS\Core\Context\VisibilityAspect;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
@@ -80,7 +87,7 @@ class GetPageTool extends AbstractRecordTool
         if (count($availableLanguages) > 1) {
             $schema['inputSchema']['properties']['language'] = [
                 'type' => 'string',
-                'description' => 'Language ISO code to show page and content in specific language (e.g., "de", "fr"). Shows translated content and metadata when available.',
+                'description' => 'Language ISO code to show page and content in specific language (e.g., "de", "fr"). Shows translated content and metadata when available. Defaults to the language of the URL (e.g. "/de/..."), if a URL is given.',
                 'enum' => $availableLanguages,
             ];
             
@@ -126,10 +133,15 @@ class GetPageTool extends AbstractRecordTool
             $uid = (int)$params['uid'];
         } elseif (isset($params['url'])) {
             try {
-                $uid = $this->resolveUrlToPageUid($params['url'], $languageId);
+                $page = $this->resolveUrlToPage($params['url']);
             } catch (\Throwable $e) {
                 // Re-throw as InvalidArgumentException to preserve the message in error handling
                 throw new \InvalidArgumentException($e->getMessage(), 0, $e);
+            }
+            $uid = $page['uid'];
+            // A URL addresses a language (e.g. "/de/about"), unless one is requested explicitly
+            if ($page['languageId'] !== null && !isset($params['language']) && !isset($params['languageId'])) {
+                $languageId = $page['languageId'];
             }
         }
 
@@ -691,14 +703,14 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
-     * Resolve a URL to a page UID
-     * 
+     * Resolve a URL to a page UID and the language the URL addresses
+     *
      * @param string $url The URL to resolve (can be full URL, path, or slug)
-     * @param int $languageId The language ID to use for resolution
-     * @return int The resolved page UID
+     * @return array{uid: int, languageId: int|null} The page UID (default language) and the
+     *         language of the URL, null when only the slug fallback found the page
      * @throws \Exception If the URL cannot be resolved
      */
-    protected function resolveUrlToPageUid(string $url, int $languageId = 0): int
+    protected function resolveUrlToPage(string $url): array
     {
         $siteFinder = GeneralUtility::makeInstance(SiteFinder::class);
         
@@ -707,10 +719,11 @@ class GetPageTool extends AbstractRecordTool
         // This handles cases like "www.example.com" or "www.example.com/about".
         if (!str_contains($url, '://') && !str_starts_with($url, '/')) {
             foreach ($siteFinder->getAllSites() as $site) {
-                $siteHost = $site->getBase()->getHost();
-                if (!empty($siteHost) && str_starts_with($url, $siteHost)) {
-                    $url = 'https://' . $url;
-                    break;
+                foreach ($this->siteInformationService->getSiteHosts($site) as $siteHost) {
+                    if (str_starts_with($url, $siteHost)) {
+                        $url = 'https://' . $url;
+                        break 2;
+                    }
                 }
             }
         }
@@ -724,22 +737,6 @@ class GetPageTool extends AbstractRecordTool
         // Normalize: ensure leading slash, strip trailing slash (slugs in DB have no trailing slash)
         $path = '/' . trim($path, '/');
 
-        // Special handling for home page
-        if ($path === '/') {
-            // Try to find the root page from any site
-            foreach ($siteFinder->getAllSites() as $site) {
-                // Check if this URL belongs to this site (if host is specified)
-                if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
-                        continue;
-                    }
-                }
-                return $site->getRootPageId();
-            }
-        }
-        
         // Try each site to find a match using the router
         $allSites = $siteFinder->getAllSites();
         $matchedAnySite = false;
@@ -748,25 +745,32 @@ class GetPageTool extends AbstractRecordTool
             try {
                 // Check if this URL belongs to this site (if host is specified)
                 if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
+                    if (!$this->siteInformationService->isSiteHost($site, $parsedUrl['host'])) {
                         continue;
                     }
                     $matchedAnySite = true;
                 }
                 
-                // Try to resolve the path/slug using the site's router
-                $router = $site->getRouter();
-                $request = $this->createServerRequest($site, $path, $languageId);
-                $pageArguments = $router->matchRequest($request);
-                
-                if ($pageArguments instanceof PageArguments) {
-                    return $pageArguments->getPageId();
+                // Resolve the path the way the frontend does: site and language by base, then the page
+                $request = $this->createServerRequest($site, $path, $parsedUrl['query'] ?? '', $parsedUrl['host'] ?? null);
+                $page = $this->matchPageRequest($request);
+                if ($page !== null) {
+                    return $page;
                 }
-            } catch (\Throwable $e) {
-                // Continue to next site
+            } catch (RouteNotFoundException) {
+                // Not a page of this site: continue with the next one. Other errors are not
+                // swallowed, they would silently degrade every lookup to the slug fallback.
                 continue;
+            }
+        }
+
+        // Home page of a site the router could not match (e.g. all languages have a prefix)
+        if ($path === '/') {
+            foreach ($allSites as $site) {
+                if (isset($parsedUrl['host']) && !$this->siteInformationService->isSiteHost($site, $parsedUrl['host'])) {
+                    continue;
+                }
+                return ['uid' => $site->getRootPageId(), 'languageId' => null];
             }
         }
         
@@ -775,7 +779,7 @@ class GetPageTool extends AbstractRecordTool
             throw new \RuntimeException('Could not resolve URL "' . $url . '" to a page. The domain does not match any configured site.');
         }
         
-        // If no match found via router AND no host was specified, try to find by slug directly in the database
+        // If no match found via router, try to find by slug directly in the database
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
         
@@ -793,56 +797,82 @@ class GetPageTool extends AbstractRecordTool
             ->fetchAssociative();
         
         if ($page) {
-            return (int)$page['uid'];
+            return ['uid' => (int)$page['uid'], 'languageId' => null];
         }
         
         throw new \RuntimeException('Could not resolve URL "' . $url . '" to a page. The path does not match any page.');
     }
 
     /**
-     * Create a server request for URL resolution
+     * Match a request with the frontend routing: the SiteMatcher resolves site and
+     * language from the bases (language prefix, site base path), the site's PageRouter
+     * the page from the remaining path (slugs, route enhancers).
+     *
+     * @return array{uid: int, languageId: int}|null
      */
-    protected function createServerRequest(Site $site, string $path, int $languageId): \Psr\Http\Message\ServerRequestInterface
+    protected function matchPageRequest(ServerRequestInterface $request): ?array
+    {
+        $siteRouteResult = GeneralUtility::makeInstance(SiteMatcher::class)->matchRequest($request);
+        $site = $siteRouteResult instanceof SiteRouteResult ? $siteRouteResult->getSite() : null;
+        $language = $siteRouteResult instanceof SiteRouteResult ? $siteRouteResult->getLanguage() : null;
+        if (!$site instanceof Site || $language === null) {
+            return null;
+        }
+
+        // Resolve in the current workspace, hidden and scheduled pages included like in the backend
+        $context = clone GeneralUtility::makeInstance(Context::class);
+        $context->setAspect('visibility', new VisibilityAspect(true, true, false, true));
+
+        $request = $request
+            ->withAttribute('site', $site)
+            ->withAttribute('language', $language)
+            ->withAttribute('routing', $siteRouteResult);
+        $pageArguments = $site->getRouter($context)->matchRequest($request, $siteRouteResult);
+        if (!$pageArguments instanceof PageArguments) {
+            return null;
+        }
+        return ['uid' => $pageArguments->getPageId(), 'languageId' => $language->getLanguageId()];
+    }
+
+    /**
+     * Create a frontend request for a path of the site.
+     *
+     * The URL host is kept when the site or one of its languages is served on it
+     * (language bases may use their own domain). Otherwise, e.g. for paths without
+     * host, the site base's scheme and host are used. The scheme always comes from
+     * the configured base, as the SiteMatcher requires it.
+     */
+    protected function createServerRequest(Site $site, string $path, string $query = '', ?string $host = null): ServerRequestInterface
     {
         // Ensure path starts with /
         if (!str_starts_with($path, '/')) {
             $path = '/' . $path;
         }
-        
-        // Create URI - don't double the slash
+
         $baseUri = $site->getBase();
-        $uri = $baseUri->withPath($path);
-        
-        // Create request with proper server variables
+        if ($host !== null) {
+            foreach ($site->getAllLanguages() as $language) {
+                if ($language->getBase()->getHost() === $host) {
+                    $baseUri = $language->getBase();
+                    break;
+                }
+            }
+        }
+        $uri = $baseUri->withPath($path)->withQuery($query)->withFragment('');
+
         $serverParams = [
             'REQUEST_METHOD' => 'GET',
-            'REQUEST_URI' => $path,
+            'REQUEST_URI' => $path . ($query !== '' ? '?' . $query : ''),
             'SCRIPT_NAME' => '/index.php',
-            'HTTP_HOST' => $baseUri->getHost() ?: 'localhost',
-            'HTTPS' => $baseUri->getScheme() === 'https' ? 'on' : 'off',
-            'SERVER_PORT' => $baseUri->getPort() ?: ($baseUri->getScheme() === 'https' ? 443 : 80),
+            'HTTP_HOST' => $uri->getHost() ?: 'localhost',
+            'HTTPS' => $uri->getScheme() === 'https' ? 'on' : 'off',
+            'SERVER_PORT' => $uri->getPort() ?: ($uri->getScheme() === 'https' ? 443 : 80),
         ];
-        
-        $request = new \TYPO3\CMS\Core\Http\ServerRequest($uri, 'GET', 'php://input', [], $serverParams);
-        $request = $request->withAttribute('site', $site);
-        
-        // Set language attribute
-        try {
-            $language = $languageId > 0 ? $site->getLanguageById($languageId) : $site->getDefaultLanguage();
-            $request = $request->withAttribute('language', $language);
-        } catch (\Throwable $e) {
-            // If language not found, use default
-            $request = $request->withAttribute('language', $site->getDefaultLanguage());
-        }
-        
-        // Add normalizedParams which might be needed by the router
-        $normalizedParams = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(
-            \TYPO3\CMS\Core\Http\NormalizedParams::class,
-            $serverParams
-        );
-        $request = $request->withAttribute('normalizedParams', $normalizedParams);
-        
-        return $request;
+        parse_str($query, $queryParams);
+
+        return (new ServerRequest($uri, 'GET', 'php://input', [], $serverParams))
+            ->withQueryParams($queryParams)
+            ->withAttribute('normalizedParams', NormalizedParams::createFromServerParams($serverParams));
     }
     
     /**
