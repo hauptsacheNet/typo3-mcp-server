@@ -7,7 +7,9 @@ namespace Hn\McpServer\Service;
 use Doctrine\DBAL\ArrayParameterType;
 use Hn\McpServer\Event\AfterSchemaLoadEvent;
 use Psr\EventDispatcher\EventDispatcherInterface;
+use TYPO3\CMS\Backend\Form\FormDataProvider\TcaTtContentCtypeItemsRestrictionByBackendLayout;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Backend\View\BackendLayoutView;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\Query\QueryHelper;
@@ -1092,8 +1094,19 @@ class TableAccessService implements SingletonInterface
         // requires a real pid to build a rootline from — fall back to the
         // first site's root page when no context was supplied.
         $resolverPid = $this->resolveTSconfigPid($pid);
+        $isContentType = $table === 'tt_content' && $typeField === 'CType';
+
+        // TYPO3 14 restricts tt_content.CType items to the record's column
+        // (backend layout allowedContentTypes / disallowedContentTypes). The
+        // blank record compiled here has no real column — it would silently
+        // fall back to colPos 0 and hide types that are only allowed in other
+        // columns. Skip that provider and apply the page-wide column filter below.
+        $disabledDataProviders = $isContentType
+            ? [TcaTtContentCtypeItemsRestrictionByBackendLayout::class]
+            : [];
+
         $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
-        $resolved = $resolver->resolveSelectItems($table, $typeField, ['pid' => $resolverPid]);
+        $resolved = $resolver->resolveSelectItems($table, $typeField, ['pid' => $resolverPid], $disabledDataProviders);
 
         if ($resolved !== null && !empty($resolved['values'])) {
             $types = [];
@@ -1115,7 +1128,7 @@ class TableAccessService implements SingletonInterface
         // which the New Content Element Wizard reads but FormDataCompiler
         // does not apply. Filter it here so the schema matches what the
         // wizard would show.
-        if ($table === 'tt_content' && $typeField === 'CType') {
+        if ($isContentType) {
             $TSconfig = BackendUtility::getPagesTSconfig($resolverPid);
             $disableCTypes = $TSconfig['TCEMAIN.']['table.']['tt_content.']['disableCTypes'] ?? '';
             if (!empty($disableCTypes)) {
@@ -1123,9 +1136,71 @@ class TableAccessService implements SingletonInterface
                     unset($types[$disabled]);
                 }
             }
+
+            $types = $this->filterContentTypesByBackendLayout($types, $resolverPid);
         }
 
         return $types;
+    }
+
+    /**
+     * Keep only the content types that can be placed in at least one column of
+     * the page's backend layout.
+     *
+     * TYPO3 14 lets backend layout columns restrict content types via
+     * allowedContentTypes / disallowedContentTypes (Feature #108623). The core
+     * applies these per column; a schema is not bound to a column, so a type is
+     * available on the page as soon as any column accepts it (e.g. a hero element
+     * that is only allowed in a "Hero area" column). TYPO3 13 has no such
+     * restriction, so the list is returned unchanged there.
+     *
+     * @param array<string|int, string> $types Type value => label
+     * @return array<string|int, string>
+     */
+    protected function filterContentTypesByBackendLayout(array $types, int $pid): array
+    {
+        if (!class_exists(TcaTtContentCtypeItemsRestrictionByBackendLayout::class)) {
+            return $types;
+        }
+
+        try {
+            $backendLayoutView = GeneralUtility::makeInstance(BackendLayoutView::class);
+            $backendLayout = $backendLayoutView->getBackendLayoutForPage($pid);
+            $colPosList = array_unique(array_map('intval', $backendLayout->getStructure()['__colPosList'] ?? []));
+            if ($colPosList === []) {
+                return $types;
+            }
+
+            $columns = [];
+            foreach ($colPosList as $colPos) {
+                // Goes through the same API (incl. the ext:content_defender
+                // syntax mapping and the manipulation event) the core uses.
+                $configuration = $backendLayoutView->getColPosConfigurationForPage($backendLayout, $colPos, $pid);
+                $columns[] = [
+                    'allowed' => GeneralUtility::trimExplode(',', (string)($configuration['allowedContentTypes'] ?? ''), true),
+                    'disallowed' => GeneralUtility::trimExplode(',', (string)($configuration['disallowedContentTypes'] ?? ''), true),
+                ];
+            }
+        } catch (\Throwable) {
+            // Backend layout could not be resolved — don't hide anything.
+            return $types;
+        }
+
+        return array_filter(
+            $types,
+            static function (string|int $type) use ($columns): bool {
+                $type = (string)$type;
+                foreach ($columns as $column) {
+                    if (($column['allowed'] === [] || in_array($type, $column['allowed'], true))
+                        && !in_array($type, $column['disallowed'], true)
+                    ) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            ARRAY_FILTER_USE_KEY
+        );
     }
     
     /**
