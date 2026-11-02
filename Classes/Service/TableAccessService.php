@@ -29,6 +29,8 @@ class TableAccessService implements SingletonInterface
     protected TcaSchemaFactory $tcaSchemaFactory;
     protected ?array $additionalReadOnlyTables = null;
     protected ?array $additionalStandaloneTables = null;
+    protected ?array $allowedTables = null;
+    protected ?array $excludedTables = null;
     protected ?int $cachedDefaultTSconfigPid = null;
 
     public function __construct()
@@ -82,6 +84,78 @@ class TableAccessService implements SingletonInterface
             $this->additionalStandaloneTables = GeneralUtility::trimExplode(',', (string)$config, true);
         }
         return $this->additionalStandaloneTables;
+    }
+
+    /**
+     * Get the table patterns the MCP tools are limited to. Empty means no limit.
+     * Configured via extension settings (allowedTables).
+     */
+    public function getAllowedTables(): array
+    {
+        if ($this->allowedTables === null) {
+            $this->allowedTables = $this->getTableListSetting('allowedTables');
+        }
+        return $this->allowedTables;
+    }
+
+    /**
+     * Get the table patterns the MCP tools never expose.
+     * Configured via extension settings (excludedTables).
+     */
+    public function getExcludedTables(): array
+    {
+        if ($this->excludedTables === null) {
+            $this->excludedTables = $this->getTableListSetting('excludedTables');
+        }
+        return $this->excludedTables;
+    }
+
+    /**
+     * Whether the extension settings allowedTables / excludedTables let the MCP
+     * tools expose this table. This applies on top of the backend user's
+     * permissions and to admins as well, so a site can keep tables with personal
+     * data (form submissions, leads, ...) out of reach of AI clients while the
+     * editors still work with them in the backend.
+     */
+    public function isTableExposedByConfiguration(string $table): bool
+    {
+        if ($this->matchesTablePatterns($table, $this->getExcludedTables())) {
+            return false;
+        }
+        $allowedTables = $this->getAllowedTables();
+        return $allowedTables === [] || $this->matchesTablePatterns($table, $allowedTables);
+    }
+
+    /**
+     * Read a comma-separated table list from the extension settings.
+     */
+    protected function getTableListSetting(string $setting): array
+    {
+        try {
+            $config = GeneralUtility::makeInstance(ExtensionConfiguration::class)
+                ->get('mcp_server', $setting);
+        } catch (\Exception) {
+            $config = '';
+        }
+        return GeneralUtility::trimExplode(',', (string)$config, true);
+    }
+
+    /**
+     * Whether a table matches one of the patterns: an exact table name, or a
+     * prefix followed by "*" (e.g. tx_powermail_domain_model_*).
+     */
+    protected function matchesTablePatterns(string $table, array $patterns): bool
+    {
+        foreach ($patterns as $pattern) {
+            if (str_ends_with($pattern, '*')) {
+                if (str_starts_with($table, substr($pattern, 0, -1))) {
+                    return true;
+                }
+            } elseif ($table === $pattern) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -181,6 +255,12 @@ class TableAccessService implements SingletonInterface
             return $info;
         }
         
+        // Check the allowedTables / excludedTables extension settings
+        if (!$this->isTableExposedByConfiguration($table)) {
+            $info['reasons'][] = 'Table is not exposed to MCP clients by the extension configuration (allowedTables / excludedTables)';
+            return $info;
+        }
+
         // Check if table is a truly restricted system table
         if ($this->isRestrictedSystemTable($table)) {
             $info['reasons'][] = 'Table is restricted for security or system integrity reasons';

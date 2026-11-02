@@ -99,6 +99,8 @@ The defaults work out of the box. All settings live in the extension configurati
 | `maxFileSizeMb`              | `500`               | Upper limit in MiB for files fetched from a URL or received through an upload link |
 | `additionalReadOnlyTables`   | `sys_file`          | Non-workspace-capable tables exposed read-only — this is what lets the AI browse your files |
 | `additionalStandaloneTables` | `sys_file_metadata` | `hideTable` tables exposed as independent tables — this is what makes file metadata such as titles and alt texts editable |
+| `excludedTables`             | *(empty)*           | Tables the MCP never exposes, whatever the backend user may access (admins included). A trailing `*` matches a prefix. For tables with personal data that editors still need in the backend, e.g. `tx_powermail_domain_model_mail,tx_powermail_domain_model_answer` |
+| `allowedTables`              | *(empty)*           | If set, the MCP only exposes these tables (prefix `*` allowed), so tables of extensions added later stay hidden until listed. `excludedTables` wins. Empty means every table the user may access |
 | `workspacePreviewLinks`      | `1`                 | Adds login-free workspace preview links to pages and records with unpublished changes, so the AI can show the result of its edits. Anyone with such a link sees all unpublished changes of the workspace until it expires |
 
 Records other than pages and content elements (news, events, ...) get a frontend URL once
