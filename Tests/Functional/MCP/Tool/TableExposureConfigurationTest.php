@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\GetPageTool;
+use Hn\McpServer\MCP\Tool\GetPageTreeTool;
 use Hn\McpServer\MCP\Tool\Record\ListTablesTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
@@ -68,11 +69,7 @@ class TableExposureConfigurationTest extends AbstractFunctionalTest
         $this->assertTrue($read->isError, 'Reading an excluded table must fail: ' . json_encode($read->jsonSerialize()));
         $this->assertStringContainsString('excludedTables', $read->content[0]->text);
 
-        $getPage = new GetPageTool(
-            GeneralUtility::makeInstance(SiteInformationService::class),
-            GeneralUtility::makeInstance(LanguageService::class)
-        );
-        $page = $getPage->execute(['uid' => 1]);
+        $page = $this->createGetPageTool()->execute(['uid' => 1]);
         $this->assertFalse($page->isError, json_encode($page->jsonSerialize()));
         $this->assertStringNotContainsString('Welcome Header', $page->content[0]->text);
 
@@ -86,6 +83,39 @@ class TableExposureConfigurationTest extends AbstractFunctionalTest
             'data' => ['pid' => 1, 'CType' => 'textmedia', 'header' => 'Must not be created'],
         ]);
         $this->assertTrue($write->isError, 'Writing an excluded table must fail: ' . json_encode($write->jsonSerialize()));
+    }
+
+    public function testExcludedPagesTableHidesPageDataFromPageTools(): void
+    {
+        $this->configure('', 'pages');
+
+        $page = $this->createGetPageTool()->execute(['uid' => 1]);
+        $this->assertTrue($page->isError, 'GetPage must fail when pages are excluded: ' . json_encode($page->jsonSerialize()));
+
+        $tree = (new GetPageTreeTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        ))->execute(['startPage' => 0]);
+        $this->assertTrue($tree->isError, 'GetPageTree must fail when pages are excluded: ' . json_encode($tree->jsonSerialize()));
+
+        // Content stays searchable, but without the title of its page
+        $search = (new SearchTool())->execute(['terms' => ['Welcome']]);
+        $this->assertFalse($search->isError, json_encode($search->jsonSerialize()));
+        $this->assertStringContainsString('Welcome Header', $search->content[0]->text);
+        $this->assertStringNotContainsString('Page: Home', $search->content[0]->text);
+    }
+
+    public function testAllowedTablesWithoutPagesHidePageDataFromPageTools(): void
+    {
+        $this->configure('tt_content', '');
+
+        $page = $this->createGetPageTool()->execute(['uid' => 1]);
+        $this->assertTrue($page->isError, 'GetPage must fail when pages are not allowed: ' . json_encode($page->jsonSerialize()));
+
+        $search = (new SearchTool())->execute(['terms' => ['Welcome']]);
+        $this->assertFalse($search->isError, json_encode($search->jsonSerialize()));
+        $this->assertStringContainsString('Welcome Header', $search->content[0]->text);
+        $this->assertStringNotContainsString('Page: Home', $search->content[0]->text);
     }
 
     public function testTrailingAsteriskExcludesAllTablesWithThatPrefix(): void
@@ -134,6 +164,14 @@ class TableExposureConfigurationTest extends AbstractFunctionalTest
 
         $this->assertTrue($service->canAccessTable('tt_content'));
         $this->assertFalse($service->canAccessTable('sys_category'));
+    }
+
+    private function createGetPageTool(): GetPageTool
+    {
+        return new GetPageTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        );
     }
 
     private function configure(string $allowedTables, string $excludedTables): void

@@ -836,6 +836,10 @@ class SearchTool extends AbstractRecordTool
         if (empty($pageIds)) {
             return [];
         }
+        // No page titles next to the results when pages are not accessible
+        if (!$this->tableAccessService->canAccessTable('pages')) {
+            return [];
+        }
 
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable('pages');
