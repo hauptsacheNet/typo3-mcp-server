@@ -114,6 +114,8 @@ TSCONFIG,
         $colPosLine = $this->findFieldLine($content, 'colPos');
         $this->assertStringContainsString('2 (Stage)', $colPosLine);
         $this->assertDoesNotMatchRegularExpression('/\b0 \(/', $colPosLine, 'Main column must not be offered for "header": ' . $colPosLine);
+        // The TCA default (0) is not an allowed column for "header", so it must not be advertised.
+        $this->assertStringNotContainsString('[Default: 0]', $colPosLine);
 
         // The CType options list every type available on the page.
         $ctypeLine = $this->findFieldLine($content, 'CType');
@@ -134,6 +136,7 @@ TSCONFIG,
         $colPosLine = $this->findFieldLine($result->content[0]->text, 'colPos');
         $this->assertStringContainsString('0 (Main)', $colPosLine);
         $this->assertStringNotContainsString('2 (Stage)', $colPosLine);
+        $this->assertStringContainsString('[Default: 0]', $colPosLine);
     }
 
     public function testSchemaForTypeNotAllowedInAnyColumnReturnsError(): void
