@@ -9,6 +9,7 @@ use Doctrine\DBAL\ParameterType;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
+use TYPO3\CMS\Core\Database\ReferenceIndex;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Schema\Capability\TcaSchemaCapability;
 use TYPO3\CMS\Core\Schema\TcaSchemaFactory;
@@ -131,8 +132,49 @@ class InlineParentService
             $visited[$key] = true;
 
             $this->ensureWorkspaceVersion($record['table'], $record['uid']);
+            $this->updateReferenceIndex($record['table'], $record['uid']);
             array_push($queue, ...$this->findParents($record['table'], $record['uid']));
         }
+    }
+
+    /**
+     * Recompute the sys_refindex rows of a record's workspace version.
+     *
+     * The rows of an inline relation with a foreign_field belong to the parent, but
+     * DataHandler only reindexes the record it writes (and records already indexed as
+     * pointing at it). A child written on its own therefore leaves its parent's rows stale,
+     * and the workspace module, which groups parent and children into one collection by
+     * these rows, lists them separately.
+     */
+    protected function updateReferenceIndex(string $table, int $uid): void
+    {
+        if (!$this->isWorkspaceAware($table)) {
+            return;
+        }
+
+        $workspaceId = $this->getWorkspaceId();
+        $row = BackendUtility::getRecord($table, $uid, 'uid,t3ver_wsid');
+        if (!is_array($row)) {
+            return;
+        }
+        if ((int)$row['t3ver_wsid'] !== $workspaceId) {
+            // A live record: its version holds the workspace rows. Without one (e.g. the user
+            // may not edit it), the workspace module does not list the record at all.
+            $row = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, $table, $uid, 'uid');
+            if (!is_array($row)) {
+                return;
+            }
+        }
+
+        GeneralUtility::makeInstance(ReferenceIndex::class)
+            ->updateRefIndexTable($table, (int)$row['uid'], false, $workspaceId);
+    }
+
+    protected function isWorkspaceAware(string $table): bool
+    {
+        $schemaFactory = GeneralUtility::makeInstance(TcaSchemaFactory::class);
+        return $schemaFactory->has($table)
+            && $schemaFactory->get($table)->hasCapability(TcaSchemaCapability::Workspace);
     }
 
     /**
@@ -144,10 +186,7 @@ class InlineParentService
         $workspaceId = $this->getWorkspaceId();
         $backendUser = $GLOBALS['BE_USER'];
 
-        $schemaFactory = GeneralUtility::makeInstance(TcaSchemaFactory::class);
-        $isWorkspaceAware = $schemaFactory->has($table)
-            && $schemaFactory->get($table)->hasCapability(TcaSchemaCapability::Workspace);
-        if (!$isWorkspaceAware || !$backendUser->check('tables_modify', $table)) {
+        if (!$this->isWorkspaceAware($table) || !$backendUser->check('tables_modify', $table)) {
             return;
         }
 
