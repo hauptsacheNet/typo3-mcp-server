@@ -108,7 +108,7 @@ class LanguageNavigationTest extends LlmTestCase
         $translation = $this->findTranslation('tt_content', 301);
         $this->assertNotNull($translation, 'No English translation of content element 301 was created' . $this->transcript());
         $this->assertSame(3, (int)$translation['pid'], 'Translation is not on the contact page' . $this->transcript());
-        $this->assertNotSame('Öffnungszeiten', $translation['header'], 'Translation still has the German header' . $this->transcript());
+        $this->assertTranslated('tt_content', 301, $translation, ['header', 'bodytext']);
         $this->assertNoNewDefaultLanguageRecords();
     }
 
@@ -131,6 +131,7 @@ class LanguageNavigationTest extends LlmTestCase
             $translation = $this->findTranslation('tt_content', $uid);
             $this->assertNotNull($translation, "No English translation of content element $uid was created" . $this->transcript());
             $this->assertSame(4, (int)$translation['pid'], "Translation of $uid is not on the services page" . $this->transcript());
+            $this->assertTranslated('tt_content', $uid, $translation, ['header', 'bodytext']);
         }
         $this->assertNoNewDefaultLanguageRecords();
     }
@@ -228,6 +229,24 @@ class LanguageNavigationTest extends LlmTestCase
             }
         }
         return null;
+    }
+
+    /**
+     * The translation's fields differ from the German original, so the text was translated
+     * and not just copied into an English record
+     */
+    private function assertTranslated(string $table, int $originalUid, array $translation, array $fields): void
+    {
+        $original = BackendUtility::getRecordWSOL($table, $originalUid);
+        foreach ($fields as $field) {
+            $translated = trim(strip_tags((string)($translation[$field] ?? '')));
+            $this->assertNotSame('', $translated, "Translation of $table:$originalUid has an empty $field" . $this->transcript());
+            $this->assertNotSame(
+                trim(strip_tags((string)$original[$field])),
+                $translated,
+                "Translation of $table:$originalUid still has the German $field" . $this->transcript()
+            );
+        }
     }
 
     /**

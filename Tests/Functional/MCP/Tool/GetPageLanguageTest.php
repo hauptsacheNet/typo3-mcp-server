@@ -47,7 +47,7 @@ class GetPageLanguageTest extends FunctionalTestCase
     /**
      * Create a site configuration with multiple languages
      */
-    protected function createMultiLanguageSiteConfiguration(): void
+    protected function createMultiLanguageSiteConfiguration(string $germanBase = '/de/'): void
     {
         $siteConfiguration = [
             'rootPageId' => 1,
@@ -70,7 +70,7 @@ class GetPageLanguageTest extends FunctionalTestCase
                     'title' => 'German',
                     'enabled' => true,
                     'languageId' => 1,
-                    'base' => '/de/',
+                    'base' => $germanBase,
                     'locale' => 'de_DE.UTF-8',
                     'iso-639-1' => 'de',
                     'hreflang' => 'de-de',
@@ -625,7 +625,7 @@ class GetPageLanguageTest extends FunctionalTestCase
             GeneralUtility::makeInstance(LanguageService::class)
         );
 
-        foreach (['https://example.com/de/ueber-uns', '/de/ueber-uns', 'example.com/de/ueber-uns/'] as $url) {
+        foreach (['https://example.com/de/ueber-uns', '/de/ueber-uns', 'example.com/de/ueber-uns/', 'http://example.com/de/ueber-uns'] as $url) {
             $result = $tool->execute(['url' => $url]);
 
             $this->assertFalse($result->isError, $url . ': ' . json_encode($result->jsonSerialize()));
@@ -646,6 +646,40 @@ class GetPageLanguageTest extends FunctionalTestCase
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringContainsString('UID: 201', $result->content[0]->text);
         $this->assertStringContainsString('Language: FR (ID: 2)', $result->content[0]->text);
+    }
+
+    /**
+     * A language on its own host ("https://de.example.com/") is matched by that host
+     */
+    public function testUrlOnLanguageSpecificHostShowsTranslation(): void
+    {
+        $this->createMultiLanguageSiteConfiguration('https://de.example.com/');
+        $this->createTestTranslations();
+        $this->getConnectionPool()->getConnectionForTable('pages')
+            ->update('pages', ['slug' => '/ueber-uns'], ['uid' => 200]);
+
+        $tool = new GetPageTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        );
+
+        foreach (['https://de.example.com/ueber-uns', 'de.example.com/ueber-uns'] as $url) {
+            $result = $tool->execute(['url' => $url]);
+
+            $this->assertFalse($result->isError, $url . ': ' . json_encode($result->jsonSerialize()));
+            $output = $result->content[0]->text;
+            $this->assertStringContainsString('UID: 200', $output, $url);
+            $this->assertStringContainsString('Language: DE (ID: 1)', $output, $url);
+        }
+
+        $result = $tool->execute(['url' => 'https://de.example.com/']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('UID: 1', $result->content[0]->text);
+        $this->assertStringContainsString('Language: DE (ID: 1)', $result->content[0]->text);
+
+        $result = $tool->execute(['url' => 'https://other.example.org/about']);
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('The domain does not match any configured site', $result->content[0]->text);
     }
 
     /**

@@ -22,6 +22,7 @@ use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Routing\PageArguments;
 use TYPO3\CMS\Core\Routing\SiteMatcher;
 use TYPO3\CMS\Core\Routing\SiteRouteResult;
+use Psr\Http\Message\UriInterface;
 use TYPO3\CMS\Core\Exception\Page\PageNotFoundException;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
@@ -886,77 +887,75 @@ class GetPageTool extends AbstractRecordTool
     protected function resolveUrlToPageUid(string $url): array
     {
         $siteFinder = GeneralUtility::makeInstance(SiteFinder::class);
-        
-        // Normalize URLs without a scheme: if the input starts with a known site domain,
+
+        // Every base a site or one of its languages is reachable under; languages may
+        // use their own host (e.g. "de.example.com") or scheme
+        $bases = [];
+        foreach ($siteFinder->getAllSites() as $site) {
+            $bases[] = $site->getBase();
+            foreach ($site->getAllLanguages() as $siteLanguage) {
+                $bases[] = $siteLanguage->getBase();
+            }
+        }
+
+        // Normalize URLs without a scheme: if the input starts with a known domain,
         // prepend https:// so parse_url extracts the host correctly.
         // This handles cases like "www.example.com" or "www.example.com/about".
         if (!str_contains($url, '://') && !str_starts_with($url, '/')) {
-            foreach ($siteFinder->getAllSites() as $site) {
-                $siteHost = $site->getBase()->getHost();
-                if (!empty($siteHost) && str_starts_with($url, $siteHost)) {
+            foreach ($bases as $base) {
+                if ($base->getHost() !== '' && str_starts_with(strtolower($url), strtolower($base->getHost()))) {
                     $url = 'https://' . $url;
                     break;
                 }
             }
         }
 
-        // Try to parse as full URL first
         $parsedUrl = parse_url($url);
+        $host = isset($parsedUrl['host']) ? strtolower($parsedUrl['host']) : null;
 
-        // When a scheme+host URL has no path (e.g. "https://example.com"), treat it as home page
-        $path = $parsedUrl['path'] ?? '/';
-
+        // When a scheme+host URL has no path (e.g. "https://example.com"), treat it as home page.
         // Normalize: ensure leading slash, strip trailing slash (slugs in DB have no trailing slash)
-        $path = '/' . trim($path, '/');
+        $path = '/' . trim($parsedUrl['path'] ?? '/', '/');
 
-        // Special handling for home page
-        if ($path === '/') {
-            // Try to find the root page from any site
-            foreach ($siteFinder->getAllSites() as $site) {
-                // Check if this URL belongs to this site (if host is specified)
-                if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
-                        continue;
-                    }
-                }
-                return [$site->getRootPageId(), null];
+        // Request URIs to try: the URL's host (or each configured host for a bare path)
+        // with the scheme and port of a base configured for it
+        $candidateUris = [];
+        foreach ($bases as $base) {
+            $baseHost = strtolower($base->getHost());
+            if ($host !== null && $baseHost !== '' && $baseHost !== $host) {
+                continue;
             }
+            $uri = $base->withHost($host ?? ($baseHost !== '' ? $baseHost : 'localhost'))
+                ->withPath($path)
+                ->withQuery('')
+                ->withFragment('');
+            $candidateUris[(string)$uri] ??= $uri;
         }
-        
-        // Try each site to find a match using the router
-        $allSites = $siteFinder->getAllSites();
-        $matchedAnySite = false;
-        
-        foreach ($allSites as $site) {
+
+        // If host was specified and didn't match any site, don't try generic fallback
+        if ($host !== null && $candidateUris === []) {
+            throw new \RuntimeException('Could not resolve URL "' . $url . '" to a page. The domain does not match any configured site.');
+        }
+
+        $siteMatcher = GeneralUtility::makeInstance(SiteMatcher::class);
+        foreach ($candidateUris as $uri) {
             try {
-                // Check if this URL belongs to this site (if host is specified)
-                if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
-                        continue;
-                    }
-                    $matchedAnySite = true;
-                }
-                
-                // Resolve like the frontend does: the site matcher finds the language by
-                // its base (e.g. "/en/"), the page router resolves the remaining slug
-                $request = $this->createServerRequest($site, $path);
-                $siteRouteResult = GeneralUtility::makeInstance(SiteMatcher::class)->matchRequest($request);
-                if (!$siteRouteResult instanceof SiteRouteResult
-                    || $siteRouteResult->getSite()->getIdentifier() !== $site->getIdentifier()
-                    || $siteRouteResult->getLanguage() === null
-                ) {
+                // Resolve like the frontend does: the site matcher finds site and language
+                // by their base (host and path prefix such as "/en/"), the site's page
+                // router resolves the remaining slug
+                $request = $this->createServerRequest($uri);
+                $siteRouteResult = $siteMatcher->matchRequest($request);
+                $site = $siteRouteResult instanceof SiteRouteResult ? $siteRouteResult->getSite() : null;
+                $language = $siteRouteResult instanceof SiteRouteResult ? $siteRouteResult->getLanguage() : null;
+                if (!$site instanceof Site || $language === null) {
                     continue;
                 }
-                $language = $siteRouteResult->getLanguage();
                 // The language root ("/en/") is the root page, translated or not
                 if (trim($siteRouteResult->getTail(), '/') === '') {
                     return [$site->getRootPageId(), $language->getLanguageId()];
                 }
                 $request = $request
+                    ->withAttribute('site', $site)
                     ->withAttribute('language', $language)
                     ->withAttribute('routing', $siteRouteResult);
                 $pageArguments = $site->getRouter()->matchRequest($request, $siteRouteResult);
@@ -965,17 +964,12 @@ class GetPageTool extends AbstractRecordTool
                     return [$pageArguments->getPageId(), $language->getLanguageId()];
                 }
             } catch (\Throwable $e) {
-                // Continue to next site
+                // Try the next candidate
                 continue;
             }
         }
-        
-        // If host was specified and didn't match any site, don't try generic fallback
-        if (isset($parsedUrl['host']) && !$matchedAnySite) {
-            throw new \RuntimeException('Could not resolve URL "' . $url . '" to a page. The domain does not match any configured site.');
-        }
-        
-        // If no match found via router AND no host was specified, try to find by slug directly in the database
+
+        // Not routable (e.g. hidden or workspace-only pages): find by slug directly in the database
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
         
@@ -1002,35 +996,22 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Create a server request for URL resolution
      */
-    protected function createServerRequest(Site $site, string $path): \Psr\Http\Message\ServerRequestInterface
+    protected function createServerRequest(UriInterface $uri): \Psr\Http\Message\ServerRequestInterface
     {
-        // Ensure path starts with /
-        if (!str_starts_with($path, '/')) {
-            $path = '/' . $path;
-        }
-        
-        // Create URI - don't double the slash
-        $baseUri = $site->getBase();
-        $uri = $baseUri->withPath($path);
-        
-        // Create request with proper server variables
         $serverParams = [
             'REQUEST_METHOD' => 'GET',
-            'REQUEST_URI' => $path,
+            'REQUEST_URI' => $uri->getPath(),
             'SCRIPT_NAME' => '/index.php',
-            'HTTP_HOST' => $baseUri->getHost() ?: 'localhost',
-            'HTTPS' => $baseUri->getScheme() === 'https' ? 'on' : 'off',
-            'SERVER_PORT' => $baseUri->getPort() ?: ($baseUri->getScheme() === 'https' ? 443 : 80),
+            'HTTP_HOST' => $uri->getHost(),
+            'HTTPS' => $uri->getScheme() === 'https' ? 'on' : 'off',
+            'SERVER_PORT' => $uri->getPort() ?: ($uri->getScheme() === 'https' ? 443 : 80),
         ];
         
         $request = new \TYPO3\CMS\Core\Http\ServerRequest($uri, 'GET', 'php://input', [], $serverParams);
-        $request = $request->withAttribute('site', $site);
         
         // Add normalizedParams which might be needed by the router
         $normalizedParams = \TYPO3\CMS\Core\Http\NormalizedParams::createFromServerParams($serverParams);
-        $request = $request->withAttribute('normalizedParams', $normalizedParams);
-        
-        return $request;
+        return $request->withAttribute('normalizedParams', $normalizedParams);
     }
     
     /**
