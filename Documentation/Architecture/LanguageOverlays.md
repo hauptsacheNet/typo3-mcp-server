@@ -68,10 +68,25 @@ default-language record it was overlaid onto:
   uid, labeled `(DE original, not translated)`; records only existing in the language (free
   mode, no translation pointer) are labeled `(EN)`. Other translations are covered by their
   original or are orphans and are not listed.
-- **GetPageTree**: the default-language uid stays primary, `[TRANSLATED: 205]` names the
-  translation.
+- **GetPageTree**: like GetPage, a translated page is listed under the translation's uid,
+  `[EN translation of page 111]`; untranslated pages keep their uid,
+  `[NOT TRANSLATED, DE original]`. LLM tests showed that a default-language uid in front of an
+  English title gets edited as "the English page". A translation uid as `startPage` lists the
+  subpages of its original in the translation's language.
 - **GetPage with a translation uid**: shows the default-language page in that translation's
   language, so uids taken from a language view work as input.
+- **GetPage by URL**: resolved like the frontend (`SiteMatcher`, then the site's
+  `PageRouter`), so a language prefix such as `/en/` selects the language view unless
+  `language` is passed explicitly. The language root (`/en/`) is the root page, even untranslated.
+
+### Default-language view: how to reach the translations
+
+Without `language`, GetPage names the default language and lists every site language with the
+page's translation uid and how to open it, or that it is not translated yet. GetPageTree prints
+the default language and the available translation codes in a header line.
+
+Tests/Llm/LanguageNavigationTest.php checks with real models that a client asked for "the
+English page" (by name or by URL) edits the translation records and translates missing ones.
 
 ### Decision: hardcoded OVERLAYS_MIXED
 

@@ -18,6 +18,8 @@ use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Routing\PageArguments;
+use TYPO3\CMS\Core\Routing\SiteMatcher;
+use TYPO3\CMS\Core\Routing\SiteRouteResult;
 use TYPO3\CMS\Core\Exception\Page\PageNotFoundException;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
@@ -66,7 +68,7 @@ class GetPageTool extends AbstractRecordTool
                     ],
                     'url' => [
                         'type' => 'string',
-                        'description' => 'The URL of the page to retrieve (alternative to uid). Can be full URL, path, or slug. ' . $domainsText,
+                        'description' => 'The URL of the page to retrieve (alternative to uid). Can be full URL, path, or slug; a language prefix like "/en/" shows the page in that language. ' . $domainsText,
                     ],
                 ],
                 'required' => [],
@@ -78,7 +80,7 @@ class GetPageTool extends AbstractRecordTool
         if (count($availableLanguages) > 1) {
             $schema['inputSchema']['properties']['language'] = [
                 'type' => 'string',
-                'description' => 'Language ISO code to show page and content in specific language (e.g., "de", "fr"). Shows translated content and metadata when available.',
+                'description' => 'Language ISO code to show page and content in specific language (e.g., "de", "fr"). The page and its translated records are then listed under the uids of their translation records — edit those, not the default-language originals. Untranslated records are labeled as such.',
                 'enum' => $availableLanguages,
             ];
             
@@ -124,7 +126,12 @@ class GetPageTool extends AbstractRecordTool
             $uid = (int)$params['uid'];
         } elseif (isset($params['url'])) {
             try {
-                $uid = $this->resolveUrlToPageUid($params['url'], $languageId);
+                [$uid, $urlLanguageId] = $this->resolveUrlToPageUid($params['url']);
+                // A language prefix in the URL (e.g. "/en/") selects the language
+                // unless one was requested explicitly
+                if ($urlLanguageId !== null && !isset($params['language']) && !isset($params['languageId'])) {
+                    $languageId = $urlLanguageId;
+                }
             } catch (\Throwable $e) {
                 // Re-throw as InvalidArgumentException to preserve the message in error handling
                 throw new \InvalidArgumentException($e->getMessage(), 0, $e);
@@ -285,7 +292,7 @@ class GetPageTool extends AbstractRecordTool
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
             ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
 
-        $translations = $queryBuilder->select('sys_language_uid', 'title')
+        $translations = $queryBuilder->select('uid', 'sys_language_uid', 'title')
             ->from('pages')
             ->where(
                 $queryBuilder->expr()->eq('l10n_parent', $queryBuilder->createNamedParameter($pageUid, ParameterType::INTEGER))
@@ -299,10 +306,13 @@ class GetPageTool extends AbstractRecordTool
             $languageId = (int)$translation['sys_language_uid'];
             $isoCode = $this->languageService->getIsoCodeFromUid($languageId);
             if ($isoCode) {
+                // Workspace changes of the title show up like everywhere else
+                $workspaceTranslation = BackendUtility::getRecordWSOL('pages', (int)$translation['uid']);
                 $result[] = [
+                    'uid' => (int)$translation['uid'],
                     'languageId' => $languageId,
                     'isoCode' => $isoCode,
-                    'title' => $translation['title'],
+                    'title' => $workspaceTranslation['title'] ?? $translation['title'],
                 ];
             }
         }
@@ -609,14 +619,11 @@ class GetPageTool extends AbstractRecordTool
             }
         }
         
-        // Show available translations
-        if (!empty($translations)) {
-            $result .= "Available Translations: ";
-            $translationList = [];
-            foreach ($translations as $translation) {
-                $translationList[] = strtoupper($translation['isoCode']);
-            }
-            $result .= implode(', ', $translationList) . "\n";
+        if ($languageId === 0) {
+            $result .= $this->formatTranslationList((int)$pageData['uid'], $translations);
+        } elseif (!empty($translations)) {
+            $result .= "Available Translations: "
+                . strtoupper(implode(', ', array_column($translations, 'isoCode'))) . "\n";
         }
         
         $result .= "\n";
@@ -662,6 +669,38 @@ class GetPageTool extends AbstractRecordTool
         return $result;
     }
     
+    /**
+     * Language of the default view and where its translations are, so a client asked
+     * for "the English page" finds the record to edit. Empty on single-language sites.
+     */
+    protected function formatTranslationList(int $pageUid, array $translations): string
+    {
+        $languages = array_filter(
+            $this->languageService->getLanguagesForPage($pageUid),
+            static fn(array $language): bool => $language['enabled']
+        );
+        if (count($languages) < 2) {
+            return '';
+        }
+
+        $translationsByLanguage = array_column($translations, null, 'languageId');
+        $result = '';
+        $lines = [];
+        foreach ($languages as $language) {
+            $isoCode = strtoupper($language['isoCode']);
+            if ($language['uid'] === 0) {
+                $result .= "Language: " . $isoCode . " (default language)\n";
+            } elseif (isset($translationsByLanguage[$language['uid']])) {
+                $translation = $translationsByLanguage[$language['uid']];
+                $lines[] = "- " . $isoCode . ": page " . $translation['uid'] . ' "' . $translation['title'] . '"'
+                    . ' — GetPage {"uid": ' . $translation['uid'] . '} shows it with its ' . $isoCode . " content\n";
+            } else {
+                $lines[] = "- " . $isoCode . ': not translated — WriteTable action "translate" creates it' . "\n";
+            }
+        }
+        return $result . "Translations:\n" . implode('', $lines);
+    }
+
     /**
      * Language label of a record in a language view, e.g. " (EN, translates 504)"
      */
@@ -770,14 +809,13 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
-     * Resolve a URL to a page UID
-     * 
+     * Resolve a URL to its default-language page uid and the language of the URL
+     *
      * @param string $url The URL to resolve (can be full URL, path, or slug)
-     * @param int $languageId The language ID to use for resolution
-     * @return int The resolved page UID
+     * @return array{0: int, 1: int|null} Page uid and the URL's language id (null when not determined by the URL)
      * @throws \Exception If the URL cannot be resolved
      */
-    protected function resolveUrlToPageUid(string $url, int $languageId = 0): int
+    protected function resolveUrlToPageUid(string $url): array
     {
         $siteFinder = GeneralUtility::makeInstance(SiteFinder::class);
         
@@ -815,7 +853,7 @@ class GetPageTool extends AbstractRecordTool
                         continue;
                     }
                 }
-                return $site->getRootPageId();
+                return [$site->getRootPageId(), null];
             }
         }
         
@@ -835,13 +873,28 @@ class GetPageTool extends AbstractRecordTool
                     $matchedAnySite = true;
                 }
                 
-                // Try to resolve the path/slug using the site's router
-                $router = $site->getRouter();
-                $request = $this->createServerRequest($site, $path, $languageId);
-                $pageArguments = $router->matchRequest($request);
-                
+                // Resolve like the frontend does: the site matcher finds the language by
+                // its base (e.g. "/en/"), the page router resolves the remaining slug
+                $request = $this->createServerRequest($site, $path);
+                $siteRouteResult = GeneralUtility::makeInstance(SiteMatcher::class)->matchRequest($request);
+                if (!$siteRouteResult instanceof SiteRouteResult
+                    || $siteRouteResult->getSite()->getIdentifier() !== $site->getIdentifier()
+                    || $siteRouteResult->getLanguage() === null
+                ) {
+                    continue;
+                }
+                $language = $siteRouteResult->getLanguage();
+                // The language root ("/en/") is the root page, translated or not
+                if (trim($siteRouteResult->getTail(), '/') === '') {
+                    return [$site->getRootPageId(), $language->getLanguageId()];
+                }
+                $request = $request
+                    ->withAttribute('language', $language)
+                    ->withAttribute('routing', $siteRouteResult);
+                $pageArguments = $site->getRouter()->matchRequest($request, $siteRouteResult);
+
                 if ($pageArguments instanceof PageArguments) {
-                    return $pageArguments->getPageId();
+                    return [$pageArguments->getPageId(), $language->getLanguageId()];
                 }
             } catch (\Throwable $e) {
                 // Continue to next site
@@ -872,7 +925,7 @@ class GetPageTool extends AbstractRecordTool
             ->fetchAssociative();
         
         if ($page) {
-            return (int)$page['uid'];
+            return [(int)$page['uid'], null];
         }
         
         throw new \RuntimeException('Could not resolve URL "' . $url . '" to a page. The path does not match any page.');
@@ -881,7 +934,7 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Create a server request for URL resolution
      */
-    protected function createServerRequest(Site $site, string $path, int $languageId): \Psr\Http\Message\ServerRequestInterface
+    protected function createServerRequest(Site $site, string $path): \Psr\Http\Message\ServerRequestInterface
     {
         // Ensure path starts with /
         if (!str_starts_with($path, '/')) {
@@ -905,20 +958,8 @@ class GetPageTool extends AbstractRecordTool
         $request = new \TYPO3\CMS\Core\Http\ServerRequest($uri, 'GET', 'php://input', [], $serverParams);
         $request = $request->withAttribute('site', $site);
         
-        // Set language attribute
-        try {
-            $language = $languageId > 0 ? $site->getLanguageById($languageId) : $site->getDefaultLanguage();
-            $request = $request->withAttribute('language', $language);
-        } catch (\Throwable $e) {
-            // If language not found, use default
-            $request = $request->withAttribute('language', $site->getDefaultLanguage());
-        }
-        
         // Add normalizedParams which might be needed by the router
-        $normalizedParams = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(
-            \TYPO3\CMS\Core\Http\NormalizedParams::class,
-            $serverParams
-        );
+        $normalizedParams = \TYPO3\CMS\Core\Http\NormalizedParams::createFromServerParams($serverParams);
         $request = $request->withAttribute('normalizedParams', $normalizedParams);
         
         return $request;

@@ -21,13 +21,12 @@ require_once __DIR__ . '/LlmTestCase.php';
 
 // Simple .env.local loader
 (static function () {
-    $envFile = __DIR__ . '/../../.env.local';
-    
-    if (!file_exists($envFile)) {
-        return;
+    // Repository root first, then next to the LLM tests
+    $envFiles = array_filter([__DIR__ . '/../../.env.local', __DIR__ . '/.env.local'], 'file_exists');
+    $lines = [];
+    foreach ($envFiles as $envFile) {
+        array_push($lines, ...file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
     }
-    
-    $lines = file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
     
     foreach ($lines as $line) {
         // Skip comments

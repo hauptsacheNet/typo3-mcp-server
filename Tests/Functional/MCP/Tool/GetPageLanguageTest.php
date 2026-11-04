@@ -207,7 +207,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         $this->assertStringContainsString('Title: About', $output);
         $this->assertStringContainsString('- [102] Team Introduction (Type:', $output);
         $this->assertStringContainsString('Meet our team', $output);
-        $this->assertStringNotContainsString('Language:', $output);
+        $this->assertStringContainsString('Language: EN (default language)', $output);
         $this->assertStringNotContainsString('Translated:', $output);
         // Translations are not part of the default-language view
         $this->assertStringNotContainsString('Willkommen', $output);
@@ -539,8 +539,89 @@ class GetPageLanguageTest extends FunctionalTestCase
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $output = $result->content[0]->text;
         
-        // Should show available translations
-        $this->assertStringContainsString('Available Translations: DE, FR', $output);
+        // The default view names its language and where the translations are
+        $this->assertStringContainsString('Language: EN (default language)', $output);
+        $this->assertStringContainsString(
+            "Translations:\n"
+            . '- DE: page 200 "Über uns" — GetPage {"uid": 200} shows it with its DE content' . "\n"
+            . '- FR: page 201 "À propos" — GetPage {"uid": 201} shows it with its FR content' . "\n",
+            $output
+        );
+    }
+
+    /**
+     * Languages without a translation of the page point to the translate action
+     */
+    public function testShowMissingTranslations(): void
+    {
+        $tool = new GetPageTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        );
+
+        $result = $tool->execute(['uid' => 6]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $output = $result->content[0]->text;
+        $this->assertStringContainsString('- DE: not translated — WriteTable action "translate" creates it', $output);
+        $this->assertStringContainsString('- FR: not translated — WriteTable action "translate" creates it', $output);
+    }
+
+    /**
+     * A language prefix in the URL opens the page in that language, under the
+     * translation's uid: editors paste frontend URLs of the translation they mean
+     */
+    public function testUrlWithLanguagePrefixShowsTranslation(): void
+    {
+        $this->createTestTranslations();
+        $this->getConnectionPool()->getConnectionForTable('pages')
+            ->update('pages', ['slug' => '/ueber-uns'], ['uid' => 200]);
+
+        $tool = new GetPageTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        );
+
+        foreach (['https://example.com/de/ueber-uns', '/de/ueber-uns', 'example.com/de/ueber-uns/'] as $url) {
+            $result = $tool->execute(['url' => $url]);
+
+            $this->assertFalse($result->isError, $url . ': ' . json_encode($result->jsonSerialize()));
+            $output = $result->content[0]->text;
+            $this->assertStringContainsString('UID: 200', $output, $url);
+            $this->assertStringContainsString('Language: DE (ID: 1)', $output, $url);
+            $this->assertStringContainsString('Translated: Yes (DE translation of page 2)', $output, $url);
+        }
+
+        // Without a prefix the default language is shown
+        $result = $tool->execute(['url' => 'https://example.com/about']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('UID: 2', $result->content[0]->text);
+        $this->assertStringContainsString('Language: EN (default language)', $result->content[0]->text);
+
+        // An explicit language wins over the URL's
+        $result = $tool->execute(['url' => 'https://example.com/de/ueber-uns', 'language' => 'fr']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('UID: 201', $result->content[0]->text);
+        $this->assertStringContainsString('Language: FR (ID: 2)', $result->content[0]->text);
+    }
+
+    /**
+     * The language root URL ("/de/") opens the root page in that language
+     */
+    public function testLanguageRootUrlShowsRootPageInLanguage(): void
+    {
+        $tool = new GetPageTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        );
+
+        $result = $tool->execute(['url' => 'https://example.com/de/']);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $output = $result->content[0]->text;
+        $this->assertStringContainsString('Language: DE (ID: 1)', $output);
+        $this->assertStringContainsString('Translated: No (default-language record', $output);
+        $this->assertStringContainsString('UID: 1', $output);
     }
 
     /**
