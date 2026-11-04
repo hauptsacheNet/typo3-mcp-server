@@ -107,10 +107,13 @@ fallbacks the frontend would hide; they are labeled `not translated`, so this is
 - The language view does not mirror the frontend of `strict`/`free` sites (see the
   OVERLAYS_MIXED decision): fallback entries appear that the frontend would hide.
 - PageRepository uses frontend restrictions. Hidden and scheduled records are included via
-  the VisibilityAspect, but frontend group restrictions still apply; GetPage falls back to
-  translations it loaded itself so restricted translations are not lost.
-- Record lists are limited per table and cover all languages before the overlay, so on pages
-  with many records the totals reflect the shown records only.
+  the VisibilityAspect, but frontend group restrictions still apply; GetPage loads the
+  translations of the listed originals itself as a fallback, so restricted translations are
+  not lost.
+- Record lists are limited to 20 rows per table. The query only selects the rows of the view
+  (default language and "all languages", plus records only existing in the requested
+  language) before that limit; connected translations are loaded for the listed originals.
+  So totals count the records of the view, and a cut-off list says so.
 
 ### Related Files
 

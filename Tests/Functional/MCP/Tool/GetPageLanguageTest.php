@@ -550,6 +550,49 @@ class GetPageLanguageTest extends FunctionalTestCase
     }
 
     /**
+     * The 20-row limit applies to the records of the view, not to all languages:
+     * translations of listed originals are never cut off, totals count the view,
+     * and a cut-off list says how to get the rest
+     */
+    public function testRecordLimitAppliesPerLanguageView(): void
+    {
+        $connection = $this->getConnectionPool()->getConnectionForTable('tt_content');
+        for ($i = 0; $i < 25; $i++) {
+            $connection->insert('tt_content', [
+                'uid' => 2000 + $i, 'pid' => 5, 'header' => 'Element ' . $i, 'CType' => 'text',
+                'colPos' => 0, 'sorting' => ($i + 1) * 10, 'sys_language_uid' => 0, 'l18n_parent' => 0,
+            ]);
+            $connection->insert('tt_content', [
+                'uid' => 2100 + $i, 'pid' => 5, 'header' => 'Element ' . $i . ' (DE)', 'CType' => 'text',
+                'colPos' => 0, 'sorting' => ($i + 1) * 10, 'sys_language_uid' => 1, 'l18n_parent' => 2000 + $i,
+            ]);
+        }
+        $tool = new GetPageTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        );
+
+        $result = $tool->execute(['uid' => 5, 'language' => 'de']);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $output = $result->content[0]->text;
+        $this->assertStringContainsString('Total: 25 elements', $output);
+        $this->assertStringContainsString('(showing the first 20; use ReadTable with table "tt_content" and pid 5 for all)', $output);
+        $this->assertSame(20, substr_count($output, '(DE, translates '), $output);
+        $this->assertStringContainsString('- [2119] Element 19 (DE) (DE, translates 2019)', $output);
+        $this->assertStringNotContainsString('not translated', $output);
+
+        $result = $tool->execute(['uid' => 5]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $output = $result->content[0]->text;
+        $this->assertStringContainsString('Total: 25 elements', $output);
+        $this->assertStringContainsString('(showing the first 20;', $output);
+        $this->assertStringContainsString('- [2019] Element 19 (Type:', $output);
+        $this->assertStringNotContainsString('(DE)', $output);
+    }
+
+    /**
      * Languages without a translation of the page point to the translate action
      */
     public function testShowMissingTranslations(): void

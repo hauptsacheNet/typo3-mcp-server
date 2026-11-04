@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool;
 
+use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\ParameterType;
+use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -332,17 +334,12 @@ class GetPageTool extends AbstractRecordTool
         $recordsInfo = [];
 
         foreach ($tables as $table) {
-            $tableInfo = $this->getTableRecordsInfo($table, $pageId);
+            // The language is filtered in the query, before the row limit, so the
+            // total counts the records of this view and nothing is cut off silently
+            $tableInfo = $this->getTableRecordsInfo($table, $pageId, $languageId);
 
-            if (!empty($tableInfo['records']) && $this->tableHasLanguageSupport($table)) {
-                $records = $pageRepository !== null
-                    ? $this->overlayRecordsForLanguage($table, $tableInfo['records'], $languageId, $pageRepository)
-                    : $this->filterDefaultLanguageRecords($table, $tableInfo['records']);
-                // The count query covers all languages
-                $tableInfo = [
-                    'total' => count($records),
-                    'records' => $records,
-                ];
+            if ($pageRepository !== null && !empty($tableInfo['records']) && $this->tableHasLanguageSupport($table)) {
+                $tableInfo['records'] = $this->overlayRecordsForLanguage($table, $tableInfo['records'], $languageId, $pageRepository);
             }
             if (!empty($tableInfo['records'])) {
                 $recordsInfo[$table] = $tableInfo;
@@ -377,7 +374,14 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Get information about records from a specific table on a page
      */
-    protected function getTableRecordsInfo(string $table, int $pageId): array
+    /**
+     * Records of a table on a page, at most 20, with the total count.
+     *
+     * Language-aware tables only load the rows of the requested view: default-language
+     * and "all languages" rows, plus in a language view the rows that only exist in that
+     * language. Connected translations are added by overlayRecordsForLanguage().
+     */
+    protected function getTableRecordsInfo(string $table, int $pageId, int $languageId = 0): array
     {
         // Skip if table is not accessible
         if (!$this->tableAccessService->canAccessTable($table)) {
@@ -387,25 +391,16 @@ class GetPageTool extends AbstractRecordTool
             ];
         }
 
-        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
-        $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
-
-        // Apply proper workspace restrictions
-        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-        $queryBuilder->getRestrictions()
-            ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
-            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
-
         // Always include hidden records (like the TYPO3 backend does)
+        $queryBuilder = $this->createRecordQueryBuilder($table);
 
         // First, get the total count of records
         $countQueryBuilder = clone $queryBuilder;
         $totalCount = $countQueryBuilder->count('*')
             ->from($table)
             ->where(
-                $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
+                $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
+                ...$this->getLanguageViewConditions($countQueryBuilder, $table, $languageId)
             )
             ->executeQuery()
             ->fetchOne();
@@ -414,7 +409,8 @@ class GetPageTool extends AbstractRecordTool
         $query = $queryBuilder->select('*')
             ->from($table)
             ->where(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
+                ...$this->getLanguageViewConditions($queryBuilder, $table, $languageId)
             );
 
         // Limit to 20 records per table
@@ -437,17 +433,75 @@ class GetPageTool extends AbstractRecordTool
             $query->orderBy('uid');
         }
 
-        $records = $query->executeQuery()->fetchAllAssociative();
+        $rows = $query->executeQuery()->fetchAllAssociative();
+        $records = $this->applyWorkspaceOverlay($table, $rows);
+        // Records marked for deletion in this workspace are excluded
+        $totalCount = max(0, (int)$totalCount - (count($rows) - count($records)));
 
-        // Apply workspace overlay: replaces live record data with workspace-modified version,
-        // or removes records marked for deletion in this workspace.
-        $processedRecords = [];
-        foreach ($records as $record) {
+        return [
+            'total' => $totalCount,
+            'records' => $records
+        ];
+    }
+
+    /**
+     * Query builder for page records: deleted records excluded, current workspace applied
+     */
+    protected function createRecordQueryBuilder(string $table): QueryBuilder
+    {
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
+        return $queryBuilder;
+    }
+
+    /**
+     * Rows a language view loads directly: default-language and "all languages" rows,
+     * plus rows that only exist in the requested language (no translation pointer)
+     *
+     * @return string[] Conditions to AND, none for tables without language support
+     */
+    protected function getLanguageViewConditions(QueryBuilder $queryBuilder, string $table, int $languageId): array
+    {
+        if (!$this->tableHasLanguageSupport($table)) {
+            return [];
+        }
+        $languageField = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
+        $pointerField = $GLOBALS['TCA'][$table]['ctrl']['transOrigPointerField'] ?? '';
+        $expr = $queryBuilder->expr();
+        $defaultLanguage = $expr->in(
+            $languageField,
+            $queryBuilder->createNamedParameter([0, -1], ArrayParameterType::INTEGER)
+        );
+        if ($languageId === 0) {
+            return [$defaultLanguage];
+        }
+        $requestedLanguage = $expr->eq($languageField, $queryBuilder->createNamedParameter($languageId, ParameterType::INTEGER));
+        if ($pointerField !== '') {
+            $requestedLanguage = $expr->and(
+                $requestedLanguage,
+                $expr->eq($pointerField, $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            );
+        }
+        return [(string)$expr->or($defaultLanguage, $requestedLanguage)];
+    }
+
+    /**
+     * Replace live rows with their workspace version and expose the live uid, drop rows
+     * deleted in the workspace
+     */
+    protected function applyWorkspaceOverlay(string $table, array $rows): array
+    {
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        $records = [];
+        foreach ($rows as $record) {
             if ($currentWorkspace > 0) {
                 BackendUtility::workspaceOL($table, $record);
                 if ($record === false) {
-                    // Record is marked for deletion in workspace — exclude it
-                    $totalCount = max(0, $totalCount - 1);
                     continue;
                 }
             }
@@ -455,14 +509,34 @@ class GetPageTool extends AbstractRecordTool
             if (isset($record['t3ver_oid']) && $record['t3ver_oid'] > 0) {
                 $record['uid'] = (int)$record['t3ver_oid'];
             }
-            $processedRecords[] = $record;
+            $records[] = $record;
         }
-        $records = $processedRecords;
+        return $records;
+    }
 
-        return [
-            'total' => (int)$totalCount,
-            'records' => $records
-        ];
+    /**
+     * Translations of the given originals in a language, by original uid
+     */
+    protected function loadTranslations(string $table, string $languageField, string $pointerField, array $originalUids, int $languageId): array
+    {
+        if ($originalUids === []) {
+            return [];
+        }
+        $queryBuilder = $this->createRecordQueryBuilder($table);
+        $rows = $queryBuilder->select('*')
+            ->from($table)
+            ->where(
+                $queryBuilder->expr()->in($pointerField, $queryBuilder->createNamedParameter($originalUids, ArrayParameterType::INTEGER)),
+                $queryBuilder->expr()->eq($languageField, $queryBuilder->createNamedParameter($languageId, ParameterType::INTEGER))
+            )
+            ->orderBy('uid')
+            ->executeQuery()
+            ->fetchAllAssociative();
+        $translations = [];
+        foreach ($this->applyWorkspaceOverlay($table, $rows) as $record) {
+            $translations[(int)$record[$pointerField]] ??= $record;
+        }
+        return $translations;
     }
 
     /**
@@ -482,18 +556,6 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
-     * Keep only default-language and "all languages" records
-     */
-    protected function filterDefaultLanguageRecords(string $table, array $records): array
-    {
-        $languageField = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
-        return array_values(array_filter(
-            $records,
-            static fn(array $record): bool => (int)($record[$languageField] ?? 0) <= 0
-        ));
-    }
-
-    /**
      * Show the records of one table as they appear in the given language.
      *
      * Every default-language record is overlaid with its translation by the core.
@@ -511,16 +573,17 @@ class GetPageTool extends AbstractRecordTool
         $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageId) ?? (string)$languageId);
         $defaultIsoCode = strtoupper($this->languageService->getDefaultIsoCode() ?? 'default');
 
-        // Loaded translations by their original's uid. Fallback for translations the core
+        // Translations by their original's uid. Fallback for translations the core
         // overlay does not select, e.g. because of frontend group restrictions.
         $loadedTranslations = [];
         if ($pointerField !== '') {
+            $originalUids = [];
             foreach ($records as $record) {
-                $originalUid = (int)($record[$pointerField] ?? 0);
-                if ((int)($record[$languageField] ?? 0) === $languageId && $originalUid > 0) {
-                    $loadedTranslations[$originalUid] ??= $record;
+                if ((int)($record[$languageField] ?? 0) === 0) {
+                    $originalUids[] = (int)$record['uid'];
                 }
             }
+            $loadedTranslations = $this->loadTranslations($table, $languageField, $pointerField, $originalUids, $languageId);
         }
 
         $entries = [];
@@ -716,8 +779,13 @@ class GetPageTool extends AbstractRecordTool
     {
         $result = "Content Elements (tt_content)\n";
         $result .= "----------------------------\n";
-        $result .= "Total: " . $contentInfo['total'] . " elements\n\n";
-        
+        $result .= "Total: " . $contentInfo['total'] . " elements\n";
+        if (count($contentInfo['records']) < $contentInfo['total']) {
+            $result .= "(showing the first " . count($contentInfo['records'])
+                . "; use ReadTable with table \"tt_content\" and pid " . $pageId . " for all)\n";
+        }
+        $result .= "\n";
+
         // Get column position definitions for this specific page
         $hasCustomLayout = false;
         $colPosDefs = RecordFormattingUtility::getColumnPositionDefinitions($pageId, $hasCustomLayout);
