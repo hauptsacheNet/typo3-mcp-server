@@ -22,7 +22,7 @@ These tests help ensure that:
    export OPENROUTER_API_KEY="sk-or-v1-..."
    ```
 
-   Or create a `.env.local` file:
+   Or create a `.env.local` file in the repository root or in `Tests/Llm/`:
    ```bash
    OPENROUTER_API_KEY="sk-or-v1-..."
    ```

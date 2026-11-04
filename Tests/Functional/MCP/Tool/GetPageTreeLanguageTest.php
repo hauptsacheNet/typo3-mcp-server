@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\GetPageTreeTool;
+use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
 use Symfony\Component\Yaml\Yaml;
+use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -175,8 +177,10 @@ class GetPageTreeLanguageTest extends FunctionalTestCase
         
         // Should show default language titles
         $this->assertStringContainsString('[2] About', $output);
-        $this->assertStringNotContainsString('[TRANSLATED]', $output);
-        $this->assertStringNotContainsString('[NOT TRANSLATED]', $output);
+        $this->assertStringNotContainsString('translation of page', $output);
+        $this->assertStringNotContainsString('[NOT TRANSLATED', $output);
+        // Names the language shown and how to reach the translations
+        $this->assertStringContainsString('[LANGUAGE: EN (default language). Translations: DE, FR — pass "language" to list their page uids.]', $output);
     }
 
     /**
@@ -200,13 +204,13 @@ class GetPageTreeLanguageTest extends FunctionalTestCase
         
         // Should show German titles where available
         // German translation has nav_title "Über", should use that instead of title
-        $this->assertStringContainsString('[2] Über [Page] [TRANSLATED]', $output);
-        
-        // Page 2 should be marked as translated
-        $this->assertStringContainsString('Über [Page] [TRANSLATED]', $output);
-        
-        // Pages without translations should be marked as not translated
-        $this->assertStringContainsString('[6] Contact [Page] [NOT TRANSLATED]', $output);
+        // Page 2 is listed under its translation record's uid, naming the original
+        $this->assertStringContainsString('[100] Über [Page] [DE translation of page 2]', $output);
+        $this->assertStringNotContainsString('[2] ', $output);
+
+        // Pages without translations keep the original's uid and say so
+        $this->assertStringContainsString('[6] Contact [Page] [NOT TRANSLATED, EN original]', $output);
+        $this->assertStringContainsString('[LANGUAGE: DE. Translated pages are listed under the uid of their DE translation record', $output);
     }
     
     /**
@@ -239,10 +243,10 @@ class GetPageTreeLanguageTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         
         // Should show French title for page 2
-        $this->assertStringContainsString('[2] À propos [Page] [TRANSLATED]', $output);
+        $this->assertStringContainsString('[101] À propos [Page] [FR translation of page 2]', $output);
         
         // Page 3 has no French translation
-        $this->assertStringContainsString('[3] Hidden Page [Page] [HIDDEN] [NOT TRANSLATED]', $output);
+        $this->assertStringContainsString('[3] Hidden Page [Page] [HIDDEN] [NOT TRANSLATED, EN original]', $output);
     }
 
     /**
@@ -283,7 +287,76 @@ class GetPageTreeLanguageTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         
         // German translation has nav_title "Über", should use that instead of title
-        $this->assertStringContainsString('[2] Über [Page] [TRANSLATED]', $output);
+        $this->assertStringContainsString('[100] Über [Page] [DE translation of page 2]', $output);
         $this->assertStringNotContainsString('Über uns', $output);
+    }
+
+    /**
+     * Translations staged in the workspace are named by the uid ReadTable and
+     * WriteTable accept: the live uid for an edited live translation, the record's
+     * own uid for a translation that only exists in the workspace
+     */
+    public function testTranslatedUidInWorkspace(): void
+    {
+        $this->createTestPagesWithTranslations();
+        $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('default');
+
+        $writeTool = new WriteTableTool();
+        $updateResult = $writeTool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 100,
+            'data' => ['nav_title' => 'Über (Entwurf)'],
+        ]);
+        $this->assertFalse($updateResult->isError, json_encode($updateResult->jsonSerialize()));
+        $translateResult = $writeTool->execute([
+            'action' => 'translate',
+            'table' => 'pages',
+            'uid' => 6,
+            'data' => ['sys_language_uid' => 'de', 'title' => 'Kontakt'],
+        ]);
+        $this->assertFalse($translateResult->isError, json_encode($translateResult->jsonSerialize()));
+        $translationUid = json_decode($translateResult->content[0]->text, true)['translationUid'];
+        $this->assertIsInt($translationUid);
+
+        $tool = new GetPageTreeTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        );
+        $result = $tool->execute([
+            'startPage' => 1,
+            'depth' => 1,
+            'language' => 'de'
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $output = $result->content[0]->text;
+        $this->assertStringContainsString('[100] Über (Entwurf) [Page] [DE translation of page 2]', $output);
+        // DataHandler hides new page translations; hidden ones still count as translated
+        $this->assertStringContainsString('[' . $translationUid . '] Kontakt [Page] [HIDDEN] [DE translation of page 6]', $output);
+    }
+
+    /**
+     * The tree hands out translation uids, so passing one back as startPage lists
+     * the subpages of its default-language page in the translation's language
+     */
+    public function testStartPageAcceptsTranslationUid(): void
+    {
+        $this->createTestPagesWithTranslations();
+
+        $tool = new GetPageTreeTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        );
+        $result = $tool->execute([
+            'startPage' => 100,
+            'depth' => 1,
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $output = $result->content[0]->text;
+        $this->assertStringContainsString('[LANGUAGE: DE.', $output);
+        $this->assertMatchesRegularExpression('/\[4\] .* \[NOT TRANSLATED, EN original\]|translation of page 4\]/', $output);
+        $this->assertStringNotContainsString('[6] Contact', $output, 'Only subpages of page 2 are listed');
     }
 }
