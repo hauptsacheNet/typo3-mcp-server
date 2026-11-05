@@ -134,7 +134,7 @@ class GetPageTreeTool extends AbstractRecordTool
         // Convert the page tree to a text-based tree with indentation
         $textTree = $this->renderTextTree($pageTree, 0, $languageUid, $recordCounts, $pluginHints);
 
-        $textTree = $this->getWorkspaceHint() . $this->getLanguageHint($languageUid) . $textTree;
+        $textTree = $this->getWorkspaceHint() . $this->getLanguageHint($languageUid, $startPage > 0 ? $startPage : null) . $textTree;
 
         return new CallToolResult([new TextContent($textTree)]);
     }
@@ -479,21 +479,24 @@ class GetPageTreeTool extends AbstractRecordTool
     }
 
     /**
-     * Which language the tree shows and how to reach the others; empty on single-language sites
+     * Which language the tree shows and how to reach the others; empty on single-language sites.
+     * With a start page, the languages are named as in that page's site.
      */
-    protected function getLanguageHint(?int $languageUid): string
+    protected function getLanguageHint(?int $languageUid, ?int $pageId = null): string
     {
-        $isoCodes = $this->languageService->getAvailableIsoCodes();
+        $isoCodes = $pageId !== null
+            ? array_column($this->languageService->getLanguagesForPage($pageId), 'isoCode')
+            : $this->languageService->getAvailableIsoCodes();
         if (count($isoCodes) < 2) {
             return '';
         }
-        $defaultIsoCode = $this->languageService->getDefaultIsoCode() ?? 'default';
+        $defaultIsoCode = $this->languageService->getDefaultIsoCode($pageId) ?? 'default';
         if ($languageUid === null || $languageUid === 0) {
             $others = array_values(array_diff($isoCodes, [$defaultIsoCode]));
             return '[LANGUAGE: ' . strtoupper($defaultIsoCode) . ' (default language). Translations: '
                 . strtoupper(implode(', ', $others)) . ' — pass "language" to list their page uids.]' . "\n\n";
         }
-        $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageUid) ?? (string)$languageUid);
+        $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageUid, $pageId) ?? (string)$languageUid);
         return '[LANGUAGE: ' . $isoCode . '. Translated pages are listed under the uid of their ' . $isoCode
             . ' translation record — edit that uid. Untranslated pages show the ' . strtoupper($defaultIsoCode)
             . ' original; use WriteTable action "translate" to translate them.]' . "\n\n";

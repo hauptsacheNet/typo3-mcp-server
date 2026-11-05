@@ -163,8 +163,10 @@ class SiteLanguageIdentifierTest extends FunctionalTestCase
         $mainUid = $this->createHtmlElement(1, 'Main');
         $secondUid = $this->createHtmlElement(51, 'Second');
 
-        $this->assertFalse($this->translate($mainUid, 'en', ['bodytext' => '<p>EN main</p>'])->isError);
-        $this->assertFalse($this->translate($secondUid, 'en', ['bodytext' => '<p>EN second</p>'])->isError);
+        $main = $this->translate($mainUid, 'en', ['bodytext' => '<p>EN main</p>']);
+        $this->assertFalse($main->isError, json_encode($main->jsonSerialize()));
+        $second = $this->translate($secondUid, 'en', ['bodytext' => '<p>EN second</p>']);
+        $this->assertFalse($second->isError, json_encode($second->jsonSerialize()));
 
         $this->assertSame([2], array_map('intval', array_column($this->fetchTranslations($mainUid), 'sys_language_uid')));
         $this->assertSame([1], array_map('intval', array_column($this->fetchTranslations($secondUid), 'sys_language_uid')));
@@ -186,7 +188,8 @@ class SiteLanguageIdentifierTest extends FunctionalTestCase
     public function testReadByVariantTag(): void
     {
         $sourceUid = $this->createHtmlElement(1, 'Kontakt');
-        $this->assertFalse($this->translate($sourceUid, 'de-AT', ['bodytext' => '<p>AT</p>'])->isError);
+        $translated = $this->translate($sourceUid, 'de-AT', ['bodytext' => '<p>AT</p>']);
+        $this->assertFalse($translated->isError, json_encode($translated->jsonSerialize()));
 
         $austria = (new ReadTableTool())->execute(['table' => 'tt_content', 'pid' => 1, 'language' => 'de-AT']);
         $this->assertFalse($austria->isError, json_encode($austria->jsonSerialize()));
@@ -232,6 +235,33 @@ class SiteLanguageIdentifierTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         $this->assertStringContainsString('Language: de-AT (1, Österreich)', $output);
         $this->assertStringContainsString('Available Translations: de-AT (1, Österreich)', $output);
+    }
+
+    public function testGetPageByUrlResolvesTheLanguageInTheUrlsSite(): void
+    {
+        $tool = $this->get(ToolRegistry::class)->getTool('GetPage');
+
+        // "en" stands for language 1 on the second site and for 2 on the main site
+        $result = $tool->execute(['url' => 'https://second.example.com/page', 'language' => 'en']);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('Language: en (1, English)', $result->content[0]->text);
+    }
+
+    public function testPageTreeLanguageHintNamesTheLanguagesOfTheStartPagesSite(): void
+    {
+        $tool = $this->get(ToolRegistry::class)->getTool('GetPageTree');
+
+        $result = $tool->execute(['startPage' => 50, 'depth' => 1, 'language' => 'en']);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $output = $result->content[0]->text;
+        $this->assertStringContainsString('[LANGUAGE: EN.', $output);
+        $this->assertStringContainsString('Untranslated pages show the FR original', $output);
+
+        $default = $tool->execute(['startPage' => 50, 'depth' => 1]);
+        $this->assertFalse($default->isError, json_encode($default->jsonSerialize()));
+        $this->assertStringContainsString('[LANGUAGE: FR (default language). Translations: EN —', $default->content[0]->text);
     }
 
     private function createHtmlElement(int $pid, string $header): int

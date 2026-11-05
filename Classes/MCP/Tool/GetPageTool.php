@@ -110,16 +110,10 @@ class GetPageTool extends AbstractRecordTool
     protected function doExecute(array $params): CallToolResult
     {
         
-        // Handle language parameter
+        // Handle language parameter; a language code is resolved below, once the
+        // page and with it the site is known
         $languageId = 0;
-        if (isset($params['language'])) {
-            // Resolve in the site of the requested page; for URLs the code has to
-            // be unambiguous across sites, since the page is not known yet
-            $languageId = $this->languageService->resolveLanguageUid(
-                $params['language'],
-                isset($params['uid']) ? (int)$params['uid'] : null
-            );
-        } elseif (isset($params['languageId'])) {
+        if (!isset($params['language']) && isset($params['languageId'])) {
             // Backward compatibility with numeric languageId
             $languageId = (int)$params['languageId'];
         }
@@ -144,6 +138,11 @@ class GetPageTool extends AbstractRecordTool
 
         if ($uid <= 0) {
             throw new \InvalidArgumentException('Invalid page UID or URL. Please provide a valid page ID or URL.');
+        }
+
+        if (isset($params['language'])) {
+            // Resolve in the site of the page, for uid and url requests alike
+            $languageId = $this->languageService->resolveLanguageUid($params['language'], $uid);
         }
 
         // Language views list translated pages under the translation's uid; such a uid
