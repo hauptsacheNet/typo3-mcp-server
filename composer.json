@@ -31,7 +31,8 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Hn\\McpServer\\Tests\\": "Tests/"
+            "Hn\\McpServer\\Tests\\": "Tests/",
+            "Hn\\TestRequestContext\\": "Tests/Functional/Fixtures/Extensions/test_request_context/Classes/"
         }
     },
     "extra": {

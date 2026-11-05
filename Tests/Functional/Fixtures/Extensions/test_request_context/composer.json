@@ -1,0 +1,11 @@
+{
+    "name": "hn/test-request-context",
+    "type": "typo3-cms-extension",
+    "description": "Fixture: a tool and a listener that depend on the published request",
+    "license": "GPL-2.0-or-later",
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "test_request_context"
+        }
+    }
+}
