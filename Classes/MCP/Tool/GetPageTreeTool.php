@@ -187,8 +187,14 @@ class GetPageTreeTool extends AbstractRecordTool
 
         // Filter by pid (parent ID) for the starting page
         if ($startPage === 0 && $pageAccess->isRestricted()) {
+            // A mount root moved in the workspace is represented by its move pointer,
+            // which carries its own uid and points to the root via t3ver_oid
+            $mountRoots = $queryBuilder->quoteArrayBasedValueListToIntegerList($pageAccess->getReadableMountRoots() ?: [-1]);
             $query->andWhere(
-                $queryBuilder->expr()->in('uid', $queryBuilder->quoteArrayBasedValueListToIntegerList($pageAccess->getReadableMountRoots() ?: [-1])),
+                $queryBuilder->expr()->or(
+                    $queryBuilder->expr()->in('uid', $mountRoots),
+                    $queryBuilder->expr()->in('t3ver_oid', $mountRoots)
+                ),
                 $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
             );
         } elseif ($startPage === 0) {

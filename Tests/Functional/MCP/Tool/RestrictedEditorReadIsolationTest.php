@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
+use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\MCP\Tool\SearchTool;
 use Hn\McpServer\MCP\Tool\ToolInterface;
 use Hn\McpServer\MCP\ToolRegistry;
@@ -106,6 +107,34 @@ class RestrictedEditorReadIsolationTest extends FunctionalTestCase
         $this->assertStringContainsString('Restricted Page', $tree);
         $this->assertStringNotContainsString('Other Page', $tree);
         $this->assertStringNotContainsString('Hidden Page', $tree);
+    }
+
+    /**
+     * A mount root that was moved in the workspace is represented by its move
+     * pointer, which has its own uid; the tree must still start at it.
+     */
+    public function testPageTreeShowsAMountRootMovedInTheWorkspace(): void
+    {
+        $this->actAsBackendUser(1);
+        $move = (new WriteTableTool())->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => self::MOUNTED_PAGE_UID,
+            'data' => ['pid' => 2],
+        ]);
+        $this->assertFalse($move->isError, json_encode($move->jsonSerialize()));
+        $this->assertNotNull(
+            $this->fetchWorkspaceVersion('pages', self::MOUNTED_PAGE_UID, self::EDITORIAL_WORKSPACE_UID),
+            'Precondition: the move is staged in the editorial workspace'
+        );
+
+        $this->actAsBackendUser(self::RESTRICTED_EDITOR_UID);
+        $result = $this->getTool('GetPageTree')->execute(['startPage' => 0, 'depth' => 3]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $tree = $result->content[0]->text;
+        $this->assertStringContainsString('[' . self::MOUNTED_PAGE_UID . '] Restricted Page', $tree);
+        $this->assertStringNotContainsString('Other Page', $tree);
     }
 
     public function testPageTreeStartingOutsideMountIsRejected(): void
