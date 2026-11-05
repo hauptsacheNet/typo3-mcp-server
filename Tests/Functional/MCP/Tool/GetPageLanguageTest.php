@@ -240,7 +240,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         // The translation record is the primary uid, the original is named alongside
         $this->assertStringContainsString("UID: 200\n", $output);
         $this->assertStringNotContainsString("UID: 2\n", $output);
-        $this->assertStringContainsString('Language: DE (ID: 1)', $output);
+        $this->assertStringContainsString('Language: de (1, German)', $output);
         $this->assertStringContainsString('Translated: Yes (DE translation of page 2)', $output);
 
         // A translated element is listed once, under the translation's uid
@@ -471,7 +471,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         $this->assertStringContainsString("UID: 200\n", $output);
         $this->assertStringContainsString('Title: Über uns', $output);
-        $this->assertStringContainsString('Language: DE (ID: 1)', $output);
+        $this->assertStringContainsString('Language: de (1, German)', $output);
         $this->assertStringContainsString('Translated: Yes (DE translation of page 2)', $output);
         $this->assertStringContainsString('- [1000] Willkommen auf der Über uns Seite (DE, translates 102)', $output);
     }
@@ -509,7 +509,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         
         // Should show language information
         $this->assertStringContainsString("UID: 201\n", $output);
-        $this->assertStringContainsString('Language: FR (ID: 2)', $output);
+        $this->assertStringContainsString('Language: fr (2, French)', $output);
         $this->assertStringContainsString('Translated: Yes (FR translation of page 2)', $output);
 
         // French has no content translations, should show default content
@@ -631,7 +631,7 @@ class GetPageLanguageTest extends FunctionalTestCase
             $this->assertFalse($result->isError, $url . ': ' . json_encode($result->jsonSerialize()));
             $output = $result->content[0]->text;
             $this->assertStringContainsString('UID: 200', $output, $url);
-            $this->assertStringContainsString('Language: DE (ID: 1)', $output, $url);
+            $this->assertStringContainsString('Language: de (1, German)', $output, $url);
             $this->assertStringContainsString('Translated: Yes (DE translation of page 2)', $output, $url);
         }
 
@@ -645,7 +645,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         $result = $tool->execute(['url' => 'https://example.com/de/ueber-uns', 'language' => 'fr']);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringContainsString('UID: 201', $result->content[0]->text);
-        $this->assertStringContainsString('Language: FR (ID: 2)', $result->content[0]->text);
+        $this->assertStringContainsString('Language: fr (2, French)', $result->content[0]->text);
     }
 
     /**
@@ -669,13 +669,13 @@ class GetPageLanguageTest extends FunctionalTestCase
             $this->assertFalse($result->isError, $url . ': ' . json_encode($result->jsonSerialize()));
             $output = $result->content[0]->text;
             $this->assertStringContainsString('UID: 200', $output, $url);
-            $this->assertStringContainsString('Language: DE (ID: 1)', $output, $url);
+            $this->assertStringContainsString('Language: de (1, German)', $output, $url);
         }
 
         $result = $tool->execute(['url' => 'https://de.example.com/']);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringContainsString('UID: 1', $result->content[0]->text);
-        $this->assertStringContainsString('Language: DE (ID: 1)', $result->content[0]->text);
+        $this->assertStringContainsString('Language: de (1, German)', $result->content[0]->text);
 
         $result = $tool->execute(['url' => 'https://other.example.org/about']);
         $this->assertTrue($result->isError);
@@ -696,7 +696,7 @@ class GetPageLanguageTest extends FunctionalTestCase
 
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $output = $result->content[0]->text;
-        $this->assertStringContainsString('Language: DE (ID: 1)', $output);
+        $this->assertStringContainsString('Language: de (1, German)', $output);
         $this->assertStringContainsString('Translated: No (default-language record', $output);
         $this->assertStringContainsString('UID: 1', $output);
     }
@@ -741,7 +741,7 @@ class GetPageLanguageTest extends FunctionalTestCase
         
         // Should work with numeric languageId
         $this->assertStringContainsString('Title: Über uns', $output);
-        $this->assertStringContainsString('Language: DE (ID: 1)', $output);
+        $this->assertStringContainsString('Language: de (1, German)', $output);
     }
 
     /**
