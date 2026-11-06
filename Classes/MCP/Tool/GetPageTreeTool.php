@@ -14,8 +14,6 @@ use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
-use TYPO3\CMS\Core\Context\Context;
-use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\RecordUrlService;
@@ -71,7 +69,7 @@ class GetPageTreeTool extends AbstractRecordTool
         if (count($availableLanguages) > 1) {
             $schema['inputSchema']['properties']['language'] = [
                 'type' => 'string',
-                'description' => 'Language ISO code to show translated page titles (e.g., "de", "fr"). Shows translation status for each page.',
+                'description' => 'Language ISO code to show translated page titles (e.g., "de", "fr"). Translated pages are then listed under the uid of their translation record, which is the one to edit in that language.',
                 'enum' => $availableLanguages,
             ];
         }
@@ -103,6 +101,16 @@ class GetPageTreeTool extends AbstractRecordTool
             }
         }
 
+        // Language views list translated pages under their translation's uid; such a
+        // uid starts the tree at its default-language page, in the translation's language
+        if ($startPage > 0) {
+            $startRecord = BackendUtility::getRecordWSOL('pages', $startPage);
+            if ((int)($startRecord['sys_language_uid'] ?? 0) > 0 && (int)($startRecord['l10n_parent'] ?? 0) > 0) {
+                $startPage = (int)$startRecord['l10n_parent'];
+                $languageUid ??= (int)$startRecord['sys_language_uid'];
+            }
+        }
+
         // Get page tree with the specified parameters
         $pageTree = $this->getPageTree($startPage, $depth, $languageUid);
         
@@ -129,7 +137,7 @@ class GetPageTreeTool extends AbstractRecordTool
         // Convert the page tree to a text-based tree with indentation
         $textTree = $this->renderTextTree($pageTree, 0, $languageUid, $recordCounts, $pluginHints);
 
-        $textTree = $this->getWorkspaceHint() . $textTree;
+        $textTree = $this->getWorkspaceHint() . $this->getLanguageHint($languageUid) . $textTree;
 
         return new CallToolResult([new TextContent($textTree)]);
     }
@@ -184,22 +192,9 @@ class GetPageTreeTool extends AbstractRecordTool
         // Execute the query
         $pages = $query->executeQuery()->fetchAllAssociative();
 
-        // Set up context for language and visibility
-        $context = GeneralUtility::makeInstance(Context::class);
-
-        // Set up language aspect if needed
-        if ($languageUid !== null && $languageUid > 0) {
-            $languageAspect = new LanguageAspect(
-                $languageUid,
-                $languageUid,
-                LanguageAspect::OVERLAYS_MIXED,
-                [$languageUid]
-            );
-            $context->setAspect('language', $languageAspect);
-        }
-
-        // Create PageRepository with context
-        $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
+        $pageRepository = $languageUid !== null && $languageUid > 0
+            ? $this->createLanguageOverlayRepository($languageUid)
+            : null;
 
         // Process the result
         $pageTree = [];
@@ -242,15 +237,17 @@ class GetPageTreeTool extends AbstractRecordTool
             ];
 
             // Get language overlay if language specified
-            if ($languageUid !== null && $languageUid > 0) {
+            if ($pageRepository !== null) {
                 $overlaidPage = $pageRepository->getPageOverlay($page, $languageUid);
+                $translationUid = $this->getOverlayTranslationUid($overlaidPage);
 
-                if ($overlaidPage !== $page) {
+                if ($translationUid !== null) {
                     // Apply overlay data
                     $pageData['title'] = $overlaidPage['title'] ?: $pageData['title'];
                     $pageData['nav_title'] = $overlaidPage['nav_title'] ?: $pageData['nav_title'];
                     $pageData['hidden'] = (bool)$overlaidPage['hidden'];
                     $pageData['_translated'] = true;
+                    $pageData['_translationUid'] = $translationUid;
                 } else {
                     $pageData['_translated'] = false;
                 }
@@ -485,6 +482,27 @@ class GetPageTreeTool extends AbstractRecordTool
     }
 
     /**
+     * Which language the tree shows and how to reach the others; empty on single-language sites
+     */
+    protected function getLanguageHint(?int $languageUid): string
+    {
+        $isoCodes = $this->languageService->getAvailableIsoCodes();
+        if (count($isoCodes) < 2) {
+            return '';
+        }
+        $defaultIsoCode = $this->languageService->getDefaultIsoCode() ?? 'default';
+        if ($languageUid === null || $languageUid === 0) {
+            $others = array_values(array_diff($isoCodes, [$defaultIsoCode]));
+            return '[LANGUAGE: ' . strtoupper($defaultIsoCode) . ' (default language). Translations: '
+                . strtoupper(implode(', ', $others)) . ' — pass "language" to list their page uids.]' . "\n\n";
+        }
+        $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageUid) ?? (string)$languageUid);
+        return '[LANGUAGE: ' . $isoCode . '. Translated pages are listed under the uid of their ' . $isoCode
+            . ' translation record — edit that uid. Untranslated pages show the ' . strtoupper($defaultIsoCode)
+            . ' original; use WriteTable action "translate" to translate them.]' . "\n\n";
+    }
+
+    /**
      * Render the page tree as a text-based tree with indentation
      */
     protected function renderTextTree(array $pageTree, int $level = 0, ?int $languageUid = null, array $recordCounts = [], array $pluginHints = []): string
@@ -497,13 +515,18 @@ class GetPageTreeTool extends AbstractRecordTool
             $hiddenMark = $page['hidden'] ? ' [HIDDEN]' : '';
             $doktypeLabel = $this->getDoktypeLabel($page['doktype']);
             
-            // Start building the line: [uid] Title [Type]
-            $result .= $indent . '- [' . $page['uid'] . '] ' . $title . ' [' . $doktypeLabel . ']' . $hiddenMark;
-            
+            // Start building the line: [uid] Title [Type]. In a language view the
+            // translation record is the one to edit, so its uid is the primary one.
+            $result .= $indent . '- [' . ($page['_translationUid'] ?? $page['uid']) . '] ' . $title . ' [' . $doktypeLabel . ']' . $hiddenMark;
+
             // Add translation status if language specified
             if ($languageUid !== null && $languageUid > 0) {
-                if (isset($page['_translated'])) {
-                    $result .= $page['_translated'] ? ' [TRANSLATED]' : ' [NOT TRANSLATED]';
+                $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageUid) ?? (string)$languageUid);
+                if (isset($page['_translationUid'])) {
+                    $result .= ' [' . $isoCode . ' translation of page ' . $page['uid'] . ']';
+                } else {
+                    $defaultIsoCode = strtoupper($this->languageService->getDefaultIsoCode() ?? 'default');
+                    $result .= ' [NOT TRANSLATED, ' . $defaultIsoCode . ' original]';
                 }
             }
 

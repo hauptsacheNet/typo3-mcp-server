@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool;
 
+use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\ParameterType;
+use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -18,10 +20,11 @@ use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Routing\PageArguments;
+use TYPO3\CMS\Core\Routing\SiteMatcher;
+use TYPO3\CMS\Core\Routing\SiteRouteResult;
+use Psr\Http\Message\UriInterface;
 use TYPO3\CMS\Core\Exception\Page\PageNotFoundException;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
-use TYPO3\CMS\Core\Context\Context;
-use TYPO3\CMS\Core\Context\LanguageAspect;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
@@ -68,7 +71,7 @@ class GetPageTool extends AbstractRecordTool
                     ],
                     'url' => [
                         'type' => 'string',
-                        'description' => 'The URL of the page to retrieve (alternative to uid). Can be full URL, path, or slug. ' . $domainsText,
+                        'description' => 'The URL of the page to retrieve (alternative to uid). Can be full URL, path, or slug; a language prefix like "/en/" shows the page in that language. ' . $domainsText,
                     ],
                 ],
                 'required' => [],
@@ -80,7 +83,7 @@ class GetPageTool extends AbstractRecordTool
         if (count($availableLanguages) > 1) {
             $schema['inputSchema']['properties']['language'] = [
                 'type' => 'string',
-                'description' => 'Language ISO code to show page and content in specific language (e.g., "de", "fr"). Shows translated content and metadata when available.',
+                'description' => 'Language ISO code to show page and content in specific language (e.g., "de", "fr"). The page and its translated records are then listed under the uids of their translation records — edit those, not the default-language originals. Untranslated records are labeled as such.',
                 'enum' => $availableLanguages,
             ];
             
@@ -126,7 +129,12 @@ class GetPageTool extends AbstractRecordTool
             $uid = (int)$params['uid'];
         } elseif (isset($params['url'])) {
             try {
-                $uid = $this->resolveUrlToPageUid($params['url'], $languageId);
+                [$uid, $urlLanguageId] = $this->resolveUrlToPageUid($params['url']);
+                // A language prefix in the URL (e.g. "/en/") selects the language
+                // unless one was requested explicitly
+                if ($urlLanguageId !== null && !isset($params['language']) && !isset($params['languageId'])) {
+                    $languageId = $urlLanguageId;
+                }
             } catch (\Throwable $e) {
                 // Re-throw as InvalidArgumentException to preserve the message in error handling
                 throw new \InvalidArgumentException($e->getMessage(), 0, $e);
@@ -135,6 +143,16 @@ class GetPageTool extends AbstractRecordTool
 
         if ($uid <= 0) {
             throw new \InvalidArgumentException('Invalid page UID or URL. Please provide a valid page ID or URL.');
+        }
+
+        // Language views list translated pages under the translation's uid; such a uid
+        // shows its default-language page in the translation's language
+        $translatedPage = BackendUtility::getRecordWSOL('pages', $uid);
+        if ((int)($translatedPage['sys_language_uid'] ?? 0) > 0 && (int)($translatedPage['l10n_parent'] ?? 0) > 0) {
+            $uid = (int)$translatedPage['l10n_parent'];
+            if (!isset($params['language']) && !isset($params['languageId'])) {
+                $languageId = (int)$translatedPage['sys_language_uid'];
+            }
         }
 
         // Get page data (with language overlay if applicable)
@@ -225,25 +243,19 @@ class GetPageTool extends AbstractRecordTool
             't3ver_state' => (int)($page['t3ver_state'] ?? 0),
         ];
 
-        // Apply language overlay if language is specified
+        // Apply language overlay if language is specified. The overlay keeps the
+        // default-language uid in 'uid' (needed for URLs and the record lookup);
+        // the translation record's uid is kept apart in '_translationUid'.
         if ($languageId > 0) {
-            // Create a context with the specified language for PageRepository overlay
-            $context = GeneralUtility::makeInstance(Context::class);
-            $languageAspect = new LanguageAspect(
-                $languageId,
-                $languageId,
-                LanguageAspect::OVERLAYS_MIXED,
-                [$languageId]
-            );
-            $context->setAspect('language', $languageAspect);
-
-            $pageRepository = GeneralUtility::makeInstance(PageRepository::class, $context);
+            $pageRepository = $this->createLanguageOverlayRepository($languageId);
             $overlaidPage = $pageRepository->getPageOverlay($page, $languageId);
+            $translationUid = $this->getOverlayTranslationUid($overlaidPage);
 
             // Add our custom metadata
-            if ($overlaidPage !== $page) {
+            if ($translationUid !== null) {
                 // Page was overlaid
                 $overlaidPage['_translated'] = true;
+                $overlaidPage['_translationUid'] = $translationUid;
                 $overlaidPage['_language_uid'] = $languageId;
                 if (isset($page['title']) && isset($overlaidPage['title']) && $page['title'] !== $overlaidPage['title']) {
                     $overlaidPage['_original_title'] = $page['title'];
@@ -283,7 +295,7 @@ class GetPageTool extends AbstractRecordTool
             ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
             ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
 
-        $translations = $queryBuilder->select('sys_language_uid', 'title')
+        $translations = $queryBuilder->select('uid', 'sys_language_uid', 'title')
             ->from('pages')
             ->where(
                 $queryBuilder->expr()->eq('l10n_parent', $queryBuilder->createNamedParameter($pageUid, ParameterType::INTEGER))
@@ -297,10 +309,13 @@ class GetPageTool extends AbstractRecordTool
             $languageId = (int)$translation['sys_language_uid'];
             $isoCode = $this->languageService->getIsoCodeFromUid($languageId);
             if ($isoCode) {
+                // Workspace changes of the title show up like everywhere else
+                $workspaceTranslation = BackendUtility::getRecordWSOL('pages', (int)$translation['uid']);
                 $result[] = [
+                    'uid' => (int)$translation['uid'],
                     'languageId' => $languageId,
                     'isoCode' => $isoCode,
-                    'title' => $translation['title'],
+                    'title' => $workspaceTranslation['title'] ?? $translation['title'],
                 ];
             }
         }
@@ -315,23 +330,23 @@ class GetPageTool extends AbstractRecordTool
     {
         // Get all tables that can be on a page
         $tables = $this->getContentTables();
-        
+        $pageRepository = $languageId > 0 ? $this->createLanguageOverlayRepository($languageId) : null;
+
         $recordsInfo = [];
-        
+
         foreach ($tables as $table) {
-            $tableInfo = $this->getTableRecordsInfo($table, $pageId);
-            
+            // The language is filtered in the query, before the row limit, so the
+            // total counts the records of this view and nothing is cut off silently
+            $tableInfo = $this->getTableRecordsInfo($table, $pageId, $languageId);
+
+            if ($pageRepository !== null && !empty($tableInfo['records']) && $this->tableHasLanguageSupport($table)) {
+                $tableInfo['records'] = $this->overlayRecordsForLanguage($table, $tableInfo['records'], $languageId, $pageRepository);
+            }
             if (!empty($tableInfo['records'])) {
-                // Filter records by language for tables that have language support
-                if ($this->tableHasLanguageSupport($table)) {
-                    $tableInfo = $this->filterRecordsByLanguage($tableInfo, $languageId);
-                }
-                if (!empty($tableInfo['records'])) {
-                    $recordsInfo[$table] = $tableInfo;
-                }
+                $recordsInfo[$table] = $tableInfo;
             }
         }
-        
+
         return $recordsInfo;
     }
     
@@ -360,7 +375,14 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Get information about records from a specific table on a page
      */
-    protected function getTableRecordsInfo(string $table, int $pageId): array
+    /**
+     * Records of a table on a page, at most 20, with the total count.
+     *
+     * Language-aware tables only load the rows of the requested view: default-language
+     * and "all languages" rows, plus in a language view the rows that only exist in that
+     * language. Connected translations are added by overlayRecordsForLanguage().
+     */
+    protected function getTableRecordsInfo(string $table, int $pageId, int $languageId = 0): array
     {
         // Skip if table is not accessible
         if (!$this->tableAccessService->canAccessTable($table)) {
@@ -370,25 +392,16 @@ class GetPageTool extends AbstractRecordTool
             ];
         }
 
-        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
-        $queryBuilder = $connectionPool->getQueryBuilderForTable($table);
-
-        // Apply proper workspace restrictions
-        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
-        $queryBuilder->getRestrictions()
-            ->removeAll()
-            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
-            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
-
         // Always include hidden records (like the TYPO3 backend does)
+        $queryBuilder = $this->createRecordQueryBuilder($table);
 
         // First, get the total count of records
         $countQueryBuilder = clone $queryBuilder;
         $totalCount = $countQueryBuilder->count('*')
             ->from($table)
             ->where(
-                $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
+                $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
+                ...$this->getLanguageViewConditions($countQueryBuilder, $table, $languageId)
             )
             ->executeQuery()
             ->fetchOne();
@@ -397,7 +410,8 @@ class GetPageTool extends AbstractRecordTool
         $query = $queryBuilder->select('*')
             ->from($table)
             ->where(
-                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
+                ...$this->getLanguageViewConditions($queryBuilder, $table, $languageId)
             );
 
         // Limit to 20 records per table
@@ -420,17 +434,75 @@ class GetPageTool extends AbstractRecordTool
             $query->orderBy('uid');
         }
 
-        $records = $query->executeQuery()->fetchAllAssociative();
+        $rows = $query->executeQuery()->fetchAllAssociative();
+        $records = $this->applyWorkspaceOverlay($table, $rows);
+        // Records marked for deletion in this workspace are excluded
+        $totalCount = max(0, (int)$totalCount - (count($rows) - count($records)));
 
-        // Apply workspace overlay: replaces live record data with workspace-modified version,
-        // or removes records marked for deletion in this workspace.
-        $processedRecords = [];
-        foreach ($records as $record) {
+        return [
+            'total' => $totalCount,
+            'records' => $records
+        ];
+    }
+
+    /**
+     * Query builder for page records: deleted records excluded, current workspace applied
+     */
+    protected function createRecordQueryBuilder(string $table): QueryBuilder
+    {
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $currentWorkspace))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $currentWorkspace));
+        return $queryBuilder;
+    }
+
+    /**
+     * Rows a language view loads directly: default-language and "all languages" rows,
+     * plus rows that only exist in the requested language (no translation pointer)
+     *
+     * @return string[] Conditions to AND, none for tables without language support
+     */
+    protected function getLanguageViewConditions(QueryBuilder $queryBuilder, string $table, int $languageId): array
+    {
+        if (!$this->tableHasLanguageSupport($table)) {
+            return [];
+        }
+        $languageField = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
+        $pointerField = $GLOBALS['TCA'][$table]['ctrl']['transOrigPointerField'] ?? '';
+        $expr = $queryBuilder->expr();
+        $defaultLanguage = $expr->in(
+            $languageField,
+            $queryBuilder->createNamedParameter([0, -1], ArrayParameterType::INTEGER)
+        );
+        if ($languageId === 0) {
+            return [$defaultLanguage];
+        }
+        $requestedLanguage = $expr->eq($languageField, $queryBuilder->createNamedParameter($languageId, ParameterType::INTEGER));
+        if ($pointerField !== '') {
+            $requestedLanguage = $expr->and(
+                $requestedLanguage,
+                $expr->eq($pointerField, $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+            );
+        }
+        return [(string)$expr->or($defaultLanguage, $requestedLanguage)];
+    }
+
+    /**
+     * Replace live rows with their workspace version and expose the live uid, drop rows
+     * deleted in the workspace
+     */
+    protected function applyWorkspaceOverlay(string $table, array $rows): array
+    {
+        $currentWorkspace = $GLOBALS['BE_USER']->workspace ?? 0;
+        $records = [];
+        foreach ($rows as $record) {
             if ($currentWorkspace > 0) {
                 BackendUtility::workspaceOL($table, $record);
                 if ($record === false) {
-                    // Record is marked for deletion in workspace — exclude it
-                    $totalCount = max(0, $totalCount - 1);
                     continue;
                 }
             }
@@ -438,14 +510,34 @@ class GetPageTool extends AbstractRecordTool
             if (isset($record['t3ver_oid']) && $record['t3ver_oid'] > 0) {
                 $record['uid'] = (int)$record['t3ver_oid'];
             }
-            $processedRecords[] = $record;
+            $records[] = $record;
         }
-        $records = $processedRecords;
+        return $records;
+    }
 
-        return [
-            'total' => (int)$totalCount,
-            'records' => $records
-        ];
+    /**
+     * Translations of the given originals in a language, by original uid
+     */
+    protected function loadTranslations(string $table, string $languageField, string $pointerField, array $originalUids, int $languageId): array
+    {
+        if ($originalUids === []) {
+            return [];
+        }
+        $queryBuilder = $this->createRecordQueryBuilder($table);
+        $rows = $queryBuilder->select('*')
+            ->from($table)
+            ->where(
+                $queryBuilder->expr()->in($pointerField, $queryBuilder->createNamedParameter($originalUids, ArrayParameterType::INTEGER)),
+                $queryBuilder->expr()->eq($languageField, $queryBuilder->createNamedParameter($languageId, ParameterType::INTEGER))
+            )
+            ->orderBy('uid')
+            ->executeQuery()
+            ->fetchAllAssociative();
+        $translations = [];
+        foreach ($this->applyWorkspaceOverlay($table, $rows) as $record) {
+            $translations[(int)$record[$pointerField]] ??= $record;
+        }
+        return $translations;
     }
 
     /**
@@ -465,32 +557,78 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
-     * Filter records by language
+     * Show the records of one table as they appear in the given language.
+     *
+     * Every default-language record is overlaid with its translation by the core.
+     * A translated record is listed once, under the translation's uid; untranslated
+     * ones keep their own uid. Records only existing in the language (free mode)
+     * are kept; other translations are covered by their original or orphaned.
+     * '_languageLabel' tells the client which record it is looking at.
+     *
+     * @param array $records Workspace-overlaid rows with live uids, in display order
      */
-    protected function filterRecordsByLanguage(array $tableInfo, int $languageId): array
+    protected function overlayRecordsForLanguage(string $table, array $records, int $languageId, PageRepository $pageRepository): array
     {
-        $filteredRecords = [];
-        
-        foreach ($tableInfo['records'] as $record) {
-            $recordLang = (int)($record['sys_language_uid'] ?? 0);
-            
-            if ($languageId === 0) {
-                // Default language: only show records with sys_language_uid = 0
-                if ($recordLang === 0 || $recordLang === -1) {
-                    $filteredRecords[] = $record;
-                }
-            } else {
-                // Specific language: show records in that language or default language
-                if ($recordLang === $languageId || $recordLang === 0 || $recordLang === -1) {
-                    $filteredRecords[] = $record;
+        $languageField = $GLOBALS['TCA'][$table]['ctrl']['languageField'];
+        $pointerField = $GLOBALS['TCA'][$table]['ctrl']['transOrigPointerField'] ?? '';
+        $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageId) ?? (string)$languageId);
+        $defaultIsoCode = strtoupper($this->languageService->getDefaultIsoCode() ?? 'default');
+
+        // Translations by their original's uid. Fallback for translations the core
+        // overlay does not select, e.g. because of frontend group restrictions.
+        $loadedTranslations = [];
+        if ($pointerField !== '') {
+            $originalUids = [];
+            foreach ($records as $record) {
+                if ((int)($record[$languageField] ?? 0) === 0) {
+                    $originalUids[] = (int)$record['uid'];
                 }
             }
+            $loadedTranslations = $this->loadTranslations($table, $languageField, $pointerField, $originalUids, $languageId);
         }
-        
-        return [
-            'total' => count($filteredRecords),
-            'records' => $filteredRecords,
-        ];
+
+        $entries = [];
+        $listedTranslationUids = [];
+        foreach ($records as $record) {
+            $recordLanguage = (int)($record[$languageField] ?? 0);
+            if ($recordLanguage === -1) {
+                $record['_languageLabel'] = 'all languages';
+                $entries[] = $record;
+            } elseif ($recordLanguage === 0) {
+                $originalUid = (int)$record['uid'];
+                $overlaid = $pageRepository->getLanguageOverlay($table, $record);
+                $translationUid = is_array($overlaid) ? $this->getOverlayTranslationUid($overlaid) : null;
+                if ($translationUid === null && isset($loadedTranslations[$originalUid])) {
+                    $overlaid = $loadedTranslations[$originalUid];
+                    $translationUid = (int)$overlaid['uid'];
+                }
+                if ($translationUid !== null) {
+                    $overlaid['uid'] = $translationUid;
+                    $overlaid['_languageLabel'] = $isoCode . ', translates ' . $originalUid;
+                    $listedTranslationUids[$translationUid] = true;
+                    $entries[] = $overlaid;
+                } else {
+                    $record['_languageLabel'] = $defaultIsoCode . ' original, not translated';
+                    $entries[] = $record;
+                }
+            } elseif ($recordLanguage === $languageId) {
+                // Decided below, once all overlays are known
+                $entries[] = $record;
+            }
+        }
+
+        $result = [];
+        foreach ($entries as $entry) {
+            if (!isset($entry['_languageLabel'])) {
+                $isConnectedTranslation = $pointerField !== '' && (int)($entry[$pointerField] ?? 0) > 0;
+                if ($isConnectedTranslation || isset($listedTranslationUids[(int)$entry['uid']])) {
+                    continue;
+                }
+                $entry['_languageLabel'] = $isoCode;
+            }
+            $result[] = $entry;
+        }
+        return $result;
     }
     
     /**
@@ -501,8 +639,9 @@ class GetPageTool extends AbstractRecordTool
         $result = "PAGE INFORMATION\n";
         $result .= "================\n\n";
         
-        // Basic page info
-        $result .= "UID: " . $pageData['uid'] . "\n";
+        // Basic page info. In a language view the translation record is the one to
+        // edit, so its uid is the primary one.
+        $result .= "UID: " . ($pageData['_translationUid'] ?? $pageData['uid']) . "\n";
         $result .= "Title: " . $pageData['title'] . "\n";
         
         if (isset($pageUrls['frontend_url'])) {
@@ -534,19 +673,21 @@ class GetPageTool extends AbstractRecordTool
         
         // Add language/translation information
         if ($languageId > 0) {
-            $isoCode = $this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown';
-            $result .= "Language: " . strtoupper($isoCode) . " (ID: $languageId)\n";
-            $result .= "Translated: " . (($pageData['_translated'] ?? false) ? 'Yes' : 'No') . "\n";
+            $isoCode = strtoupper($this->languageService->getIsoCodeFromUid($languageId) ?? 'unknown');
+            $result .= "Language: " . $isoCode . " (ID: $languageId)\n";
+            if (isset($pageData['_translationUid'])) {
+                $result .= "Translated: Yes (" . $isoCode . " translation of page " . $pageData['uid'] . ")\n";
+            } else {
+                $result .= "Translated: No (default-language record — use WriteTable action \"translate\" to create the "
+                    . $isoCode . " translation)\n";
+            }
         }
         
-        // Show available translations
-        if (!empty($translations)) {
-            $result .= "Available Translations: ";
-            $translationList = [];
-            foreach ($translations as $translation) {
-                $translationList[] = strtoupper($translation['isoCode']);
-            }
-            $result .= implode(', ', $translationList) . "\n";
+        if ($languageId === 0) {
+            $result .= $this->formatTranslationList((int)$pageData['uid'], $translations);
+        } elseif (!empty($translations)) {
+            $result .= "Available Translations: "
+                . strtoupper(implode(', ', array_column($translations, 'isoCode'))) . "\n";
         }
         
         $result .= "\n";
@@ -576,7 +717,7 @@ class GetPageTool extends AbstractRecordTool
             if ($displayCount > 0) {
                 foreach ($records as $record) {
                     $title = RecordFormattingUtility::getRecordTitle($table, $record);
-                    $result .= "- [" . $record['uid'] . "] " . $title . "\n";
+                    $result .= "- [" . $record['uid'] . "] " . $title . $this->formatLanguageLabel($record) . "\n";
                 }
                 
                 if ($displayCount < $totalCount) {
@@ -593,14 +734,59 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
+     * Language of the default view and where its translations are, so a client asked
+     * for "the English page" finds the record to edit. Empty on single-language sites.
+     */
+    protected function formatTranslationList(int $pageUid, array $translations): string
+    {
+        $languages = array_filter(
+            $this->languageService->getLanguagesForPage($pageUid),
+            static fn(array $language): bool => $language['enabled']
+        );
+        if (count($languages) < 2) {
+            return '';
+        }
+
+        $translationsByLanguage = array_column($translations, null, 'languageId');
+        $result = '';
+        $lines = [];
+        foreach ($languages as $language) {
+            $isoCode = strtoupper($language['isoCode']);
+            if ($language['uid'] === 0) {
+                $result .= "Language: " . $isoCode . " (default language)\n";
+            } elseif (isset($translationsByLanguage[$language['uid']])) {
+                $translation = $translationsByLanguage[$language['uid']];
+                $lines[] = "- " . $isoCode . ": page " . $translation['uid'] . ' "' . $translation['title'] . '"'
+                    . ' — GetPage {"uid": ' . $translation['uid'] . '} shows it with its ' . $isoCode . " content\n";
+            } else {
+                $lines[] = "- " . $isoCode . ': not translated — WriteTable action "translate" creates it' . "\n";
+            }
+        }
+        return $result . "Translations:\n" . implode('', $lines);
+    }
+
+    /**
+     * Language label of a record in a language view, e.g. " (EN, translates 504)"
+     */
+    protected function formatLanguageLabel(array $record): string
+    {
+        return isset($record['_languageLabel']) ? ' (' . $record['_languageLabel'] . ')' : '';
+    }
+
+    /**
      * Format content elements grouped by column position
      */
     protected function formatContentElements(array $contentInfo, int $pageId): string
     {
         $result = "Content Elements (tt_content)\n";
         $result .= "----------------------------\n";
-        $result .= "Total: " . $contentInfo['total'] . " elements\n\n";
-        
+        $result .= "Total: " . $contentInfo['total'] . " elements\n";
+        if (count($contentInfo['records']) < $contentInfo['total']) {
+            $result .= "(showing the first " . count($contentInfo['records'])
+                . "; use ReadTable with table \"tt_content\" and pid " . $pageId . " for all)\n";
+        }
+        $result .= "\n";
+
         // Get column position definitions for this specific page
         $hasCustomLayout = false;
         $colPosDefs = RecordFormattingUtility::getColumnPositionDefinitions($pageId, $hasCustomLayout);
@@ -636,7 +822,8 @@ class GetPageTool extends AbstractRecordTool
                 $title = RecordFormattingUtility::getRecordTitle('tt_content', $element);
                 $cType = $element['CType'] ?? 'unknown';
                 $cTypeLabel = RecordFormattingUtility::getContentTypeLabel($cType);
-                $result .= "- [" . $element['uid'] . "] " . $title . " (Type: " . $cTypeLabel . " [" . $cType . "])\n";
+                $result .= "- [" . $element['uid'] . "] " . $title . $this->formatLanguageLabel($element)
+                    . " (Type: " . $cTypeLabel . " [" . $cType . "])\n";
                 
                 // Show important fields based on content type
                 switch ($cType) {
@@ -691,91 +878,98 @@ class GetPageTool extends AbstractRecordTool
     }
     
     /**
-     * Resolve a URL to a page UID
-     * 
+     * Resolve a URL to its default-language page uid and the language of the URL
+     *
      * @param string $url The URL to resolve (can be full URL, path, or slug)
-     * @param int $languageId The language ID to use for resolution
-     * @return int The resolved page UID
+     * @return array{0: int, 1: int|null} Page uid and the URL's language id (null when not determined by the URL)
      * @throws \Exception If the URL cannot be resolved
      */
-    protected function resolveUrlToPageUid(string $url, int $languageId = 0): int
+    protected function resolveUrlToPageUid(string $url): array
     {
         $siteFinder = GeneralUtility::makeInstance(SiteFinder::class);
-        
-        // Normalize URLs without a scheme: if the input starts with a known site domain,
+
+        // Every base a site or one of its languages is reachable under; languages may
+        // use their own host (e.g. "de.example.com") or scheme
+        $bases = [];
+        foreach ($siteFinder->getAllSites() as $site) {
+            $bases[] = $site->getBase();
+            foreach ($site->getAllLanguages() as $siteLanguage) {
+                $bases[] = $siteLanguage->getBase();
+            }
+        }
+
+        // Normalize URLs without a scheme: if the input starts with a known domain,
         // prepend https:// so parse_url extracts the host correctly.
         // This handles cases like "www.example.com" or "www.example.com/about".
         if (!str_contains($url, '://') && !str_starts_with($url, '/')) {
-            foreach ($siteFinder->getAllSites() as $site) {
-                $siteHost = $site->getBase()->getHost();
-                if (!empty($siteHost) && str_starts_with($url, $siteHost)) {
+            foreach ($bases as $base) {
+                if ($base->getHost() !== '' && str_starts_with(strtolower($url), strtolower($base->getHost()))) {
                     $url = 'https://' . $url;
                     break;
                 }
             }
         }
 
-        // Try to parse as full URL first
         $parsedUrl = parse_url($url);
+        $host = isset($parsedUrl['host']) ? strtolower($parsedUrl['host']) : null;
 
-        // When a scheme+host URL has no path (e.g. "https://example.com"), treat it as home page
-        $path = $parsedUrl['path'] ?? '/';
-
+        // When a scheme+host URL has no path (e.g. "https://example.com"), treat it as home page.
         // Normalize: ensure leading slash, strip trailing slash (slugs in DB have no trailing slash)
-        $path = '/' . trim($path, '/');
+        $path = '/' . trim($parsedUrl['path'] ?? '/', '/');
 
-        // Special handling for home page
-        if ($path === '/') {
-            // Try to find the root page from any site
-            foreach ($siteFinder->getAllSites() as $site) {
-                // Check if this URL belongs to this site (if host is specified)
-                if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
-                        continue;
-                    }
-                }
-                return $site->getRootPageId();
+        // Request URIs to try: the URL's host (or each configured host for a bare path)
+        // with the scheme and port of a base configured for it
+        $candidateUris = [];
+        foreach ($bases as $base) {
+            $baseHost = strtolower($base->getHost());
+            if ($host !== null && $baseHost !== '' && $baseHost !== $host) {
+                continue;
             }
+            $uri = $base->withHost($host ?? ($baseHost !== '' ? $baseHost : 'localhost'))
+                ->withPath($path)
+                ->withQuery('')
+                ->withFragment('');
+            $candidateUris[(string)$uri] ??= $uri;
         }
-        
-        // Try each site to find a match using the router
-        $allSites = $siteFinder->getAllSites();
-        $matchedAnySite = false;
-        
-        foreach ($allSites as $site) {
+
+        // If host was specified and didn't match any site, don't try generic fallback
+        if ($host !== null && $candidateUris === []) {
+            throw new \RuntimeException('Could not resolve URL "' . $url . '" to a page. The domain does not match any configured site.');
+        }
+
+        $siteMatcher = GeneralUtility::makeInstance(SiteMatcher::class);
+        foreach ($candidateUris as $uri) {
             try {
-                // Check if this URL belongs to this site (if host is specified)
-                if (isset($parsedUrl['host'])) {
-                    $siteHost = $site->getBase()->getHost();
-                    // If site has no host (base is just "/"), skip host check
-                    if (!empty($siteHost) && $siteHost !== $parsedUrl['host']) {
-                        continue;
-                    }
-                    $matchedAnySite = true;
+                // Resolve like the frontend does: the site matcher finds site and language
+                // by their base (host and path prefix such as "/en/"), the site's page
+                // router resolves the remaining slug
+                $request = $this->createServerRequest($uri);
+                $siteRouteResult = $siteMatcher->matchRequest($request);
+                $site = $siteRouteResult instanceof SiteRouteResult ? $siteRouteResult->getSite() : null;
+                $language = $siteRouteResult instanceof SiteRouteResult ? $siteRouteResult->getLanguage() : null;
+                if (!$site instanceof Site || $language === null) {
+                    continue;
                 }
-                
-                // Try to resolve the path/slug using the site's router
-                $router = $site->getRouter();
-                $request = $this->createServerRequest($site, $path, $languageId);
-                $pageArguments = $router->matchRequest($request);
-                
+                // The language root ("/en/") is the root page, translated or not
+                if (trim($siteRouteResult->getTail(), '/') === '') {
+                    return [$site->getRootPageId(), $language->getLanguageId()];
+                }
+                $request = $request
+                    ->withAttribute('site', $site)
+                    ->withAttribute('language', $language)
+                    ->withAttribute('routing', $siteRouteResult);
+                $pageArguments = $site->getRouter()->matchRequest($request, $siteRouteResult);
+
                 if ($pageArguments instanceof PageArguments) {
-                    return $pageArguments->getPageId();
+                    return [$pageArguments->getPageId(), $language->getLanguageId()];
                 }
             } catch (\Throwable $e) {
-                // Continue to next site
+                // Try the next candidate
                 continue;
             }
         }
-        
-        // If host was specified and didn't match any site, don't try generic fallback
-        if (isset($parsedUrl['host']) && !$matchedAnySite) {
-            throw new \RuntimeException('Could not resolve URL "' . $url . '" to a page. The domain does not match any configured site.');
-        }
-        
-        // If no match found via router AND no host was specified, try to find by slug directly in the database
+
+        // Not routable (e.g. hidden or workspace-only pages): find by slug directly in the database
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
         
@@ -793,7 +987,7 @@ class GetPageTool extends AbstractRecordTool
             ->fetchAssociative();
         
         if ($page) {
-            return (int)$page['uid'];
+            return [(int)$page['uid'], null];
         }
         
         throw new \RuntimeException('Could not resolve URL "' . $url . '" to a page. The path does not match any page.');
@@ -802,47 +996,22 @@ class GetPageTool extends AbstractRecordTool
     /**
      * Create a server request for URL resolution
      */
-    protected function createServerRequest(Site $site, string $path, int $languageId): \Psr\Http\Message\ServerRequestInterface
+    protected function createServerRequest(UriInterface $uri): \Psr\Http\Message\ServerRequestInterface
     {
-        // Ensure path starts with /
-        if (!str_starts_with($path, '/')) {
-            $path = '/' . $path;
-        }
-        
-        // Create URI - don't double the slash
-        $baseUri = $site->getBase();
-        $uri = $baseUri->withPath($path);
-        
-        // Create request with proper server variables
         $serverParams = [
             'REQUEST_METHOD' => 'GET',
-            'REQUEST_URI' => $path,
+            'REQUEST_URI' => $uri->getPath(),
             'SCRIPT_NAME' => '/index.php',
-            'HTTP_HOST' => $baseUri->getHost() ?: 'localhost',
-            'HTTPS' => $baseUri->getScheme() === 'https' ? 'on' : 'off',
-            'SERVER_PORT' => $baseUri->getPort() ?: ($baseUri->getScheme() === 'https' ? 443 : 80),
+            'HTTP_HOST' => $uri->getHost(),
+            'HTTPS' => $uri->getScheme() === 'https' ? 'on' : 'off',
+            'SERVER_PORT' => $uri->getPort() ?: ($uri->getScheme() === 'https' ? 443 : 80),
         ];
         
         $request = new \TYPO3\CMS\Core\Http\ServerRequest($uri, 'GET', 'php://input', [], $serverParams);
-        $request = $request->withAttribute('site', $site);
-        
-        // Set language attribute
-        try {
-            $language = $languageId > 0 ? $site->getLanguageById($languageId) : $site->getDefaultLanguage();
-            $request = $request->withAttribute('language', $language);
-        } catch (\Throwable $e) {
-            // If language not found, use default
-            $request = $request->withAttribute('language', $site->getDefaultLanguage());
-        }
         
         // Add normalizedParams which might be needed by the router
-        $normalizedParams = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(
-            \TYPO3\CMS\Core\Http\NormalizedParams::class,
-            $serverParams
-        );
-        $request = $request->withAttribute('normalizedParams', $normalizedParams);
-        
-        return $request;
+        $normalizedParams = \TYPO3\CMS\Core\Http\NormalizedParams::createFromServerParams($serverParams);
+        return $request->withAttribute('normalizedParams', $normalizedParams);
     }
     
     /**
