@@ -114,8 +114,8 @@ class GetTableSchemaTool extends AbstractRecordTool
                 // Format arrays as JSON
                 if (is_array($value)) {
                     $value = json_encode($value);
-                } elseif (is_string($value) && strpos($value, 'LLL:') === 0) {
-                    // Translate LLL keys
+                } elseif (is_string($value)) {
+                    // Translate label references (LLL: and TYPO3 14 short syntax)
                     $value = TableAccessService::translateLabel($value);
                 }
                 $result .= $key . ": " . $value . "\n";
