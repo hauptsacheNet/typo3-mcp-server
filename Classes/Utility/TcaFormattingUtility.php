@@ -34,8 +34,11 @@ class TcaFormattingUtility
         // Get the field type
         $type = $config['type'] ?? '';
 
-        // Values listed as [Options: ...] for a select field, used to check the default against
-        $offeredValues = [];
+        // Select values the current user may pick (after authMode / disableCTypes filtering),
+        // used to check the default against. Only meaningful when an option list was resolved:
+        // an empty list then means every option was filtered out, not that none are known.
+        $allowedValues = [];
+        $optionsResolved = false;
 
         // Add field details based on type
         switch ($type) {
@@ -122,6 +125,7 @@ class TcaFormattingUtility
 
                 if ($resolved !== null && !empty($resolved['values'])) {
                     // Use dynamically resolved items
+                    $optionsResolved = true;
                     $hasAuthMode = !empty($config['authMode']);
                     $beUser = $GLOBALS['BE_USER'] ?? null;
                     $isAdmin = $beUser && $beUser->isAdmin();
@@ -142,12 +146,13 @@ class TcaFormattingUtility
                         if (in_array((string)$value, $disabledCTypes, true)) {
                             continue;
                         }
+                        // Allowed even without a label (e.g. an empty "none" item)
+                        $allowedValues[] = (string)$value;
 
                         $label = $resolved['labels'][$value] ?? '';
                         if ($label) {
                             $translatedLabel = TableAccessService::translateLabel($label);
                             $options[] = $value . " (" . $translatedLabel . ")";
-                            $offeredValues[] = (string)$value;
                         }
                     }
 
@@ -158,6 +163,7 @@ class TcaFormattingUtility
                     // Fallback: use static TCA items
                     $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
                     $parsed = $tableAccessService->parseSelectItems($config['items'], false);
+                    $optionsResolved = array_diff($parsed['values'], ['--div--']) !== [];
 
                     $hasAuthMode = !empty($config['authMode']);
                     $beUser = $GLOBALS['BE_USER'] ?? null;
@@ -177,11 +183,12 @@ class TcaFormattingUtility
                         if (in_array((string)$value, $disabledCTypes, true)) {
                             continue;
                         }
+                        // Allowed even without a label (e.g. an empty "none" item)
+                        $allowedValues[] = (string)$value;
                         $label = $parsed['labels'][$value] ?? '';
                         if ($label) {
                             $translatedLabel = TableAccessService::translateLabel($label);
                             $options[] = $value . " (" . $translatedLabel . ")";
-                            $offeredValues[] = (string)$value;
                         }
                     }
 
@@ -258,13 +265,14 @@ class TcaFormattingUtility
             $result .= " [Required]";
         }
         
-        // Add default value if set. For select fields only when it is one of the listed
-        // options: context-restricted items (e.g. tt_content.colPos limited to the backend
-        // layout columns that allow the CType) can exclude the TCA default. Advertising it
-        // anyway invites clients to omit the field — and DataHandler fills in an omitted
-        // colPos without checking the backend layout restriction.
-        $defaultIsOffered = $offeredValues === []
-            || array_diff(GeneralUtility::trimExplode(',', (string)($config['default'] ?? ''), true), $offeredValues) === [];
+        // Add default value if set. For select fields with a resolved option list only when
+        // the user may pick it: context-restricted items (e.g. tt_content.colPos limited to
+        // the backend layout columns that allow the CType) or authMode / disableCTypes can
+        // exclude the TCA default. Advertising it anyway invites clients to omit the field —
+        // and DataHandler fills in an omitted colPos without checking the backend layout
+        // restriction. Without a resolved list (e.g. FlexForm fields) it can't be checked.
+        $defaultIsOffered = !$optionsResolved
+            || array_diff(GeneralUtility::trimExplode(',', (string)($config['default'] ?? ''), true), $allowedValues) === [];
         if (isset($config['default']) && $type !== 'check' && $defaultIsOffered) {
             $result .= " [Default: " . $config['default'] . "]";
         }
