@@ -10,6 +10,7 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Workspaces\Service\Dependency\CollectionService;
 use TYPO3\CMS\Workspaces\Service\WorkspaceService;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -411,6 +412,58 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
         $this->assertSame('New news', $this->readNews((int)$newsUid)['title']);
     }
 
+    /**
+     * The workspace module groups records into collections through the parents' sys_refindex
+     * rows. A child written on its own only updates its own index, so the parent's index has
+     * to be updated as well, or the news and its content elements are listed separately.
+     */
+    public function testContentElementOfNewNewsIsGroupedUnderTheNewsInTheWorkspaceModule(): void
+    {
+        $newsUid = (int)$this->write([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'data' => ['pid' => 1, 'title' => 'New news'],
+        ])['uid'];
+        $contentUid = (int)$this->write([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'data' => [
+                'pid' => 1,
+                'CType' => 'text',
+                'header' => 'New content',
+                'tx_news_related_news' => $newsUid,
+            ],
+        ])['uid'];
+
+        $this->assertCollectionParents([['tt_content', $contentUid, 'tx_news_domain_model_news', $newsUid]]);
+    }
+
+    public function testContentElementAddedToVersionedNewsIsGroupedUnderTheNews(): void
+    {
+        // The first write versions the news, the second adds a child to that version.
+        $this->write([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => self::CONTENT_UID,
+            'data' => ['header' => 'Changed header'],
+        ]);
+        $contentUid = (int)$this->write([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'data' => [
+                'pid' => 1,
+                'CType' => 'text',
+                'header' => 'New content',
+                'tx_news_related_news' => self::NEWS_UID,
+            ],
+        ])['uid'];
+
+        $this->assertCollectionParents([
+            ['tt_content', self::CONTENT_UID, 'tx_news_domain_model_news', self::NEWS_UID],
+            ['tt_content', $contentUid, 'tx_news_domain_model_news', self::NEWS_UID],
+        ]);
+    }
+
     public function testPublishingAppliesTheChildChangeAndKeepsTheNewsUnchanged(): void
     {
         $this->write([
@@ -461,6 +514,62 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
     private function assertNoWorkspaceVersion(string $table, int $liveUid): void
     {
         $this->assertCount(0, $this->getWorkspaceVersions($table, $liveUid), "$table:$liveUid must not have a workspace version");
+    }
+
+    /**
+     * Group the workspace records the way the workspace module does (GridDataService keys
+     * its rows by the workspace uid) and check each child is listed below its parent.
+     * CollectionService is a singleton that keeps its resolver, so it runs once per test.
+     *
+     * @param list<array{string, int, string, int}> $expected child table, child live uid,
+     *        parent table, parent live uid
+     */
+    private function assertCollectionParents(array $expected): void
+    {
+        $workspaceId = (int)$GLOBALS['BE_USER']->workspace;
+        $dataArray = [];
+        foreach (['tx_news_domain_model_news', 'tt_content'] as $table) {
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
+            $queryBuilder->getRestrictions()->removeAll();
+            $rows = $queryBuilder
+                ->select('uid')
+                ->from($table)
+                ->where($queryBuilder->expr()->eq('t3ver_wsid', $queryBuilder->createNamedParameter($workspaceId)))
+                ->executeQuery()
+                ->fetchAllAssociative();
+            foreach ($rows as $row) {
+                $id = $table . ':' . $row['uid'];
+                $dataArray[$id] = ['id' => $id, 'table' => $table, 'uid' => (int)$row['uid']];
+            }
+        }
+
+        $collectionService = GeneralUtility::makeInstance(CollectionService::class);
+        foreach ($dataArray as $dataElement) {
+            $collectionService->getDependencyResolver()->addElement($dataElement['table'], $dataElement['uid']);
+        }
+        $grouped = array_column($collectionService->process($dataArray), null, 'id');
+
+        foreach ($expected as [$childTable, $childLiveUid, $parentTable, $parentLiveUid]) {
+            $childId = $childTable . ':' . $this->getWorkspaceUid($childTable, $childLiveUid);
+            $parentId = $parentTable . ':' . $this->getWorkspaceUid($parentTable, $parentLiveUid);
+            $this->assertArrayHasKey($childId, $grouped, "$childTable:$childLiveUid must be in the workspace");
+            $this->assertArrayHasKey($parentId, $grouped, "$parentTable:$parentLiveUid must be in the workspace");
+            $this->assertSame(
+                md5($parentId),
+                $grouped[$childId]['Workspaces_CollectionParent'] ?? null,
+                "$childTable:$childLiveUid must be grouped below $parentTable:$parentLiveUid"
+            );
+        }
+    }
+
+    /**
+     * The uid of the workspace row of a record: its version, or the record itself if it
+     * was created in the workspace.
+     */
+    private function getWorkspaceUid(string $table, int $liveUid): int
+    {
+        $versions = $this->getWorkspaceVersions($table, $liveUid);
+        return $versions === [] ? $liveUid : (int)$versions[0]['uid'];
     }
 
     private function getWorkspaceVersions(string $table, int $liveUid): array
