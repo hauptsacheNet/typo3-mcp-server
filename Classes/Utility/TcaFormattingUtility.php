@@ -26,9 +26,14 @@ class TcaFormattingUtility
      * @param string $fieldName Optional field name for special handling
      * @param string $table Optional table name for authMode filtering
      * @param int|null $pid Optional page id for TSconfig context (filters select items via FormDataCompiler)
+     * @param array $itemDescriptions Filled with the listed select options that carry a description:
+     *                                     value => ['label' => translated label, 'description' => raw description].
+     *                                     Descriptions are not added inline; render them with formatDescriptionLines().
      */
-    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = '', ?int $pid = null): void
+    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = '', ?int $pid = null, array &$itemDescriptions = []): void
     {
+        $itemDescriptions = [];
+
         // Get the field type
         $type = $config['type'] ?? '';
         
@@ -123,6 +128,9 @@ class TcaFormattingUtility
                         if ($label) {
                             $translatedLabel = TableAccessService::translateLabel($label);
                             $options[] = $value . " (" . $translatedLabel . ")";
+                            if (isset($resolved['descriptions'][$value])) {
+                                $itemDescriptions[$value] = ['label' => $translatedLabel, 'description' => $resolved['descriptions'][$value]];
+                            }
                         }
                     }
 
@@ -156,6 +164,9 @@ class TcaFormattingUtility
                         if ($label) {
                             $translatedLabel = TableAccessService::translateLabel($label);
                             $options[] = $value . " (" . $translatedLabel . ")";
+                            if (isset($parsed['descriptions'][$value])) {
+                                $itemDescriptions[$value] = ['label' => $translatedLabel, 'description' => $parsed['descriptions'][$value]];
+                            }
                         }
                     }
 
@@ -236,6 +247,44 @@ class TcaFormattingUtility
         if (isset($config['default']) && $type !== 'check') {
             $result .= " [Default: " . $config['default'] . "]";
         }
+    }
+
+    /**
+     * Render the description lines shown below a field.
+     *
+     * Emits a "Description:" line for the field's own description and an
+     * "Option descriptions:" block for select options that carry one. Each
+     * description is resolved via TableAccessService::translateDescription();
+     * empty or unresolvable ones are skipped, so a field without any usable
+     * description yields an empty string and its output stays unchanged.
+     *
+     * @param string $indent Indentation prefix for every emitted line
+     * @param mixed $fieldDescription Raw `description` of the field (TCA column or FlexForm field)
+     * @param array<string|int, array{label: string, description: mixed}> $itemDescriptions As collected by addFieldDetailsInline()
+     * @return string Zero or more lines, each terminated by "\n"
+     */
+    public static function formatDescriptionLines(string $indent, mixed $fieldDescription, array $itemDescriptions = []): string
+    {
+        $lines = '';
+
+        $description = TableAccessService::translateDescription($fieldDescription);
+        if ($description !== '') {
+            $lines .= $indent . 'Description: ' . $description . "\n";
+        }
+
+        $optionLines = '';
+        foreach ($itemDescriptions as $value => $item) {
+            $itemDescription = TableAccessService::translateDescription($item['description'] ?? null);
+            if ($itemDescription === '') {
+                continue;
+            }
+            $optionLines .= $indent . '  - ' . $value . ' (' . $item['label'] . '): ' . $itemDescription . "\n";
+        }
+        if ($optionLines !== '') {
+            $lines .= $indent . "Option descriptions:\n" . $optionLines;
+        }
+
+        return $lines;
     }
 
     /**
