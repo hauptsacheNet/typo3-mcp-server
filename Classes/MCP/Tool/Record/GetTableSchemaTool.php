@@ -127,15 +127,18 @@ class GetTableSchemaTool extends AbstractRecordTool
         // Get available types using TableAccessService. The service runs the
         // FormDataCompiler pipeline internally so TCEFORM removeItems / addItems
         // and TCEMAIN.disableCTypes are already applied at the resolved pid.
-        $types = $this->tableAccessService->getAvailableTypes($table, $pid);
+        $typeItems = $this->tableAccessService->getAvailableTypeItems($table, $pid);
 
-        // Apply label translations
-        $processedTypes = [];
-        foreach ($types as $value => $label) {
-            $processedTypes[$value] = TableAccessService::translateLabel($label);
+        // Apply label and description translations
+        $types = [];
+        $typeDescriptions = [];
+        foreach ($typeItems as $value => $typeItem) {
+            $types[$value] = TableAccessService::translateLabel($typeItem['label']);
+            $typeDescription = TableAccessService::translateDescription($typeItem['description']);
+            if ($typeDescription !== '') {
+                $typeDescriptions[$value] = $typeDescription;
+            }
         }
-
-        $types = $processedTypes;
         
         // If no types are available after filtering, show an error
         if (empty($types)) {
@@ -147,6 +150,26 @@ class GetTableSchemaTool extends AbstractRecordTool
             return "ERROR: The requested type '$filterType' does not exist or has been excluded. Available types are: " . implode(', ', array_keys($types));
         }
         
+        // Overview call (no type requested): list every type with its description
+        // so the client can pick the matching one. Only emitted when at least one
+        // type is described — otherwise it would just repeat the type field's
+        // option list.
+        if (empty($filterType) && !empty($typeDescriptions)) {
+            $result .= "AVAILABLE TYPES:\n";
+            $result .= "---------------\n";
+            foreach ($types as $typeValue => $typeLabelText) {
+                if ($typeValue === '--div--') {
+                    continue;
+                }
+                $result .= "- " . $typeValue . " (" . $typeLabelText . ")";
+                if (isset($typeDescriptions[$typeValue])) {
+                    $result .= ": " . $typeDescriptions[$typeValue];
+                }
+                $result .= "\n";
+            }
+            $result .= "\n";
+        }
+
         // If no specific type is requested, use the first type that actually has a
         // showitem layout. Some tables (e.g. sys_file) only define a layout for one
         // type value while listing several in the type field's items list — picking
@@ -178,7 +201,11 @@ class GetTableSchemaTool extends AbstractRecordTool
         // Add current record type section
         $result .= "CURRENT RECORD TYPE:\n";
         $result .= "-------------------\n";
-        $result .= "Type: " . $filterType . " (" . $typeLabel . ")\n\n";
+        $result .= "Type: " . $filterType . " (" . $typeLabel . ")\n";
+        if (isset($typeDescriptions[$filterType])) {
+            $result .= "Description: " . $typeDescriptions[$filterType] . "\n";
+        }
+        $result .= "\n";
         
         // Add fields section
         $result .= "FIELDS:\n";
@@ -294,8 +321,11 @@ class GetTableSchemaTool extends AbstractRecordTool
                             $tabContent .= "    " . $prefix . $paletteFieldName . " (" . $fieldLabel . "): " . $fieldType;
 
                             // Add field details inline
-                            $this->addFieldDetailsInline($tabContent, $fieldConfig, $paletteFieldName, $table, $filterType, $pid);
+                            $itemDescriptions = [];
+                            $this->addFieldDetailsInline($tabContent, $fieldConfig, $paletteFieldName, $table, $filterType, $pid, $itemDescriptions);
                             $tabContent .= "\n";
+                            $continuation = ($paletteItem === $lastPaletteField) ? "   " : "│  ";
+                            $tabContent .= $this->formatFieldDescriptionLines("    " . $continuation . "    ", $fieldConfig, $paletteFieldName, $table, $itemDescriptions);
                         }
                     }
                 } else {
@@ -313,8 +343,10 @@ class GetTableSchemaTool extends AbstractRecordTool
                         $tabContent .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
 
                         // Add field details inline
-                        $this->addFieldDetailsInline($tabContent, $fieldConfig, $fieldName, $table, $filterType, $pid);
+                        $itemDescriptions = [];
+                        $this->addFieldDetailsInline($tabContent, $fieldConfig, $fieldName, $table, $filterType, $pid, $itemDescriptions);
                         $tabContent .= "\n";
+                        $tabContent .= $this->formatFieldDescriptionLines("        ", $fieldConfig, $fieldName, $table, $itemDescriptions);
                     }
                 }
             }
@@ -360,8 +392,10 @@ class GetTableSchemaTool extends AbstractRecordTool
                 $result .= "    - " . $fieldName . " (" . $fieldLabel . "): " . $fieldType;
 
                 // Add field details inline
-                $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType, $pid);
+                $itemDescriptions = [];
+                $this->addFieldDetailsInline($result, $fieldConfig, $fieldName, $table, $filterType, $pid, $itemDescriptions);
                 $result .= "\n";
+                $result .= $this->formatFieldDescriptionLines("        ", $fieldConfig, $fieldName, $table, $itemDescriptions);
             }
         }
 
@@ -382,10 +416,34 @@ class GetTableSchemaTool extends AbstractRecordTool
     }
     
     /**
-     * Add field details inline
+     * Render the description lines below a field: the field's own description
+     * (already merged with the record type's columnsOverrides by the schema API)
+     * and, for select fields, the descriptions of its options.
+     *
+     * The record type field (ctrl.type, e.g. tt_content.CType) is excluded from
+     * option descriptions: they are shown once in the CURRENT RECORD TYPE /
+     * AVAILABLE TYPES sections, and repeating them here would bloat every call.
+     *
+     * @param array<string|int, array{label: string, description: mixed}> $itemDescriptions
      */
-    protected function addFieldDetailsInline(string &$result, array $fieldConfig, string $fieldName, string $table, string $filterType = '', ?int $pid = null): void
+    protected function formatFieldDescriptionLines(string $indent, array $fieldConfig, string $fieldName, string $table, array $itemDescriptions): string
     {
+        if ($fieldName === $this->tableAccessService->getTypeFieldName($table)) {
+            $itemDescriptions = [];
+        }
+
+        return TcaFormattingUtility::formatDescriptionLines($indent, $fieldConfig['description'] ?? null, $itemDescriptions);
+    }
+
+    /**
+     * Add field details inline
+     *
+     * @param array $itemDescriptions Receives select options with descriptions (see TcaFormattingUtility)
+     */
+    protected function addFieldDetailsInline(string &$result, array $fieldConfig, string $fieldName, string $table, string $filterType = '', ?int $pid = null, array &$itemDescriptions = []): void
+    {
+        $itemDescriptions = [];
+
         // Handle both flattened (from TcaSchemaFactory) and nested (traditional TCA) structures
         $config = $fieldConfig['config'] ?? $fieldConfig;
         $type = $config['type'] ?? '';
@@ -396,7 +454,7 @@ class GetTableSchemaTool extends AbstractRecordTool
             $this->addFlexFormIdentifiers($result, $config, $table, $fieldName, $filterType);
         } else {
             // For other field types, use the TcaFormattingUtility
-            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName, $table, $pid);
+            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName, $table, $pid, $itemDescriptions);
         }
     }
     

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+    <file source-language="en" datatype="plaintext" original="EXT:test_descriptions/Resources/Private/Language/locallang_tca.xlf" date="2026-11-06T00:00:00Z" product-name="test_descriptions">
+        <header/>
+        <body>
+            <trans-unit id="ctype.described">
+                <source>Described element</source>
+            </trans-unit>
+            <trans-unit id="ctype.described.description">
+                <source>Use this element for structured data that is not rendered.</source>
+            </trans-unit>
+            <trans-unit id="bodytext.override.description">
+                <source>Plain text only, it ends up in the JSON-LD output.</source>
+            </trans-unit>
+            <trans-unit id="note.description">
+                <source>Internal note,
+                    spread over two lines.</source>
+            </trans-unit>
+            <trans-unit id="hint.description">
+                <source>Read-only hint rendered by a custom element.</source>
+            </trans-unit>
+            <trans-unit id="mode.a.description">
+                <source>Mode A shows everything.</source>
+            </trans-unit>
+        </body>
+    </file>
+</xliff>

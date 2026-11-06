@@ -1071,18 +1071,38 @@ class TableAccessService implements SingletonInterface
      *
      * @param string $table Table name
      * @param int|null $pid Page id for TSconfig context (null → first site root)
+     * @return array<string, string> Type value => (untranslated) label
      */
     public function getAvailableTypes(string $table, ?int $pid = null): array
     {
+        return array_map(
+            static fn(array $item): string => $item['label'],
+            $this->getAvailableTypeItems($table, $pid)
+        );
+    }
+
+    /**
+     * Get available types for a table including their item descriptions.
+     *
+     * Same resolution and filtering as getAvailableTypes(); additionally carries
+     * the (untranslated) `description` of each type field item, so clients can
+     * pick the right record type (e.g. a tt_content CType) by its purpose.
+     *
+     * @param string $table Table name
+     * @param int|null $pid Page id for TSconfig context (null → first site root)
+     * @return array<string|int, array{label: string, description: string}> Type value => item data
+     */
+    public function getAvailableTypeItems(string $table, ?int $pid = null): array
+    {
         $typeField = $this->getTypeFieldName($table);
         if (!$typeField) {
-            return ['1' => 'Default'];
+            return ['1' => ['label' => 'Default', 'description' => '']];
         }
 
         // Defense-in-depth: foreign type notation should already be caught by
         // getTypeFieldName() returning null, but guard here in case that changes.
         if (str_contains($typeField, ':')) {
-            return ['0' => 'Default'];
+            return ['0' => ['label' => 'Default', 'description' => '']];
         }
 
         $typeConfig = $GLOBALS['TCA'][$table]['columns'][$typeField]['config'] ?? [];
@@ -1095,20 +1115,18 @@ class TableAccessService implements SingletonInterface
         $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
         $resolved = $resolver->resolveSelectItems($table, $typeField, ['pid' => $resolverPid]);
 
-        if ($resolved !== null && !empty($resolved['values'])) {
-            $types = [];
-            foreach ($resolved['values'] as $value) {
-                $types[$value] = $resolved['labels'][$value] ?? $value;
-            }
-        } else {
+        if ($resolved === null || empty($resolved['values'])) {
             // Fallback: static TCA items only (used when FormDataCompiler fails,
             // e.g. tables not registered with the Form Engine).
-            $items = $typeConfig['items'] ?? [];
-            $parsed = $this->parseSelectItems($items);
-            $types = [];
-            foreach ($parsed['values'] as $value) {
-                $types[$value] = $parsed['labels'][$value] ?? $value;
-            }
+            $resolved = $this->parseSelectItems($typeConfig['items'] ?? []);
+        }
+
+        $types = [];
+        foreach ($resolved['values'] as $value) {
+            $types[$value] = [
+                'label' => (string)($resolved['labels'][$value] ?? $value),
+                'description' => (string)($resolved['descriptions'][$value] ?? ''),
+            ];
         }
 
         // tt_content also honours TCEMAIN.table.tt_content.disableCTypes,
@@ -1237,13 +1255,15 @@ class TableAccessService implements SingletonInterface
      * 
      * @param array $items TCA items array
      * @param bool $skipDividers Whether to skip divider items
-     * @return array Array with 'values' and 'labels' keys
+     * @return array Array with 'values', 'labels' and 'descriptions' keys
+     *               ('descriptions' only holds items that define a non-empty description)
      */
     public function parseSelectItems(array $items, bool $skipDividers = true): array
     {
         $result = [
             'values' => [],
-            'labels' => []
+            'labels' => [],
+            'descriptions' => [],
         ];
         
         foreach ($items as $item) {
@@ -1253,16 +1273,19 @@ class TableAccessService implements SingletonInterface
             
             $itemValue = '';
             $itemLabel = '';
+            $itemDescription = null;
             
             // Handle both associative and numeric index syntax
             if (isset($item['value']) && isset($item['label'])) {
                 // New associative syntax
                 $itemValue = $item['value'];
                 $itemLabel = $item['label'];
+                $itemDescription = $item['description'] ?? null;
             } elseif (isset($item[0]) && isset($item[1])) {
-                // Old numeric index syntax
+                // Old numeric index syntax (index 4 held the description)
                 $itemValue = $item[1];
                 $itemLabel = $item[0];
+                $itemDescription = $item[4] ?? null;
             } elseif (isset($item['numIndex']) && is_array($item['numIndex'])) {
                 // XML converted to array format
                 if (isset($item['numIndex']['label']) && isset($item['numIndex']['value'])) {
@@ -1283,6 +1306,9 @@ class TableAccessService implements SingletonInterface
                 // string concatenation downstream are type-strict.
                 $result['values'][] = (string)$itemValue;
                 $result['labels'][(string)$itemValue] = (string)$itemLabel;
+                if (is_string($itemDescription) && trim($itemDescription) !== '') {
+                    $result['descriptions'][(string)$itemValue] = $itemDescription;
+                }
             }
         }
         
@@ -1405,6 +1431,47 @@ class TableAccessService implements SingletonInterface
         return BackendUtility::getRecordTitle($table, $record);
     }
     
+    /**
+     * Translate a TCA description (field or select item) for display.
+     *
+     * Uses the same language resolution as translateLabel(), but without its
+     * guessed fallbacks: a description that is empty, cannot be resolved, or
+     * still is a raw LLL reference yields an empty string, so callers can
+     * simply omit it. Whitespace (including line breaks) is collapsed so the
+     * text fits on a single output line.
+     *
+     * @param mixed $description Raw description from TCA / FlexForm
+     */
+    public static function translateDescription(mixed $description): string
+    {
+        if (!is_string($description)) {
+            return '';
+        }
+        $description = trim($description);
+        if ($description === '') {
+            return '';
+        }
+
+        if (str_starts_with($description, 'LLL:')) {
+            try {
+                if (!isset($GLOBALS['LANG'])) {
+                    $GLOBALS['LANG'] = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class)
+                        ->create('default');
+                }
+                $description = (string)$GLOBALS['LANG']->sL($description);
+            } catch (\Throwable) {
+                return '';
+            }
+        }
+
+        $description = trim((string)preg_replace('/\s+/u', ' ', $description));
+        if ($description === '' || str_starts_with($description, 'LLL:')) {
+            return '';
+        }
+
+        return $description;
+    }
+
     /**
      * Translate a TCA label using TYPO3's language system
      */

@@ -223,9 +223,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
             $fieldData['config'] = $fieldConfig['config'];
         }
 
-        // Get field description
+        // Get field description (empty or unresolvable descriptions are dropped)
         if (isset($fieldConfig['description'])) {
-            $fieldData['description'] = TableAccessService::translateLabel($fieldConfig['description']);
+            $fieldData['description'] = TableAccessService::translateDescription($fieldConfig['description']);
         }
 
         return $fieldData;
@@ -388,8 +388,9 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
         $result .= ": {$field['type']}";
 
         // Add field details based on type
+        $itemDescriptions = [];
         if (!empty($field['config'])) {
-            TcaFormattingUtility::addFieldDetailsInline($result, $field['config']);
+            TcaFormattingUtility::addFieldDetailsInline($result, $field['config'], '', '', null, $itemDescriptions);
         }
 
         if (!empty($field['description'])) {
@@ -398,6 +399,8 @@ class GetFlexFormSchemaTool extends AbstractRecordTool
 
         $result .= "\n";
         $result .= $indent . "  JSON Path: {$field['jsonPath']}\n";
+        // Field description is already inline above; only add option descriptions here
+        $result .= TcaFormattingUtility::formatDescriptionLines($indent . "  ", null, $itemDescriptions);
 
         return $result;
     }
