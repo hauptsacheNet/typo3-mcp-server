@@ -376,6 +376,69 @@ class GetTableSchemaToolTest extends FunctionalTestCase
     }
 
     /**
+     * When authMode removes every CType for a non-admin, no option is listed —
+     * the TCA default ("text") must not be advertised either, the user can't pick it.
+     */
+    public function testSelectDefaultHiddenWhenAuthModeFiltersAllOptions(): void
+    {
+        $GLOBALS['BE_USER']->user['admin'] = 0;
+        $GLOBALS['BE_USER']->groupData['explicit_allowdeny'] = '';
+        $this->assertFalse($GLOBALS['BE_USER']->isAdmin());
+
+        $rendered = '';
+        \Hn\McpServer\Utility\TcaFormattingUtility::addFieldDetailsInline(
+            $rendered,
+            $GLOBALS['TCA']['tt_content']['columns']['CType']['config'],
+            'CType',
+            'tt_content',
+            1
+        );
+
+        $this->assertStringNotContainsString('[Options:', $rendered);
+        $this->assertStringNotContainsString('[Default:', $rendered);
+    }
+
+    /**
+     * An item without label (e.g. an empty "none" entry) is not listed as option,
+     * but it is a valid value — a default pointing at it must stay visible.
+     */
+    public function testSelectDefaultShownForUnlabelledItem(): void
+    {
+        $config = [
+            'type' => 'select',
+            'renderType' => 'selectSingle',
+            'items' => [
+                ['label' => '', 'value' => 0],
+                ['label' => 'First', 'value' => 1],
+            ],
+            'default' => 0,
+        ];
+        $rendered = '';
+        \Hn\McpServer\Utility\TcaFormattingUtility::addFieldDetailsInline($rendered, $config, 'tx_test', 'tt_content');
+
+        $this->assertStringContainsString('1 (First)', $rendered);
+        $this->assertStringContainsString('[Default: 0]', $rendered);
+    }
+
+    /**
+     * Without a resolvable option list (e.g. a FlexForm select backed only by a
+     * foreign_table) the default can't be checked and must stay visible.
+     */
+    public function testSelectDefaultShownWithoutResolvedOptions(): void
+    {
+        $config = [
+            'type' => 'select',
+            'renderType' => 'selectSingle',
+            'foreign_table' => 'pages',
+            'default' => 0,
+        ];
+        $rendered = '';
+        \Hn\McpServer\Utility\TcaFormattingUtility::addFieldDetailsInline($rendered, $config);
+
+        $this->assertStringContainsString('[Default: 0]', $rendered);
+    }
+
+    /**
      * Set up backend user with workspace
      */
     protected function setUpBackendUserWithWorkspace(int $uid): void

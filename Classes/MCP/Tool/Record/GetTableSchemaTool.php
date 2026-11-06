@@ -147,19 +147,27 @@ class GetTableSchemaTool extends AbstractRecordTool
             return "ERROR: The requested type '$filterType' does not exist or has been excluded. Available types are: " . implode(', ', array_keys($types));
         }
         
-        // If no specific type is requested, use the first type that actually has a
-        // showitem layout. Some tables (e.g. sys_file) only define a layout for one
-        // type value while listing several in the type field's items list — picking
-        // the first item alphabetically would land on a type without a form.
+        // If no specific type is requested, prefer the type a new record gets by
+        // default (e.g. "text" for tt_content), otherwise use the first type that
+        // actually has a showitem layout. Some tables (e.g. sys_file) only define a
+        // layout for one type value while listing several in the type field's items
+        // list — picking the first item alphabetically would land on a type without a form.
         if (empty($filterType)) {
             $tcaTypes = $GLOBALS['TCA'][$table]['types'] ?? [];
-            foreach ($types as $typeValue => $typeLabel) {
-                if ($typeValue === '--div--') {
-                    continue;
-                }
-                if (!empty($tcaTypes[$typeValue]['showitem'])) {
-                    $filterType = (string)$typeValue;
-                    break;
+            $typeField = $this->tableAccessService->getTypeFieldName($table);
+            $defaultType = (string)($GLOBALS['TCA'][$table]['columns'][$typeField ?? '']['config']['default'] ?? '');
+            if ($defaultType !== '' && isset($types[$defaultType]) && !empty($tcaTypes[$defaultType]['showitem'])) {
+                $filterType = $defaultType;
+            }
+            if (empty($filterType)) {
+                foreach ($types as $typeValue => $typeLabel) {
+                    if ($typeValue === '--div--') {
+                        continue;
+                    }
+                    if (!empty($tcaTypes[$typeValue]['showitem'])) {
+                        $filterType = (string)$typeValue;
+                        break;
+                    }
                 }
             }
             if (empty($filterType)) {
@@ -396,7 +404,7 @@ class GetTableSchemaTool extends AbstractRecordTool
             $this->addFlexFormIdentifiers($result, $config, $table, $fieldName, $filterType);
         } else {
             // For other field types, use the TcaFormattingUtility
-            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName, $table, $pid);
+            TcaFormattingUtility::addFieldDetailsInline($result, $config, $fieldName, $table, $pid, $filterType);
         }
     }
     
