@@ -109,7 +109,10 @@ class GetPageTool extends AbstractRecordTool
      */
     protected function doExecute(array $params): CallToolResult
     {
-        
+        // Reads pages directly, so the table access rules (incl. allowedTables /
+        // excludedTables) have to be checked here
+        $this->tableAccessService->validateTableAccess('pages');
+
         // Handle language parameter
         $languageId = 0;
         if (isset($params['language'])) {
