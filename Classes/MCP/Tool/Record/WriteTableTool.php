@@ -1199,6 +1199,31 @@ class WriteTableTool extends AbstractRecordTool
     }
 
     /**
+     * Record type a record has after a write, as the backend form sees it.
+     *
+     * A type given in the data wins. Otherwise an existing record keeps its type,
+     * taken from the workspace version the write goes to (it may differ from the
+     * live row). A new record gets the TCA default of the type field. Tables
+     * without a local type field have no record type ('').
+     *
+     * @param array|null $existingRecord Existing record with workspace overlay applied, null for new records
+     */
+    protected function resolveRecordType(string $table, array $data, ?array $existingRecord): string
+    {
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
+        if ($typeField === null || $typeField === '') {
+            return '';
+        }
+        if (isset($data[$typeField]) && is_scalar($data[$typeField])) {
+            return (string)$data[$typeField];
+        }
+        if ($existingRecord !== null) {
+            return (string)($existingRecord[$typeField] ?? '');
+        }
+        return (string)($GLOBALS['TCA'][$table]['columns'][$typeField]['config']['default'] ?? '');
+    }
+
+    /**
      * Validate record data against TCA
      * 
      * @param int|null $uid Record UID (required for update actions)
@@ -1232,6 +1257,7 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         // Build merged record context for dynamic select item resolution (itemsProcFunc, TSconfig)
+        $currentRecord = null;
         if ($action === 'update' && $uid) {
             $existingRecord = BackendUtility::getRecord($table, $uid) ?? [];
 
@@ -1304,6 +1330,12 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
+        // Record type the record has after this write. TCEFORM may disable a field
+        // globally and re-enable it for single types (or the other way round), so
+        // the access check below has to know it, just like the backend form does.
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
+        $recordType = $this->resolveRecordType($table, $data, $currentRecord);
+
         // Validate and convert field values
         foreach ($data as $fieldName => $value) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
@@ -1311,8 +1343,9 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
 
-            // Check if field is accessible (filters out inaccessible inline relations)
-            if (!$this->tableAccessService->canAccessField($table, $fieldName, '', $tsConfigPid)) {
+            // Check if field is accessible (exclude fields, inaccessible inline
+            // relations, TCEFORM disabled for this page and record type)
+            if (!$this->tableAccessService->canAccessField($table, $fieldName, $recordType, $tsConfigPid)) {
                 return "Field '{$fieldName}' is not accessible";
             }
 
@@ -1359,25 +1392,7 @@ class WriteTableTool extends AbstractRecordTool
         
         // After validating all field values, check field availability based on record type
         // This ensures type field validation happens first
-        $recordType = '';
-        $typeField = $this->tableAccessService->getTypeFieldName($table);
-        if ($typeField) {
-            if ($action === 'update' && $uid !== null) {
-                // For updates, fetch the current record type
-                $currentRecord = BackendUtility::getRecord($table, $uid, $typeField);
-                if ($currentRecord && isset($currentRecord[$typeField])) {
-                    $recordType = (string)$currentRecord[$typeField];
-                }
-                // If type is being changed in the update, use the new type
-                if (isset($data[$typeField])) {
-                    $recordType = (string)$data[$typeField];
-                }
-            } else {
-                // For creates, get type from data
-                $recordType = isset($data[$typeField]) ? (string)$data[$typeField] : '';
-            }
-        }
-        
+
         // Get available fields for this record type. Handed no page, this resolves
         // TCEFORM at a fallback page, which drops fields that page TSconfig enables
         // only where the record actually lives. Use the same page as the per-field
@@ -2294,15 +2309,33 @@ class WriteTableTool extends AbstractRecordTool
         // Collect all field names we need to fetch
         $fieldNames = array_keys($searchReplace);
 
-        // Validate all fields exist, are accessible, and are string-type before fetching the record.
-        // Field access MUST be checked before any DB read to prevent information disclosure
-        // via search/replace error messages ("not found" / "found N times").
+        // Fetch full record with workspace overlay to get the current workspace version data,
+        // which is what the LLM sees from ReadTable output.
+        // We fetch all fields because workspaceOL needs uid and workspace metadata fields.
+        $record = BackendUtility::getRecord($table, $uid);
+        if (is_array($record)) {
+            BackendUtility::workspaceOL($table, $record);
+        }
+
+        // Field access depends on the page and record type (TCEFORM disabled per type),
+        // resolved the same way as in validateRecordData(): a page record is its own
+        // TSconfig context, any other record the page it lives on.
+        $recordType = is_array($record) ? $this->resolveRecordType($table, [], $record) : '';
+        $tsConfigPid = null;
+        if (is_array($record)) {
+            $tsConfigPid = $table === 'pages' ? $uid : (int)($record['pid'] ?? 0);
+        }
+
+        // Validate all fields exist, are accessible, and are string-type before touching
+        // the field values. Field access MUST be checked before any value is compared to
+        // prevent information disclosure via search/replace error messages
+        // ("not found" / "found N times").
         foreach ($fieldNames as $fieldName) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
             if (!$fieldConfig) {
                 throw new ValidationException(["search_replace field '{$fieldName}' does not exist in table '{$table}'"]);
             }
-            if (!$this->tableAccessService->canAccessField($table, $fieldName)) {
+            if (!$this->tableAccessService->canAccessField($table, $fieldName, $recordType, $tsConfigPid)) {
                 throw new ValidationException(["Field '{$fieldName}' is not accessible"]);
             }
             $fieldType = $fieldConfig['config']['type'] ?? '';
@@ -2311,14 +2344,9 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
-        // Fetch full record with workspace overlay to get the current workspace version data,
-        // which is what the LLM sees from ReadTable output.
-        // We fetch all fields because workspaceOL needs uid and workspace metadata fields.
-        $record = BackendUtility::getRecord($table, $uid);
-        if (!$record) {
+        if (!is_array($record)) {
             throw new ValidationException(["Record {$uid} not found in table '{$table}'"]);
         }
-        BackendUtility::workspaceOL($table, $record);
 
         $resolved = [];
         foreach ($searchReplace as $fieldName => $operations) {
