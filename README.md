@@ -88,6 +88,7 @@ composer require hn/typo3-mcp-server
 **Requirements:**
 - TYPO3 v13.4+
 - TYPO3 Workspaces extension (automatically installed as dependency)
+- Each backend user needs a writable workspace, or access to the Workspaces module so one is created. Without either, write tools refuse instead of editing live
 
 ### Configuration
 

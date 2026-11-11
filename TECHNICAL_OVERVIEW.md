@@ -52,7 +52,7 @@ The MCP Server acts as an intelligent translator between what the AI understands
 These design principles guide every aspect of the MCP Server implementation:
 
 ### 1. Workspace Transparency
-All content modifications automatically happen in TYPO3 workspaces. The AI assistant doesn't need to understand workspaces - it just creates or modifies content, and the system ensures it's safely queued for review. From the AI's perspective, it's working with simple record IDs, while behind the scenes, the workspace system manages versions and drafts.
+All content modifications automatically happen in TYPO3 workspaces. The AI assistant doesn't need to understand workspaces - it just creates or modifies content, and the system ensures it's safely queued for review. From the AI's perspective, it's working with simple record IDs, while behind the scenes, the workspace system manages versions and drafts. The tools use the first workspace the user may write to, or create one for admins and users with access to the Workspaces module. If neither works, write tools refuse instead of editing live.
 
 ### 2. TCA-First Approach
 TYPO3's TCA is designed to create human-understandable forms, and we leverage this same design to create AI-understandable data representations. Every operation is based on the Table Configuration Array rather than raw database schemas. This means:

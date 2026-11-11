@@ -97,6 +97,15 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
             'tstamp' => time(),
             'crdate' => time(),
         ]);
+
+        // Writes are refused without a workspace, so the editors share one to reach the permission checks
+        $this->connectionPool->getConnectionForTable('sys_workspace')->insert('sys_workspace', [
+            'title' => 'Editors Workspace',
+            'adminusers' => '',
+            'members' => 'be_users_2,be_users_3,be_users_4,be_users_5',
+            'pid' => 0,
+            'deleted' => 0,
+        ]);
     }
     
     /**
