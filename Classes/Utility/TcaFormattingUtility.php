@@ -191,15 +191,17 @@ class TcaFormattingUtility
                     break;
                 }
 
-                $isHiddenTable = GeneralUtility::makeInstance(TableAccessService::class)
-                    ->isEmbeddedChildTable($foreignTable);
+                $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+                $isHiddenTable = $tableAccessService->isEmbeddedChildTable($foreignTable);
 
                 if ($isHiddenTable) {
                     // Embedded relation: LLM writes array of record objects
                     $result .= " [embedded records from " . $foreignTable . " - write as: [";
                     $result .= self::generateMiniExample($foreignTable);
                     $result .= "]. Use GetTableSchema on " . $foreignTable . " for all fields.]";
-                    $result .= self::formatCropVariants($config, $foreignTable);
+                    if ($tableAccessService->canAccessField($foreignTable, 'crop', '', $pid)) {
+                        $result .= self::formatCropVariants($config, $foreignTable);
+                    }
                 } else {
                     // Independent relation: LLM writes array of UIDs
                     $result .= " [relation to " . $foreignTable . " - write as array of UIDs, e.g. [12, 34]]";

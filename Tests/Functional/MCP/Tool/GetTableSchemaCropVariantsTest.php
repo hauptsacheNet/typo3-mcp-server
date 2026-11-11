@@ -86,6 +86,28 @@ class GetTableSchemaCropVariantsTest extends FunctionalTestCase
         $this->assertStringNotContainsString('crop variants', $imageLine);
     }
 
+    public function testCropVariantsAreHiddenWithoutAccessToTheCropField(): void
+    {
+        $this->getConnectionPool()->getConnectionForTable('be_users')->insert('be_users', [
+            'uid' => 99,
+            'pid' => 0,
+            'username' => 'editor_without_crop',
+            'password' => '$argon2i$v=19$m=65536,t=16,p=1$dGVzdHNhbHQ$testpasswordhash',
+            'admin' => 0,
+        ]);
+        $editor = $this->setUpBackendUser(99);
+        $editor->groupData['tables_select'] = 'tt_content,sys_file_reference';
+        $editor->groupData['tables_modify'] = 'tt_content,sys_file_reference';
+        $editor->groupData['non_exclude_fields'] = 'tt_content:assets,sys_file_reference:alternative';
+
+        $result = (new GetTableSchemaTool())->execute(['table' => 'tt_content', 'type' => 'textmedia']);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $assetsLine = $this->findFieldLine($result->content[0]->text, 'assets');
+
+        $this->assertStringNotContainsString('crop variants', $assetsLine);
+    }
+
     private function findFieldLine(string $schema, string $field): string
     {
         foreach (explode("\n", $schema) as $line) {
