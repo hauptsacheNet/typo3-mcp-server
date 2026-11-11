@@ -745,6 +745,17 @@ class TableAccessService implements SingletonInterface
             }
         }
 
+        // Fields the backend shows to admins only (pages.TSconfig, tsconfig_includes,
+        // editlock). They are no exclude fields, so non_exclude_fields cannot grant
+        // them, and DataHandler drops them for every non-admin
+        // (DataHandler::getExcludeListArray()). Offering them would make WriteTable
+        // report a change that is never stored.
+        if (($fieldConfig['displayCond'] ?? '') === 'HIDE_FOR_NON_ADMINS'
+            && !$this->getBackendUser()->isAdmin()
+        ) {
+            return false;
+        }
+
         // Check exclude fields
         if (!empty($fieldConfig['exclude'])) {
             $backendUser = $this->getBackendUser();
