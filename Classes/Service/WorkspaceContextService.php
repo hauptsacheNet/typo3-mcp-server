@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Service;
 
+use TYPO3\CMS\Backend\Module\ModuleProvider;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
@@ -17,6 +18,10 @@ use TYPO3\CMS\Workspaces\Service\WorkspaceService;
  */
 class WorkspaceContextService
 {
+    public function __construct(
+        private readonly ModuleProvider $moduleProvider,
+    ) {}
+
     /**
      * Switch to the optimal workspace for the current user.
      * Creates a new workspace if none exists and user can create workspaces.
@@ -153,8 +158,9 @@ class WorkspaceContextService
             return true;
         }
         
-        // Check if user has workspace module access
-        return $beUser->check('modules', 'web_WorkspacesWorkspaces');
+        // The module registry resolves the legacy alias to the current identifier
+        // (workspaces_admin in v13, workspaces_publish in v14), which is what backend groups store.
+        return $this->moduleProvider->accessGranted('web_WorkspacesWorkspaces', $beUser, false);
     }
     
     /**
