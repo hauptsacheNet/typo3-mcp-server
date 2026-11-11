@@ -8,6 +8,7 @@ use Doctrine\DBAL\ParameterType;
 use Hn\McpServer\Event\AfterRecordWriteEvent;
 use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
+use Hn\McpServer\Exception\McpException;
 use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
@@ -126,6 +127,24 @@ class WriteTableTool extends AbstractRecordTool
                 'idempotentHint' => false
             ]
         ];
+    }
+
+    /**
+     * Refuse to write when no workspace could be resolved, so changes never land in live.
+     */
+    protected function initialize(): void
+    {
+        parent::initialize();
+
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        if ($workspaceId <= 0) {
+            throw new McpException(
+                'No writable workspace for backend user ' . ($GLOBALS['BE_USER']->user['uid'] ?? 0) . ' (workspace ' . $workspaceId . ')',
+                'No workspace available for this user, so nothing was written. Changes are only allowed in a workspace, never directly in live. '
+                . 'Ask a TYPO3 administrator to add this user to a workspace (as member or owner) in the TYPO3 backend.',
+                403
+            );
+        }
     }
 
     /**
