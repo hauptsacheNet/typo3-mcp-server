@@ -135,6 +135,7 @@ $writeTool->execute([
 - The foreign field (e.g., `parent` in `tx_news_domain_model_link`) is NOT defined in the child table's TCA columns by design
 - DataHandler only processes fields that are defined in TCA columns, so it ignores the foreign field
 - **Solution**: After DataHandler creates child records, we directly update the foreign field in the database
+- Because the children are linked after the parent was written, DataHandler's own bookkeeping for the parent field is missing: the counter column stays 0 and `sys_refindex` has no rows for the relation. Both are synced after linking (`syncInlineParentBookkeeping()`), also for nested children, always on the workspace version of the parent and never on its live row. Without the `sys_refindex` rows the workspace dependency resolver does not see the children, so publishing the parent would leave them in the workspace
 - **Working Example**: Creating news with embedded links now works correctly
 
 ### 2. File References (sys_file_reference)
