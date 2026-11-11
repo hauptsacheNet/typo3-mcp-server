@@ -191,14 +191,17 @@ class TcaFormattingUtility
                     break;
                 }
 
-                $isHiddenTable = GeneralUtility::makeInstance(TableAccessService::class)
-                    ->isEmbeddedChildTable($foreignTable);
+                $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+                $isHiddenTable = $tableAccessService->isEmbeddedChildTable($foreignTable);
 
                 if ($isHiddenTable) {
                     // Embedded relation: LLM writes array of record objects
                     $result .= " [embedded records from " . $foreignTable . " - write as: [";
                     $result .= self::generateMiniExample($foreignTable);
                     $result .= "]. Use GetTableSchema on " . $foreignTable . " for all fields.]";
+                    if ($tableAccessService->canAccessField($foreignTable, 'crop', '', $pid)) {
+                        $result .= self::formatCropVariants($config, $foreignTable);
+                    }
                 } else {
                     // Independent relation: LLM writes array of UIDs
                     $result .= " [relation to " . $foreignTable . " - write as array of UIDs, e.g. [12, 34]]";
@@ -254,6 +257,43 @@ class TcaFormattingUtility
             return [];
         }
         return GeneralUtility::trimExplode(',', $disableCTypes, true);
+    }
+
+    /**
+     * The variants usually live on the parent field (overrideChildTca of the crop column), not in the
+     * sys_file_reference schema. Like ImageManipulationElement, merge them over the child table's own
+     * config and skip disabled entries. Ratio keys have dots replaced by underscores, as in Ratio::prepareAspectRatioId().
+     */
+    protected static function formatCropVariants(array $config, string $foreignTable): string
+    {
+        $variants = array_replace_recursive(
+            $GLOBALS['TCA'][$foreignTable]['columns']['crop']['config']['cropVariants'] ?? [],
+            $config['overrideChildTca']['columns']['crop']['config']['cropVariants'] ?? [],
+        );
+
+        $parts = [];
+        foreach ($variants as $variantName => $variant) {
+            if (!empty($variant['disabled'])) {
+                continue;
+            }
+            $ratios = [];
+            foreach ($variant['allowedAspectRatios'] ?? [] as $ratioKey => $ratio) {
+                if (!empty($ratio['disabled'])) {
+                    continue;
+                }
+                $value = (float)($ratio['value'] ?? 0);
+                $ratios[] = '"' . str_replace('.', '_', (string)$ratioKey) . '"' . ($value === 0.0 ? ' (free)' : '=' . round($value, 4));
+            }
+            if ($ratios !== []) {
+                $parts[] = $variantName . ' (ratios: ' . implode(', ', $ratios) . ')';
+            }
+        }
+        if ($parts === []) {
+            return '';
+        }
+
+        return ' [crop variants, set per reference in "crop" as {"<variant>": {"cropArea": {"x", "y", "width", "height"} as fractions 0 to 1, "selectedRatio": "<ratio key>"}}: '
+            . implode('; ', $parts) . ']';
     }
 
     /**

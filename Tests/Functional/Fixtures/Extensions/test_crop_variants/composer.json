@@ -1,0 +1,11 @@
+{
+    "name": "hn/test-crop-variants",
+    "type": "typo3-cms-extension",
+    "description": "Fixture: file field with crop variants",
+    "license": "GPL-2.0-or-later",
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "test_crop_variants"
+        }
+    }
+}
