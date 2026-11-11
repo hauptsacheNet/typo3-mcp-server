@@ -160,9 +160,12 @@ class WorkspaceContextService
         
         // Backend groups store the current identifier (workspaces_admin in v13, workspaces_publish in v14).
         // v13's accessGranted() only checks the identifier it is given, so resolve the legacy alias first.
-        $identifier = $this->moduleProvider->getModule('web_WorkspacesWorkspaces')?->getIdentifier();
+        if (!$this->moduleProvider->isModuleRegistered('web_WorkspacesWorkspaces')) {
+            return false;
+        }
+        $identifier = $this->moduleProvider->getModule('web_WorkspacesWorkspaces')->getIdentifier();
 
-        return $identifier !== null && $this->moduleProvider->accessGranted($identifier, $beUser, false);
+        return $this->moduleProvider->accessGranted($identifier, $beUser, false);
     }
     
     /**
