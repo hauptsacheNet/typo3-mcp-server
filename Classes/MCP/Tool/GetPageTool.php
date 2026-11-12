@@ -60,7 +60,8 @@ class GetPageTool extends AbstractRecordTool
         $domainsText = $this->siteInformationService->getAvailableDomainsText();
         
         $schema = [
-            'description' => 'Get detailed information about a TYPO3 page including its records. Can fetch by page ID or URL. Shows content in the specified language when available.'
+            'description' => 'Get detailed information about a TYPO3 page including its records. Can fetch by page ID or URL. Shows content in the specified language when available. '
+                . 'Every content element lists its frontend anchor (#c<uid>). fluid_styled_content renders each element with id="c<uid>"; sites with their own content templates may not, so check the rendered page if in doubt. To link to an element — e.g. for a table of contents — use "t3://page?uid=<pageId>#c<uid>" in RTE fields like bodytext.'
                 . ($this->recordUrlService->isPreviewLinkEnabled() ? ' When the page or its content has unpublished changes, a temporary preview URL showing them without login is included.' : ''),
             'inputSchema' => [
                 'type' => 'object',
@@ -825,6 +826,14 @@ class GetPageTool extends AbstractRecordTool
                 $result .= "- [" . $element['uid'] . "] " . $title . $this->formatLanguageLabel($element)
                     . " (Type: " . $cTypeLabel . " [" . $cType . "])\n";
                 
+                // fluid_styled_content renders every content element with
+                // id="c<uid>", a translation additionally with the uid of the
+                // translation record, so the uid listed here is an anchor in
+                // every language view — usable for tables of contents and RTE
+                // links (t3://page?uid=<pid>#c<uid>). Sites with their own
+                // content templates may not; the tool description says so.
+                $result .= "  Anchor: #c" . $element['uid'] . "\n";
+
                 // Show important fields based on content type
                 switch ($cType) {
                     case 'text':
