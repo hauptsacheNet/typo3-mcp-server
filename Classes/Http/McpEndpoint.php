@@ -423,34 +423,17 @@ class McpEndpoint
      */
     private function handleAuthHeaderTest(ServerRequestInterface $request): ResponseInterface
     {
-        $headers = [];
-        $receivedAuthHeader = false;
-
-        // Check all possible ways the Authorization header might arrive
-        $authHeader = $request->getHeaderLine('Authorization');
-        if (!empty($authHeader)) {
-            $headers['authorization'] = $authHeader;
-            $receivedAuthHeader = true;
-        }
-
-        // Check server params for HTTP_AUTHORIZATION
+        // Answers anyone, before authentication, so it reports only whether a
+        // header arrived - not its value (a proxy in front may have added
+        // credentials of its own) and nothing about the server.
         $serverParams = $request->getServerParams();
-        if (isset($serverParams['HTTP_AUTHORIZATION'])) {
-            $headers['http_authorization'] = $serverParams['HTTP_AUTHORIZATION'];
-            $receivedAuthHeader = true;
-        }
-
-        // Also check for redirect env variable (Apache specific)
-        if (isset($serverParams['REDIRECT_HTTP_AUTHORIZATION'])) {
-            $headers['redirect_http_authorization'] = $serverParams['REDIRECT_HTTP_AUTHORIZATION'];
-            $receivedAuthHeader = true;
-        }
+        $receivedAuthHeader = $request->getHeaderLine('Authorization') !== ''
+            || !empty($serverParams['HTTP_AUTHORIZATION'])
+            || !empty($serverParams['REDIRECT_HTTP_AUTHORIZATION']);
 
         $responseData = [
             'test' => 'auth',
-            'headers_received' => $headers,
             'auth_header_detected' => $receivedAuthHeader,
-            'server_software' => $serverParams['SERVER_SOFTWARE'] ?? 'unknown',
             'hint' => !$receivedAuthHeader ? 'Authorization header not received. See module page for solutions.' : 'Authorization header received successfully.'
         ];
 
