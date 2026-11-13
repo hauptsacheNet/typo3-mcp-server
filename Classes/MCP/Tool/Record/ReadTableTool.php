@@ -578,6 +578,11 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
 
+            // A stored password (hash) is never read back, whoever asks
+            if ($this->tableAccessService->isSecretField($table, $field)) {
+                continue;
+            }
+
             // Skip fields not in the requested field list
             if (!empty($requestedFields) && !in_array($field, $requestedFields)) {
                 continue;
