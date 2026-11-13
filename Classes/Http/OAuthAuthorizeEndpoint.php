@@ -21,6 +21,30 @@ class OAuthAuthorizeEndpoint
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
+        return $this->withBrowserProtection($this->handle($request));
+    }
+
+    /**
+     * Headers for pages on which one click grants access to the backend.
+     *
+     * - No framing (RFC 6749 §10.13): a consent screen embedded invisibly in
+     *   another page can be clicked without the user ever seeing it. The session
+     *   cookie's SameSite attribute stops that for foreign sites only when it is
+     *   left at its default, and never for a sibling host of the same site.
+     * - No caching, no referrer: the pages carry the CSRF token or the
+     *   authorization code, and their URL carries state and code_challenge.
+     */
+    private function withBrowserProtection(ResponseInterface $response): ResponseInterface
+    {
+        return $response
+            ->withHeader('X-Frame-Options', 'DENY')
+            ->withHeader('Content-Security-Policy', "frame-ancestors 'none'")
+            ->withHeader('Cache-Control', 'no-store')
+            ->withHeader('Referrer-Policy', 'no-referrer');
+    }
+
+    private function handle(ServerRequestInterface $request): ResponseInterface
+    {
         try {
             $queryParams = $request->getQueryParams();
             $postParams = $request->getParsedBody() ?: [];
@@ -284,6 +308,7 @@ class OAuthAuthorizeEndpoint
         $html = $this->generateConsentTemplate([
             'username' => htmlspecialchars($username),
             'client_name' => htmlspecialchars($clientName),
+            'destination' => htmlspecialchars($this->describeDestination($redirectUri)),
             'client_id' => htmlspecialchars($clientId),
             'redirect_uri' => htmlspecialchars($redirectUri),
             'code_challenge' => htmlspecialchars($codeChallenge),
@@ -314,6 +339,33 @@ class OAuthAuthorizeEndpoint
         );
     }
 
+
+    /**
+     * Where the authorization code - and with it the access - ends up.
+     *
+     * The client name is whatever the client called itself: registration is open
+     * to anyone, so a link to a client registered as "Claude" with a redirect_uri
+     * on a foreign host renders a consent screen that looks exactly like the real
+     * one. The redirect target is the one fact on this screen the client cannot
+     * choose freely without giving itself away, so it is shown.
+     */
+    private function describeDestination(string $redirectUri): string
+    {
+        if ($redirectUri === '') {
+            return 'you, as a code to copy';
+        }
+
+        $parts = parse_url($redirectUri);
+        $host = is_array($parts) ? strtolower((string)($parts['host'] ?? '')) : '';
+        if ($host === '') {
+            return $redirectUri;
+        }
+        if (in_array($host, ['localhost', '127.0.0.1', '::1', '[::1]'], true)) {
+            return 'an application on this computer (' . $host . ')';
+        }
+
+        return $host . (isset($parts['port']) ? ':' . $parts['port'] : '');
+    }
 
     private const CSRF_SESSION_KEY = 'mcp_oauth_csrf';
 
@@ -488,6 +540,7 @@ class OAuthAuthorizeEndpoint
         <div class="info">
             <p><strong>User:</strong> ' . $data['username'] . '</p>
             <p><strong>Client:</strong> ' . $data['client_name'] . '</p>
+            <p><strong>Access is handed to:</strong> ' . $data['destination'] . '</p>
         </div>
 
         <div class="permissions">
