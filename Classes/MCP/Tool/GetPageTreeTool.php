@@ -88,7 +88,10 @@ class GetPageTreeTool extends AbstractRecordTool
      */
     protected function doExecute(array $params): CallToolResult
     {
-        
+        // Reads pages directly, so the table access rules (incl. allowedTables /
+        // excludedTables) have to be checked here
+        $this->tableAccessService->validateTableAccess('pages');
+
         $startPage = (int)($params['startPage'] ?? 0);
         $depth = (int)($params['depth'] ?? 3);
         $languageUid = null;

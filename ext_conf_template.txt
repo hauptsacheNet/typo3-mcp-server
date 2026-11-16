@@ -4,6 +4,12 @@ additionalReadOnlyTables = sys_file
 # cat=mcp/tables; type=string; label=Additional standalone tables: Comma-separated list of tables marked as hideTable=true in TCA that should still be exposed as independent tables instead of being embedded into their parent's inline relation. Use this for hideTable tables whose inline structure is too complex (translations, mounts, ...) to be safely edited through the parent. Example: sys_file_metadata,tx_myext_complex_child
 additionalStandaloneTables = sys_file_metadata
 
+# cat=mcp/tables; type=string; label=Excluded tables: Comma-separated list of tables the MCP tools never expose, regardless of the backend user's permissions and also for admins. A trailing * matches all tables with that prefix. Use it for tables with personal data that editors still need in the backend, e.g. form submissions. Example: tx_powermail_domain_model_mail,tx_powermail_domain_model_answer,tx_myext_domain_model_request*
+excludedTables =
+
+# cat=mcp/tables; type=string; label=Allowed tables: If set, the MCP tools only expose the tables in this comma-separated list (still subject to the backend user's permissions), tables added by new extensions stay hidden until they are listed here. A trailing * matches all tables with that prefix; "Excluded tables" wins over this list. Leave empty to expose every table the user may access. Example: pages,tt_content,sys_file*,sys_category,tx_news_*
+allowedTables =
+
 # cat=mcp/files; type=int+; label=Maximum file size (MiB): Upper limit for files fetched from URLs or received through pre-signed uploads via the UploadFile tool. Default: 500
 maxFileSizeMb = 500
 
