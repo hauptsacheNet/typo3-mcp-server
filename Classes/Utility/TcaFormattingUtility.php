@@ -26,12 +26,20 @@ class TcaFormattingUtility
      * @param string $fieldName Optional field name for special handling
      * @param string $table Optional table name for authMode filtering
      * @param int|null $pid Optional page id for TSconfig context (filters select items via FormDataCompiler)
+     * @param string $recordType Optional record type (e.g. the CType) the field is shown for. Select items
+     *                           depending on the type (e.g. colPos restricted by backend layout) are resolved for it.
      */
-    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = '', ?int $pid = null): void
+    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = '', ?int $pid = null, string $recordType = ''): void
     {
         // Get the field type
         $type = $config['type'] ?? '';
-        
+
+        // Select values the current user may pick (after authMode / disableCTypes filtering),
+        // used to check the default against. Only meaningful when an option list was resolved:
+        // an empty list then means every option was filtered out, not that none are known.
+        $allowedValues = [];
+        $optionsResolved = false;
+
         // Add field details based on type
         switch ($type) {
             case 'input':
@@ -91,13 +99,33 @@ class TcaFormattingUtility
                 // Pass the pid context so TSconfig defined on real pages (rootline) is applied — vanillaUid=0 misses it.
                 $resolved = null;
                 if (!empty($table) && !empty($fieldName)) {
-                    $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
-                    $resolverPid = GeneralUtility::makeInstance(TableAccessService::class)->resolveTSconfigPid($pid);
-                    $resolved = $resolver->resolveSelectItems($table, $fieldName, ['pid' => $resolverPid]);
+                    $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+                    $resolverPid = $tableAccessService->resolveTSconfigPid($pid);
+                    $typeField = $tableAccessService->getTypeFieldName($table);
+                    if ($fieldName === $typeField) {
+                        // The type field lists the types available on the page, independent
+                        // of a column — same list GetTableSchema validates the type against.
+                        $types = $tableAccessService->getAvailableTypes($table, $pid);
+                        $resolved = [
+                            'values' => array_map('strval', array_keys($types)),
+                            'labels' => $types,
+                        ];
+                    } else {
+                        // Seed the record type so type-dependent items match a record of
+                        // that type (e.g. tt_content.colPos only lists the backend layout
+                        // columns that allow the CType).
+                        $record = ['pid' => $resolverPid];
+                        if ($typeField !== null && $recordType !== '') {
+                            $record[$typeField] = $recordType;
+                        }
+                        $resolver = GeneralUtility::makeInstance(SelectItemResolver::class);
+                        $resolved = $resolver->resolveSelectItems($table, $fieldName, $record);
+                    }
                 }
 
                 if ($resolved !== null && !empty($resolved['values'])) {
                     // Use dynamically resolved items
+                    $optionsResolved = true;
                     $hasAuthMode = !empty($config['authMode']);
                     $beUser = $GLOBALS['BE_USER'] ?? null;
                     $isAdmin = $beUser && $beUser->isAdmin();
@@ -118,6 +146,8 @@ class TcaFormattingUtility
                         if (in_array((string)$value, $disabledCTypes, true)) {
                             continue;
                         }
+                        // Allowed even without a label (e.g. an empty "none" item)
+                        $allowedValues[] = (string)$value;
 
                         $label = $resolved['labels'][$value] ?? '';
                         if ($label) {
@@ -133,6 +163,7 @@ class TcaFormattingUtility
                     // Fallback: use static TCA items
                     $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
                     $parsed = $tableAccessService->parseSelectItems($config['items'], false);
+                    $optionsResolved = array_diff($parsed['values'], ['--div--']) !== [];
 
                     $hasAuthMode = !empty($config['authMode']);
                     $beUser = $GLOBALS['BE_USER'] ?? null;
@@ -152,6 +183,8 @@ class TcaFormattingUtility
                         if (in_array((string)$value, $disabledCTypes, true)) {
                             continue;
                         }
+                        // Allowed even without a label (e.g. an empty "none" item)
+                        $allowedValues[] = (string)$value;
                         $label = $parsed['labels'][$value] ?? '';
                         if ($label) {
                             $translatedLabel = TableAccessService::translateLabel($label);
@@ -232,8 +265,15 @@ class TcaFormattingUtility
             $result .= " [Required]";
         }
         
-        // Add default value if set
-        if (isset($config['default']) && $type !== 'check') {
+        // Add default value if set. For select fields with a resolved option list only when
+        // the user may pick it: context-restricted items (e.g. tt_content.colPos limited to
+        // the backend layout columns that allow the CType) or authMode / disableCTypes can
+        // exclude the TCA default. Advertising it anyway invites clients to omit the field —
+        // and DataHandler fills in an omitted colPos without checking the backend layout
+        // restriction. Without a resolved list (e.g. FlexForm fields) it can't be checked.
+        $defaultIsOffered = !$optionsResolved
+            || array_diff(GeneralUtility::trimExplode(',', (string)($config['default'] ?? ''), true), $allowedValues) === [];
+        if (isset($config['default']) && $type !== 'check' && $defaultIsOffered) {
             $result .= " [Default: " . $config['default'] . "]";
         }
     }
