@@ -378,10 +378,8 @@ class RecordFormattingUtility
                 $colPos = (int) $column['colPos'];
                 $name = $column['name'] ?? 'Column ' . $colPos;
                 
-                // Translate the name if it's a language label
-                if (str_starts_with($name, 'LLL:')) {
-                    $name = TableAccessService::translateLabel($name);
-                }
+                // Translate the name if it's a label reference (LLL: or TYPO3 14 short syntax)
+                $name = TableAccessService::translateLabel((string)$name);
                 
                 $columns[$colPos] = $name;
             }
