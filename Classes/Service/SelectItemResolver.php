@@ -39,7 +39,8 @@ class SelectItemResolver
      *                      For updates: merge existing DB record with submitted data.
      *                      For creates: submitted data with pid.
      *                      For schema display: empty array (pid defaults to 0).
-     * @return array|null Array with 'values' and 'labels' keys, or null on failure
+     * @return array|null Array with 'values', 'labels' and 'descriptions' keys, or null on failure
+     *                    ('descriptions' only holds items that define a non-empty description)
      */
     public function resolveSelectItems(string $table, string $field, array $record = []): ?array
     {
@@ -234,13 +235,14 @@ class SelectItemResolver
      * Parse resolved items into the values/labels structure.
      *
      * @param array $items Resolved items from FormDataCompiler
-     * @return array Array with 'values' and 'labels' keys
+     * @return array Array with 'values', 'labels' and 'descriptions' keys
      */
     private function parseItems(array $items): array
     {
         $result = [
             'values' => [],
             'labels' => [],
+            'descriptions' => [],
         ];
 
         foreach ($items as $item) {
@@ -250,6 +252,7 @@ class SelectItemResolver
 
             $value = $item['value'] ?? ($item[1] ?? '');
             $label = $item['label'] ?? ($item[0] ?? '');
+            $description = $item['description'] ?? ($item[4] ?? null);
 
             // Skip dividers
             if ((string)$value === '--div--') {
@@ -260,6 +263,9 @@ class SelectItemResolver
             if ($stringValue !== '') {
                 $result['values'][] = $stringValue;
                 $result['labels'][$stringValue] = $label;
+                if (is_string($description) && trim($description) !== '') {
+                    $result['descriptions'][$stringValue] = $description;
+                }
             }
         }
 
