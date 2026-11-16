@@ -196,6 +196,16 @@ parent's inline descendants (live rows and rows created in the workspace) before
 versioning and writes back every column that changed afterwards, so only new
 version rows remain.
 
+The workspace module groups a parent and its children into one collection by the
+parent's `sys_refindex` rows in the workspace (`CollectionService`, `ElementEntity::getChildren()`).
+For a `foreign_field` relation these rows belong to the parent, but DataHandler only
+reindexes the record it writes, so a child written on its own would be listed apart
+from its news. `InlineParentService` therefore also recomputes the workspace rows of the
+written record and every ancestor (`ReferenceIndex::updateRefIndexTable()`). Known gap:
+core's `RelationHandler` resolves foreign field children from the live rows, so a child
+pointed at another parent in the workspace stays grouped below its old parent until it
+is published.
+
 ### 5. Sorting and Positioning
 - Sorting is handled through `sorting` or `sorting_foreign` fields
 - Position management (before/after) not fully implemented for inline relations
