@@ -1407,9 +1407,18 @@ class TableAccessService implements SingletonInterface
     
     /**
      * Translate a TCA label using TYPO3's language system
+     *
+     * Handles `LLL:` references and, since TYPO3 14, label references in the
+     * short translation domain syntax (e.g. `frontend.db.tt_content:bodytext`,
+     * `core.form.tabs:general`). Any other string is a constant label and is
+     * returned unchanged.
      */
     public static function translateLabel(string $label): string
     {
+        if (self::isLabelDomainReference($label)) {
+            return self::translateLabelReference($label);
+        }
+
         if (strpos($label, 'LLL:') === 0) {
             // Check if language service is available, initialize if not
             if (!isset($GLOBALS['LANG'])) {
@@ -1457,5 +1466,39 @@ class TableAccessService implements SingletonInterface
         }
         
         return $label;
+    }
+
+    /**
+     * Whether the label uses the TYPO3 14 translation domain syntax
+     * `<extension>.<resource>:<key>`. The domain part follows the core's
+     * TranslationDomainResolver::isValidDomainName(), so plain labels and
+     * values such as `uid_local:type` are not mistaken for references.
+     */
+    private static function isLabelDomainReference(string $label): bool
+    {
+        return (bool)preg_match('/^[a-z0-9_]+(\.[a-z0-9_]+)+:\S+$/', $label);
+    }
+
+    /**
+     * Resolve a label reference without `LLL:` prefix (TYPO3 14 translation
+     * domain syntax, e.g. `frontend.db.tt_content:bodytext`).
+     *
+     * LanguageService::sL() resolves these on TYPO3 14 and returns the input
+     * unchanged when nothing is found. TYPO3 13 does not know the syntax and
+     * returns the input unchanged as well.
+     */
+    private static function translateLabelReference(string $label): string
+    {
+        try {
+            if (!isset($GLOBALS['LANG'])) {
+                $GLOBALS['LANG'] = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class)
+                    ->create('default');
+            }
+            $translated = (string)$GLOBALS['LANG']->sL($label);
+        } catch (\Throwable) {
+            return $label;
+        }
+
+        return $translated !== '' ? $translated : $label;
     }
 }
