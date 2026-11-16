@@ -453,7 +453,7 @@ case "${TEST_SUITE}" in
             -w /app \
             -e "TYPO3_BASE_URL=http://web:8080" \
             -e "CI=${CI:-}" \
-            "mcr.microsoft.com/playwright:v1.52.0-noble" \
+            "mcr.microsoft.com/playwright:v1.64.1-noble" \
             /bin/bash -c "npm ci 2>/dev/null && npx playwright test ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
         ;;
     *)
