@@ -123,9 +123,14 @@ For secure remote access with proper authentication:
 
 ![MCP Server Setup](mcp_setup.png)
 
-#### Option 2: Local Command Line Connection
+The HTTP endpoint runs with the permissions of the logged-in backend user: DB mounts, table and field permissions, and workspaces apply as in the TYPO3 backend.
 
-This method gives you admin privileges by default. Add this to your mcp config file of Claude Desktop or whatever client you are using.
+#### Option 2: Local Command Line Connection (Deprecated)
+
+> [!WARNING]
+> The stdio command is deprecated. Use the HTTP endpoint (Option 1) instead.
+
+The stdio command always runs with admin privileges. This is intended: running it requires shell access to the server, which already means full control over the TYPO3 installation. It also only works where the MCP client can start a process on the server. To use it anyway, add this to the MCP config file of Claude Desktop or whatever client you are using:
 ```json
 {
    "mcpServers": {
