@@ -1,0 +1,15 @@
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+    public: false
+
+  Hn\TestRequestContext\:
+    resource: '../Classes/*'
+    exclude: '../Classes/Domain/Model/*'
+
+  Hn\TestRequestContext\EventListener\TranslatingFileAddedListener:
+    tags:
+      - name: event.listener
+        event: TYPO3\CMS\Core\Resource\Event\AfterFileAddedEvent
+        identifier: 'test-request-context/translating-file-added'
