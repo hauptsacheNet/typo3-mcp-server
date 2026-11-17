@@ -9,6 +9,7 @@ use Hn\McpServer\Event\AfterRecordWriteEvent;
 use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
+use Hn\McpServer\Service\ContentColumnService;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\RecordUrlService;
@@ -1244,6 +1245,67 @@ class WriteTableTool extends AbstractRecordTool
     }
 
     /**
+     * Container children are left to b13/container, which checks its own columns.
+     * A colPos outside the layout is left to the colPos items (TCEFORM addItems);
+     * elements already sitting there stay editable.
+     */
+    protected function validateContentPlacement(
+        array $data,
+        string $action,
+        ?array $currentRecord,
+        array $mergedRecord,
+        int $effectivePid
+    ): ?string {
+        $record = array_merge($currentRecord ?? [], $data);
+        if ((int)($record['tx_container_parent'] ?? 0) > 0) {
+            return null;
+        }
+
+        $pageId = array_key_exists('pid', $data) || $currentRecord === null
+            ? $effectivePid
+            : (int)($currentRecord['pid'] ?? $effectivePid);
+        $colPos = (int)($record['colPos'] ?? $GLOBALS['TCA']['tt_content']['columns']['colPos']['config']['default'] ?? 0);
+        $cType = (string)($record['CType'] ?? $GLOBALS['TCA']['tt_content']['columns']['CType']['config']['default'] ?? '');
+
+        $contentColumnService = GeneralUtility::makeInstance(ContentColumnService::class);
+        $columns = $contentColumnService->getColumns($pageId);
+        if ($columns === [] || $cType === '') {
+            return null;
+        }
+
+        $column = $contentColumnService->findColumn($columns, $colPos);
+        if ($column !== null) {
+            if ($contentColumnService->acceptsType($column, $cType)) {
+                return null;
+            }
+            return sprintf('%s does not accept the type "%s". ', $contentColumnService->formatColumnName($column), $cType)
+                . $contentColumnService->describeColumnsAcceptingType($pageId, $columns, $cType);
+        }
+
+        if ($action !== 'create' && !array_key_exists('colPos', $data)) {
+            return null;
+        }
+        $colPosError = $this->tableAccessService->validateFieldValue(
+            'tt_content',
+            'colPos',
+            $colPos,
+            array_merge($mergedRecord, ['colPos' => $colPos])
+        );
+        if ($colPosError === null) {
+            return null;
+        }
+        return sprintf(
+            'colPos %d does not exist on page %d; colPos must be one of: %s. ',
+            $colPos,
+            $pageId,
+            implode(', ', array_map(
+                static fn(array $column): string => $column['colPos'] . ' (' . $column['name'] . ')',
+                $columns
+            ))
+        ) . $contentColumnService->describeColumnsAcceptingType($pageId, $columns, $cType);
+    }
+
+    /**
      * Validate record data against TCA
      * 
      * @param int|null $uid Record UID (required for update actions)
@@ -1347,6 +1409,13 @@ class WriteTableTool extends AbstractRecordTool
                 if (in_array((string)$data['CType'], $disabled, true)) {
                     return "Field 'CType' value '{$data['CType']}' is disabled by TCEMAIN.table.tt_content.disableCTypes for this page";
                 }
+            }
+        }
+
+        if ($table === 'tt_content') {
+            $placementError = $this->validateContentPlacement($data, $action, $currentRecord, $mergedRecord, (int)$effectivePid);
+            if ($placementError !== null) {
+                return $placementError;
             }
         }
 

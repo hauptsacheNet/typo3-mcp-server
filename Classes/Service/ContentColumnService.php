@@ -77,6 +77,42 @@ class ContentColumnService
     }
 
     /**
+     * @param list<array{colPos: int, name: string, allowed: list<string>, disallowed: list<string>}> $columns
+     * @return array{colPos: int, name: string, allowed: list<string>, disallowed: list<string>}|null
+     */
+    public function findColumn(array $columns, int $colPos): ?array
+    {
+        foreach ($columns as $column) {
+            if ($column['colPos'] === $colPos) {
+                return $column;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param list<array{colPos: int, name: string, allowed: list<string>, disallowed: list<string>}> $columns
+     */
+    public function describeColumnsAcceptingType(int $pageId, array $columns, string $cType): string
+    {
+        $fitting = $this->filterColumnsAcceptingType($columns, $cType);
+        if ($fitting === []) {
+            return sprintf(
+                'No column of page %d accepts the type "%s"; choose another type (GetPage lists the columns and the types they accept).',
+                $pageId,
+                $cType
+            );
+        }
+
+        return sprintf(
+            'Columns of page %d that accept "%s": %s. Set colPos to one of them.',
+            $pageId,
+            $cType,
+            implode(', ', array_map(fn(array $column): string => $this->formatColumnName($column), $fitting))
+        );
+    }
+
+    /**
      * @param array{colPos: int, name: string} $column
      */
     public function formatColumnName(array $column): string
