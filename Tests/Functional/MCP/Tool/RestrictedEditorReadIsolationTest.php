@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
+use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\MCP\Tool\SearchTool;
@@ -180,6 +181,30 @@ class RestrictedEditorReadIsolationTest extends FunctionalTestCase
         $this->assertStringContainsString('Restricted Page', $text);
         $this->assertStringNotContainsString('Other Page', $text);
         $this->assertStringNotContainsString('Hidden Page', $text);
+    }
+
+    public function testTableSchemaForPageInsideMountWorks(): void
+    {
+        $result = (new GetTableSchemaTool())->execute(['table' => 'tt_content', 'pid' => self::MOUNTED_PAGE_UID]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('Type: html', $result->content[0]->text);
+    }
+
+    public function testTableSchemaForPageOutsideMountIsRejected(): void
+    {
+        $result = (new GetTableSchemaTool())->execute(['table' => 'tt_content', 'pid' => self::UNMOUNTED_PAGE_UID]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testTableSchemaWithoutPidIsResolvedForTheMount(): void
+    {
+        $withoutPid = (new GetTableSchemaTool())->execute(['table' => 'tt_content']);
+        $mounted = (new GetTableSchemaTool())->execute(['table' => 'tt_content', 'pid' => self::MOUNTED_PAGE_UID]);
+
+        $this->assertFalse($withoutPid->isError, json_encode($withoutPid->jsonSerialize()));
+        $this->assertSame($mounted->content[0]->text, $withoutPid->content[0]->text);
     }
 
     #[DataProvider('searchStringProvider')]

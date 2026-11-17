@@ -7,6 +7,7 @@ namespace Hn\McpServer\MCP\Tool\Record;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
+use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\TableAccessService;
 
 /**
@@ -44,7 +45,8 @@ class GetTableSchemaTool extends AbstractRecordTool
                         'type' => 'integer',
                         'description' => 'Page ID to resolve TSconfig context against. Different pages may allow different record types ' .
                             'or hide different fields based on page TSconfig. Pass the page where the record will live to get an accurate schema. ' .
-                            'If omitted, the first configured site\'s root page is used so project-wide TSconfig is still applied.',
+                            'If omitted, the first configured site\'s root page is used so project-wide TSconfig is still applied ' .
+                            '(for users restricted to page mounts: their first mount).',
                     ],
                 ],
                 'required' => ['table'],
@@ -72,6 +74,16 @@ class GetTableSchemaTool extends AbstractRecordTool
 
         $filterType = $params['type'] ?? '';
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
+
+        $pageAccess = GeneralUtility::makeInstance(PageAccessService::class);
+        if ($pageAccess->isRestricted()) {
+            if ($pid !== null && $pid > 0 && !$pageAccess->isPageReadable($pid)) {
+                throw new \InvalidArgumentException('Page not found or outside your page mounts: ' . $pid);
+            }
+            if ($pid === null || $pid <= 0) {
+                $pid = $pageAccess->getReadableMountRoots()[0] ?? null;
+            }
+        }
 
         $result = $this->generateTableSchema($table, $filterType, $pid);
         return $this->createSuccessResult($result);
