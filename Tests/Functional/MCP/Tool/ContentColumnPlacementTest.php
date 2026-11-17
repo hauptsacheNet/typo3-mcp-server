@@ -102,8 +102,7 @@ TSCONFIG;
     }
 
     /**
-     * Guards the premise: the core resolves the page TSconfig layout for page 7
-     * and enforces its column limits.
+     * Guards the premise: the core resolves the page TSconfig layout for page 7.
      */
     public function testCoreResolvesTheRestrictedLayout(): void
     {
@@ -113,6 +112,19 @@ TSCONFIG;
             [3, 0, 1],
             array_map('intval', $backendLayoutView->getBackendLayoutForPage(self::PAGE)->getStructure()['__colPosList'])
         );
+    }
+
+    /**
+     * Guards the premise: the core enforces the column limits of that layout.
+     */
+    public function testCoreEnforcesTheColumnLimits(): void
+    {
+        if (GeneralUtility::makeInstance(\TYPO3\CMS\Core\Information\Typo3Version::class)->getMajorVersion() < 14) {
+            $this->markTestSkipped('The core enforces allowedContentTypes / disallowedContentTypes since TYPO3 14.');
+        }
+
+        $backendLayoutView = GeneralUtility::makeInstance(BackendLayoutView::class);
+
         $this->assertTrue($backendLayoutView->isCTypeAllowedInColPosByPage('image', 3, self::PAGE));
         $this->assertFalse($backendLayoutView->isCTypeAllowedInColPosByPage('image', 0, self::PAGE));
     }
