@@ -65,4 +65,17 @@ class GetTableSchemaNewsTest extends FunctionalTestCase
         $this->assertStringContainsString('https://example.com', $content);
         $this->assertStringContainsString('mailto:email@example.com', $content);
     }
+
+    public function testNewsTypeZeroListsOnlyItsOwnFields(): void
+    {
+        $result = (new GetTableSchemaTool())->execute([
+            'table' => 'tx_news_domain_model_news',
+            'type' => '0',
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        $this->assertDoesNotMatchRegularExpression('/^\s*(?:-|├─|└─) internalurl /mu', $content);
+        $this->assertDoesNotMatchRegularExpression('/^\s*(?:-|├─|└─) externalurl /mu', $content);
+    }
 }
