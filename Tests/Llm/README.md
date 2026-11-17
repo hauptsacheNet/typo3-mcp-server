@@ -45,11 +45,13 @@ When using OpenRouter, the following models are available via `modelProvider()`:
 |--------------------|--------------------------------|
 | `haiku-5.5`        | `anthropic/claude-haiku-5.5`   |
 | `gpt-6-luna`       | `openai/gpt-6-luna`            |
-| `gpt-oss-120b`     | `openai/gpt-oss-120b`          |
 | `mistral-large-4`  | `mistralai/mistral-large-4-0`  |
 | `gemini-3.8-flash` | `google/gemini-3.8-flash`      |
+| `glm-5.3-flash`    | `z-ai/glm-5.3-flash`           |
+| `deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash-1017` |
+| `qwen3.8-27b`      | `qwen/qwen3.8-27b`             |
 
-The list lives in `LlmTestCase::MODELS`; per-model request options (reasoning effort, temperature) in `LlmTestCase::MODEL_OPTIONS`. Keys are used as labels in the results and in the README badges, so they include the model version.
+The list lives in `LlmTestCase::MODELS`; per-model request options (reasoning effort, temperature) in `LlmTestCase::MODEL_OPTIONS`. Keys are used as labels in the results and in the README badges, so they include the model version. A test case passes when it passes on a majority of the models (`--min-pass=4` of 7).
 
 Tests using `#[DataProvider('modelProvider')]` run once per model automatically.
 

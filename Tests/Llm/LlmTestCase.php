@@ -30,10 +30,12 @@ abstract class LlmTestCase extends FunctionalTestCase
     protected const MODELS = [
         'haiku-5.5' => 'anthropic/claude-haiku-5.5',
         'gpt-6-luna' => 'openai/gpt-6-luna',
-        // Still the latest open-weight model from OpenAI
-        'gpt-oss-120b' => 'openai/gpt-oss-120b',
         'mistral-large-4' => 'mistralai/mistral-large-4-0',
         'gemini-3.8-flash' => 'google/gemini-3.8-flash',
+        // Open-weight models, as used for self-hosting
+        'glm-5.3-flash' => 'z-ai/glm-5.3-flash',
+        'deepseek-v4.1-flash' => 'deepseek/deepseek-v4.1-flash-1017',
+        'qwen3.8-27b' => 'qwen/qwen3.8-27b',
     ];
 
     protected const MODEL_OPTIONS = [
