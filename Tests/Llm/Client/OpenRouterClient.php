@@ -312,13 +312,6 @@ class OpenRouterClient implements LlmClientInterface
             $assistantMessage['tool_calls'] = $message['tool_calls'];
         }
 
-        // Reasoning models (DeepSeek thinking mode, Claude with thinking) expect
-        // the reasoning of a tool-calling turn to be passed back unmodified,
-        // otherwise the continuation may be rejected or lose its context.
-        if (!empty($message['reasoning_details'])) {
-            $assistantMessage['reasoning_details'] = $message['reasoning_details'];
-        }
-
         return $assistantMessage;
     }
 }
