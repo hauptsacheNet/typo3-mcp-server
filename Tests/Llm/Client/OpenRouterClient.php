@@ -34,8 +34,9 @@ class OpenRouterClient implements LlmClientInterface
         // Reset conversation history for new conversation
         $this->conversationHistory = [];
 
-        $model = $options['model'] ?? 'anthropic/claude-3-5-haiku';
-        $temperature = $options['temperature'] ?? 0;
+        $model = $options['model'] ?? 'anthropic/claude-haiku-5.5';
+        // null leaves temperature out: some models reject any non-default value
+        $temperature = array_key_exists('temperature', $options) ? $options['temperature'] : 0;
         $maxTokens = $options['max_tokens'] ?? 4000;
 
         $messages = [
@@ -56,10 +57,13 @@ class OpenRouterClient implements LlmClientInterface
         $requestBody = [
             'model' => $model,
             'max_tokens' => $maxTokens,
-            'temperature' => $temperature,
             'messages' => $messages,
             'tools' => $this->convertToolsToOpenAIFormat($tools),
         ];
+
+        if ($temperature !== null) {
+            $requestBody['temperature'] = $temperature;
+        }
 
         if (isset($options['reasoning'])) {
             $requestBody['reasoning'] = $options['reasoning'];
@@ -79,8 +83,9 @@ class OpenRouterClient implements LlmClientInterface
         array $tools,
         array $options = []
     ): LlmResponse {
-        $model = $options['model'] ?? 'anthropic/claude-3-5-haiku';
-        $temperature = $options['temperature'] ?? 0;
+        $model = $options['model'] ?? 'anthropic/claude-haiku-5.5';
+        // null leaves temperature out: some models reject any non-default value
+        $temperature = array_key_exists('temperature', $options) ? $options['temperature'] : 0;
         $maxTokens = $options['max_tokens'] ?? 4000;
 
         // Build full conversation from history
@@ -115,10 +120,13 @@ class OpenRouterClient implements LlmClientInterface
         $requestBody = [
             'model' => $model,
             'max_tokens' => $maxTokens,
-            'temperature' => $temperature,
             'messages' => $this->conversationHistory,
             'tools' => $this->convertToolsToOpenAIFormat($tools),
         ];
+
+        if ($temperature !== null) {
+            $requestBody['temperature'] = $temperature;
+        }
 
         if (isset($options['reasoning'])) {
             $requestBody['reasoning'] = $options['reasoning'];
