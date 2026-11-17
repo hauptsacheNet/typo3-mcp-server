@@ -163,6 +163,79 @@ class RestrictedEditorReadIsolationTest extends FunctionalTestCase
         );
     }
 
+    public function testPageTreeStartingInsideMountWorks(): void
+    {
+        $result = $this->getTool('GetPageTree')->execute(['startPage' => self::MOUNTED_PAGE_UID, 'depth' => 2]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testSearchDoesNotFindPagesOutsideMount(): void
+    {
+        $result = (new SearchTool())->execute(['terms' => ['Page'], 'table' => 'pages']);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        $this->assertStringContainsString('Restricted Page', $text);
+        $this->assertStringNotContainsString('Other Page', $text);
+        $this->assertStringNotContainsString('Hidden Page', $text);
+    }
+
+    public function testGetPageListsOnlySubpagesWithShowPermission(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/restricted_editor_subpages.csv');
+
+        $result = $this->getTool('GetPage')->execute(['uid' => self::MOUNTED_PAGE_UID]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        $this->assertStringContainsString('Shared Subpage', $text);
+        $this->assertStringNotContainsString('Secret Subpage', $text);
+    }
+
+    public function testGetPageOfSubpageWithoutShowPermissionIsRejected(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/restricted_editor_subpages.csv');
+
+        $result = $this->getTool('GetPage')->execute(['uid' => 22]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testPageTreeLeavesOutSubpagesWithoutShowPermission(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/restricted_editor_subpages.csv');
+
+        $result = $this->getTool('GetPageTree')->execute(['startPage' => self::MOUNTED_PAGE_UID, 'depth' => 2]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $tree = $result->content[0]->text;
+        $this->assertStringContainsString('Shared Subpage', $tree);
+        $this->assertStringNotContainsString('Secret Subpage', $tree);
+    }
+
+    public function testReadTableLeavesOutSubpagesWithoutShowPermission(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/restricted_editor_subpages.csv');
+
+        $pages = (new ReadTableTool())->execute(['table' => 'pages', 'pid' => self::MOUNTED_PAGE_UID]);
+        $content = (new ReadTableTool())->execute(['table' => 'tt_content', 'pid' => 22]);
+
+        $this->assertFalse($pages->isError, json_encode($pages->jsonSerialize()));
+        $this->assertSame([23], array_column($this->decodeToolResult($pages)['records'], 'uid'));
+        $this->assertFalse($content->isError, json_encode($content->jsonSerialize()));
+        $this->assertSame([], $this->decodeToolResult($content)['records']);
+    }
+
+    public function testSearchDoesNotFindContentOnSubpagesWithoutShowPermission(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/restricted_editor_subpages.csv');
+
+        $result = (new SearchTool())->execute(['terms' => ['Secret markup']]);
+
+        $this->assertStringNotContainsString('Secret block', json_encode($result->jsonSerialize()));
+    }
+
     private function getTool(string $name): ToolInterface
     {
         $tool = $this->get(ToolRegistry::class)->getTool($name);
