@@ -48,6 +48,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News with embedded links',
                 'bodytext' => 'This news has related links',
                 'related_links' => [
@@ -134,6 +135,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News to update with links',
             ],
         ]);
@@ -197,6 +199,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News with links to remove',
                 'related_links' => [
                     ['title' => 'Link 1', 'uri' => 'https://example1.com'],
@@ -249,6 +252,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News with sorted links',
                 'related_links' => [
                     ['title' => 'First link', 'uri' => 'https://first.com'],
@@ -314,6 +318,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News for reorder',
                 'related_links' => [
                     ['title' => 'First link', 'uri' => 'https://first.com'],
@@ -385,6 +390,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News with invalid links',
                 'related_links' => 'not-an-array'
             ],
@@ -398,6 +404,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News with invalid link items',
                 'related_links' => [
                     'not-an-array',
@@ -414,6 +421,7 @@ class NewsLinkInlineTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News with empty link',
                 'related_links' => [
                     []  // Empty array

@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
+use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Core\Environment;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -53,6 +55,273 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         $this->assertStringContainsString('[Required]', $this->fieldLine($schema, 'title'));
     }
 
+    public function testCreateWithAllRequiredFieldsSucceeds(): void
+    {
+        $uid = $this->createValidElement();
+
+        $record = BackendUtility::getRecordWSOL('tt_content', $uid);
+        $this->assertSame('Required header', $record['header']);
+        $this->assertSame(1, $this->countAssetReferences($uid));
+    }
+
+    public function testCreateWithoutRequiredFieldsIsRefused(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::TYPE,
+                'header' => 'Only a header',
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'A text & media element without text and media must not be saved');
+        $message = $result->content[0]->text;
+        $this->assertStringContainsString(self::TYPE, $message);
+        $this->assertStringContainsString('bodytext', $message);
+        $this->assertStringContainsString('assets', $message);
+        $this->assertStringContainsString('at least 1', $message);
+        $this->assertStringNotContainsString('header', $message, 'The given header is not reported');
+        $this->assertSame(0, $this->countElementsOfType(), 'Nothing is written');
+    }
+
+    public function testCreateWithEmptyRichtextIsRefused(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::TYPE,
+                'header' => 'Header',
+                'bodytext' => '<p>&nbsp;</p>',
+                'assets' => [['uid_local' => 1]],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('bodytext', $result->content[0]->text);
+    }
+
+    public function testCreateWithEmptyFileListIsRefused(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::TYPE,
+                'header' => 'Header',
+                'bodytext' => '<p>Text</p>',
+                'assets' => [],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('assets', $result->content[0]->text);
+    }
+
+    public function testRequiredFieldsOfOtherTypesDoNotApply(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => 'textmedia',
+                'header' => 'Plain text & media without media',
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testDefaultValueFromPageTsconfigCountsAsFilled(): void
+    {
+        $this->getConnectionForTable('pages')->update(
+            'pages',
+            ['TSconfig' => "TCAdefaults.tt_content.header = Default header\n"],
+            ['uid' => 1]
+        );
+
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::TYPE,
+                'bodytext' => '<p>Text</p>',
+                'assets' => [['uid_local' => 1]],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = json_decode($result->content[0]->text, true)['uid'];
+        $this->assertSame('Default header', BackendUtility::getRecordWSOL('tt_content', $uid)['header']);
+    }
+
+    public function testUpdateEmptyingRequiredTextIsRefused(): void
+    {
+        $uid = $this->createValidElement();
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['bodytext' => ''],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('bodytext', $result->content[0]->text);
+        $this->assertSame('<p>Text</p>', BackendUtility::getRecordWSOL('tt_content', $uid)['bodytext']);
+    }
+
+    public function testUpdateRemovingAllFilesIsRefused(): void
+    {
+        $uid = $this->createValidElement();
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['assets' => []],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('assets', $result->content[0]->text);
+        $this->assertSame(1, $this->countAssetReferences($uid));
+    }
+
+    public function testUpdateOfOtherFieldsIsNotBlockedByUntouchedRequiredFields(): void
+    {
+        $uid = $this->createValidElement();
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['header' => 'Changed header'],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testChangingTheTypeChecksTheRequiredFieldsOfTheNewType(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => 'text',
+                'header' => 'Text element',
+                'bodytext' => 'Some text',
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['CType' => self::TYPE],
+        ]);
+        $this->assertTrue($result->isError, 'The new type needs media the record does not have');
+        $this->assertStringContainsString('assets', $result->content[0]->text);
+        $this->assertStringNotContainsString('bodytext', $result->content[0]->text, 'The stored text counts');
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['CType' => self::TYPE, 'assets' => [['uid_local' => 1]]],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testRequiredBaseColumnIsChecked(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'pages',
+            'data' => ['pid' => 1, 'doktype' => 1, 'nav_title' => 'No title'],
+        ]);
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('title (', $result->content[0]->text);
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 2,
+            'data' => ['title' => '  '],
+        ]);
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('title (', $result->content[0]->text);
+    }
+
+    public function testTranslateIsNotBlockedByFieldsTheTranslationInherits(): void
+    {
+        $uid = $this->createValidElement();
+
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => [
+                'sys_language_uid' => 'de',
+                'header' => 'Pflichtüberschrift',
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $translationUid = json_decode($result->content[0]->text, true)['translationUid'];
+        $this->assertSame('Pflichtüberschrift', BackendUtility::getRecordWSOL('tt_content', $translationUid)['header']);
+    }
+
+    public function testTranslateEmptyingRequiredFieldIsRefused(): void
+    {
+        $uid = $this->createValidElement();
+
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => [
+                'sys_language_uid' => 'de',
+                'header' => 'Pflichtüberschrift',
+                'bodytext' => '',
+            ],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('bodytext', $result->content[0]->text);
+    }
+
+    private function createValidElement(): int
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::TYPE,
+                'header' => 'Required header',
+                'bodytext' => '<p>Text</p>',
+                'assets' => [['uid_local' => 1]],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        return (int)json_decode($result->content[0]->text, true)['uid'];
+    }
+
+    private function write(array $params): \Mcp\Types\CallToolResult
+    {
+        return GeneralUtility::makeInstance(WriteTableTool::class)->execute($params);
+    }
+
     private function getSchema(string $table, string $type): string
     {
         $result = GeneralUtility::makeInstance(GetTableSchemaTool::class)->execute([
@@ -74,6 +343,22 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         );
 
         return $matches[0];
+    }
+
+    private function countAssetReferences(int $contentUid): int
+    {
+        return (int)$this->getConnectionForTable('sys_file_reference')->count('uid', 'sys_file_reference', [
+            'uid_foreign' => $contentUid,
+            'tablenames' => 'tt_content',
+            'fieldname' => 'assets',
+            'deleted' => 0,
+        ]);
+    }
+
+    private function countElementsOfType(): int
+    {
+        return (int)$this->getConnectionForTable('tt_content')
+            ->count('uid', 'tt_content', ['CType' => self::TYPE]);
     }
 
     private function writeSiteConfiguration(): void

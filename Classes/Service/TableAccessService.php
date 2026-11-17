@@ -1475,16 +1475,6 @@ class TableAccessService implements SingletonInterface
             }
         }
 
-        // Validate required fields
-        if (!empty($config['required']) || !empty($config['eval'])) {
-            $evalRules = GeneralUtility::trimExplode(',', $config['eval'] ?? '', true);
-            if (!empty($config['required']) || in_array('required', $evalRules)) {
-                if ($value === null || $value === '' || (is_array($value) && empty($value))) {
-                    return "Field '{$fieldName}' is required";
-                }
-            }
-        }
-
         return null;
     }
     

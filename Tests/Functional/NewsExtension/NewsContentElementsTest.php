@@ -57,6 +57,7 @@ class NewsContentElementsTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News with content elements',
                 'bodytext' => 'Main news text',
             ],
@@ -138,6 +139,7 @@ class NewsContentElementsTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
+                'datetime' => 1704103200,
                 'title' => 'News without content elements',
             ],
         ]);

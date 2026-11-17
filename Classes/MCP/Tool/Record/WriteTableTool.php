@@ -12,6 +12,7 @@ use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\RecordUrlService;
+use Hn\McpServer\Service\TableAccessService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -19,6 +20,7 @@ use TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\RelationHandler;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 
@@ -102,6 +104,7 @@ class WriteTableTool extends AbstractRecordTool
                             'children present in the previous record but missing from the new array are deleted. ' .
                             'To keep an existing child include it as {"uid": <existing>, ...}; only the fields you set are patched. ' .
                             'Array order drives display order. ' .
+                            'Fields that GetTableSchema marks [Required] for the record type must be filled on "create" and cannot be emptied on "update"; [minitems: N] means the relation needs at least N items. ' .
                             'For text fields in update actions, instead of providing the full text, you can provide an array of search-and-replace operations: ' .
                             '[{"search": "old text", "replace": "new text"}]. Each operation can optionally include "replaceAll": true. ' .
                             'Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true.',
@@ -1487,8 +1490,191 @@ class WriteTableTool extends AbstractRecordTool
                 }
             }
         }
-        
+
+        $requiredError = $this->validateRequiredFields(
+            $table,
+            $data,
+            $action,
+            $availableFields,
+            $recordType,
+            $currentRecord,
+            $uid,
+            $effectivePid,
+            $tsConfigPid
+        );
+        if ($requiredError !== null) {
+            return $requiredError;
+        }
+
         return true;
+    }
+
+    protected function validateRequiredFields(
+        string $table,
+        array $data,
+        string $action,
+        array $availableFields,
+        string $recordType,
+        ?array $currentRecord,
+        ?int $uid,
+        int $pid,
+        int $tsConfigPid
+    ): ?string {
+        $typeField = $this->tableAccessService->getTypeFieldName($table);
+        $languageField = $this->tableAccessService->getLanguageFieldName($table);
+
+        if ($typeField && !str_contains($typeField, ':')) {
+            $schemaType = (string)BackendUtility::getTCAtypeValue($table, [$typeField => $recordType]);
+            if ($schemaType !== $recordType) {
+                $recordType = $schemaType;
+                $availableFields = $this->tableAccessService->getAvailableFields($table, $recordType, $tsConfigPid ?: null);
+            }
+        }
+        $typeChanged = $action === 'update'
+            && $currentRecord !== null
+            && $typeField
+            && array_key_exists($typeField, $data)
+            && (string)$data[$typeField] !== (string)($currentRecord[$typeField] ?? '');
+
+        $violations = [];
+        foreach ($availableFields as $fieldName => $fieldConfig) {
+            if ($fieldName === $typeField || $fieldName === $languageField || !empty($fieldConfig['mcp']['computed'])) {
+                continue;
+            }
+            $config = is_array($fieldConfig['config'] ?? null) ? $fieldConfig['config'] : $fieldConfig;
+            $requiredItems = $this->getRequiredItemCount($config);
+            if ($requiredItems === 0
+                || !empty($fieldConfig['displayCond'])
+                || !empty($config['readOnly'])
+                || in_array($config['type'] ?? '', ['slug', 'uuid', 'passthrough', 'none', 'user', 'flex'], true)
+            ) {
+                continue;
+            }
+
+            if (array_key_exists($fieldName, $data)) {
+                $itemCount = $this->countFieldItems($config, $data[$fieldName]);
+            } elseif ($action === 'create') {
+                $default = $this->getDefaultValueForNewRecord($table, $fieldName, $config, $recordType, $pid);
+                $itemCount = $this->countFieldItems($config, $default);
+            } elseif ($typeChanged && $uid !== null) {
+                $itemCount = $this->countStoredFieldItems($table, $fieldName, $config, $currentRecord, $uid);
+            } else {
+                continue;
+            }
+
+            if ($itemCount >= $requiredItems) {
+                continue;
+            }
+
+            $label = isset($fieldConfig['label']) ? TableAccessService::translateLabel((string)$fieldConfig['label']) : '';
+            $description = $fieldName . ($label !== '' && $label !== $fieldName ? ' (' . $label . ')' : '');
+            if ($this->isRelationField($config)) {
+                $description .= sprintf(
+                    ': needs at least %d item%s, got %d',
+                    $requiredItems,
+                    $requiredItems === 1 ? '' : 's',
+                    $itemCount
+                );
+            }
+            $violations[] = $description;
+        }
+
+        if ($violations === []) {
+            return null;
+        }
+
+        return sprintf(
+            'Required fields are missing or empty for %s: %s. '
+            . 'Provide them with real content (ask the user if it is not known)%s. '
+            . 'GetTableSchema marks these fields as [Required].',
+            $recordType !== '' ? "record type '{$recordType}' of table '{$table}'" : "table '{$table}'",
+            implode('; ', $violations),
+            $typeField ? ' or choose another record type' : ''
+        );
+    }
+
+    protected function getRequiredItemCount(array $config): int
+    {
+        $required = !empty($config['required'])
+            || in_array('required', GeneralUtility::trimExplode(',', (string)($config['eval'] ?? ''), true), true);
+
+        return max($required ? 1 : 0, (int)($config['minitems'] ?? 0));
+    }
+
+    protected function isRelationField(array $config): bool
+    {
+        return in_array($config['type'] ?? '', ['inline', 'file', 'group', 'select', 'category', 'folder'], true);
+    }
+
+    protected function countFieldItems(array $config, mixed $value): int
+    {
+        if ($value === null || $value === false || $value === [] || $value === '') {
+            return 0;
+        }
+
+        if ($this->isRelationField($config)) {
+            $items = is_array($value) ? $value : GeneralUtility::trimExplode(',', (string)$value, true);
+            $zeroIsEmpty = ($config['type'] ?? '') !== 'select' || !empty($config['foreign_table']);
+            return count(array_filter(
+                $items,
+                static fn($item) => $item !== null && $item !== '' && $item !== [] && !($zeroIsEmpty && ($item === 0 || $item === '0'))
+            ));
+        }
+
+        if (is_string($value)) {
+            $text = $value;
+            if (!empty($config['enableRichtext'])) {
+                $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            }
+            $text = trim(str_replace("\u{00A0}", ' ', $text));
+            return $text !== '' ? 1 : 0;
+        }
+
+        return empty($value) ? 0 : 1;
+    }
+
+    protected function countStoredFieldItems(string $table, string $fieldName, array $config, array $currentRecord, int $uid): int
+    {
+        $type = $config['type'] ?? '';
+        $storedValue = $currentRecord[$fieldName] ?? null;
+
+        $usesRelationHandler = in_array($type, ['inline', 'file'], true)
+            || (in_array($type, ['group', 'select', 'category'], true) && !empty($config['MM']));
+        if (!$usesRelationHandler) {
+            return $this->countFieldItems($config, $storedValue);
+        }
+
+        $relationHandler = GeneralUtility::makeInstance(RelationHandler::class);
+        $relationHandler->setWorkspaceId((int)($GLOBALS['BE_USER']->workspace ?? 0));
+        $relationHandler->start(
+            (string)$storedValue,
+            $type === 'group' ? ($config['allowed'] ?? '') : ($config['foreign_table'] ?? ''),
+            $config['MM'] ?? '',
+            $uid,
+            $table,
+            $config
+        );
+        $relationHandler->processDeletePlaceholder();
+
+        return count($relationHandler->itemArray);
+    }
+
+    protected function getDefaultValueForNewRecord(string $table, string $fieldName, array $config, string $recordType, int $pid): mixed
+    {
+        $tsConfigSources = [
+            BackendUtility::getPagesTSconfig($this->tableAccessService->resolveTSconfigPid($pid))['TCAdefaults.'][$table . '.'] ?? [],
+            $GLOBALS['BE_USER']->getTSConfig()['TCAdefaults.'][$table . '.'] ?? [],
+        ];
+        foreach ($tsConfigSources as $defaults) {
+            if ($recordType !== '' && isset($defaults[$fieldName . '.']['types.'][$recordType])) {
+                return $defaults[$fieldName . '.']['types.'][$recordType];
+            }
+            if (isset($defaults[$fieldName]) && !is_array($defaults[$fieldName])) {
+                return $defaults[$fieldName];
+            }
+        }
+
+        return $config['default'] ?? null;
     }
     
     

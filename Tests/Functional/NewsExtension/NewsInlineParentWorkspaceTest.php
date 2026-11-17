@@ -232,7 +232,7 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
         $this->write([
             'table' => 'tx_news_domain_model_news',
             'action' => 'create',
-            'data' => ['pid' => 1, 'title' => 'New news', 'content_elements' => [self::CONTENT_UID]],
+            'data' => ['pid' => 1, 'title' => 'New news', 'datetime' => 1704103200, 'content_elements' => [self::CONTENT_UID]],
         ]);
 
         $this->assertWorkspaceVersionExists('tx_news_domain_model_news', self::NEWS_UID);
@@ -393,7 +393,7 @@ class NewsInlineParentWorkspaceTest extends FunctionalTestCase
         $newsUid = $this->write([
             'table' => 'tx_news_domain_model_news',
             'action' => 'create',
-            'data' => ['pid' => 1, 'title' => 'New news'],
+            'data' => ['pid' => 1, 'title' => 'New news', 'datetime' => 1704103200],
         ])['uid'];
 
         $this->write([
