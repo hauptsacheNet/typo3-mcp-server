@@ -75,6 +75,7 @@ class GetTableSchemaNewsTest extends FunctionalTestCase
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $content = $result->content[0]->text;
 
+        $this->assertMatchesRegularExpression('/datetime \(.*\[Required\]/', $content);
         $this->assertDoesNotMatchRegularExpression('/^\s*(?:-|├─|└─) internalurl /mu', $content);
         $this->assertDoesNotMatchRegularExpression('/^\s*(?:-|├─|└─) externalurl /mu', $content);
     }
