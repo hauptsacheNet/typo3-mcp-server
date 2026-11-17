@@ -10,6 +10,7 @@ use Hn\McpServer\MCP\Tool\SearchTool;
 use Hn\McpServer\MCP\Tool\ToolInterface;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Tests\Functional\Traits\RestrictedEditorTrait;
+use PHPUnit\Framework\Attributes\DataProvider;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 /**
@@ -179,6 +180,49 @@ class RestrictedEditorReadIsolationTest extends FunctionalTestCase
         $this->assertStringContainsString('Restricted Page', $text);
         $this->assertStringNotContainsString('Other Page', $text);
         $this->assertStringNotContainsString('Hidden Page', $text);
+    }
+
+    #[DataProvider('searchStringProvider')]
+    public function testSearchReplaceOutsideMountRevealsNothing(string $search): void
+    {
+        $result = (new WriteTableTool())->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => self::UNMOUNTED_HTML_ELEMENT_UID,
+            'data' => ['bodytext' => [['search' => $search, 'replace' => 'x']]],
+        ]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString(
+            'Record ' . self::UNMOUNTED_HTML_ELEMENT_UID . ' not found',
+            $result->content[0]->text
+        );
+        $this->assertSame('<p>Not mounted</p>', $this->fetchRawRecord('tt_content', self::UNMOUNTED_HTML_ELEMENT_UID)['bodytext']);
+    }
+
+    public static function searchStringProvider(): array
+    {
+        return [
+            'present once' => ['Not mounted'],
+            'present twice' => ['o'],
+            'absent' => ['absent text'],
+        ];
+    }
+
+    public function testSearchReplaceInsideMountWorks(): void
+    {
+        $result = (new WriteTableTool())->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => self::HTML_ELEMENT_UID,
+            'data' => ['bodytext' => [['search' => 'Original', 'replace' => 'Changed']]],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertSame(
+            '<p>Changed markup</p>',
+            $this->fetchWorkspaceVersion('tt_content', self::HTML_ELEMENT_UID, self::EDITORIAL_WORKSPACE_UID)['bodytext'] ?? null
+        );
     }
 
     public function testGetPageListsOnlySubpagesWithShowPermission(): void

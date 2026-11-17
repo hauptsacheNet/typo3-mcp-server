@@ -11,6 +11,7 @@ use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
+use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\RecordUrlService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -2364,7 +2365,7 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
-        if (!is_array($record)) {
+        if (!is_array($record) || !GeneralUtility::makeInstance(PageAccessService::class)->isRecordReadable($table, $record)) {
             throw new ValidationException(["Record {$uid} not found in table '{$table}'"]);
         }
 

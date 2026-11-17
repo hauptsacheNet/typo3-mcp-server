@@ -103,6 +103,25 @@ class PageAccessService implements SingletonInterface
     }
 
     /**
+     * Whether the user may see a record fetched without buildRecordRestriction().
+     */
+    public function isRecordReadable(string $table, array $record): bool
+    {
+        if (!$this->isRestricted() || !isset($GLOBALS['TCA'][$table])) {
+            return true;
+        }
+        if ($table === 'pages') {
+            return $this->isPageReadable((int)($record['uid'] ?? 0));
+        }
+        $rootLevel = (int)($GLOBALS['TCA'][$table]['ctrl']['rootLevel'] ?? 0);
+        $pid = (int)($record['pid'] ?? 0);
+        if ($rootLevel === 1 || ($rootLevel === -1 && $pid === 0)) {
+            return true;
+        }
+        return $this->isPageReadable($pid);
+    }
+
+    /**
      * WHERE expression limiting a query on $table to records the user may see,
      * or null when no restriction applies (admin, or a table whose records all
      * live on the root level and are governed by table permissions only).
