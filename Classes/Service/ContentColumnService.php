@@ -65,6 +65,18 @@ class ContentColumnService
     }
 
     /**
+     * @param list<array{colPos: int, name: string, allowed: list<string>, disallowed: list<string>}> $columns
+     * @return list<array{colPos: int, name: string, allowed: list<string>, disallowed: list<string>}>
+     */
+    public function filterColumnsAcceptingType(array $columns, string $cType): array
+    {
+        return array_values(array_filter(
+            $columns,
+            fn(array $column): bool => $this->acceptsType($column, $cType)
+        ));
+    }
+
+    /**
      * @param array{colPos: int, name: string} $column
      */
     public function formatColumnName(array $column): string

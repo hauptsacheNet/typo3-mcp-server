@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\GetPageTool;
+use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
@@ -18,6 +19,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  * show those limits and respect them like the page module does:
  *
  * - GetPage lists every column of the page's layout with the types it accepts
+ * - GetTableSchema names the columns of a page that accept a type
  *
  * Page 7 ("News") uses the page TSconfig layout below: image is only accepted in
  * the banner column 3, the main column 0 refuses it, the sidebar column 1 only
@@ -118,12 +120,36 @@ TSCONFIG;
         $this->assertStringContainsString('colPos 0 "Main Content Only": all types', $result->content[0]->text);
     }
 
+    public function testSchemaNamesTheColumnsThatAcceptTheType(): void
+    {
+        $text = $this->schemaText(['table' => 'tt_content', 'type' => 'text', 'pid' => self::PAGE]);
+
+        $this->assertStringContainsString(
+            'Columns of page 7 that accept this type: colPos 0 "Main", colPos 1 "Sidebar" (not accepted in colPos 3 "Banner")',
+            $text
+        );
+    }
+
+    public function testSchemaWithoutPidNamesNoColumns(): void
+    {
+        $text = $this->schemaText(['table' => 'tt_content', 'type' => 'text']);
+
+        $this->assertStringNotContainsString('that accept this type', $text);
+    }
+
     private function getPageTool(): GetPageTool
     {
         return new GetPageTool(
             GeneralUtility::makeInstance(SiteInformationService::class),
             GeneralUtility::makeInstance(McpLanguageService::class)
         );
+    }
+
+    private function schemaText(array $params): string
+    {
+        $result = GeneralUtility::makeInstance(GetTableSchemaTool::class)->execute($params);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        return $result->content[0]->text;
     }
 
     private function writeSiteConfigurationForRootPage(int $rootPageId): void

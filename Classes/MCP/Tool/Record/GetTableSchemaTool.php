@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\MCP\Tool\Record;
 
+use Hn\McpServer\Service\ContentColumnService;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
@@ -38,7 +39,8 @@ class GetTableSchemaTool extends AbstractRecordTool
                         'type' => 'string',
                         'description' => 'Specific record type to show fields for (e.g., "textmedia" for tt_content). Each type has different fields. ' .
                             'If omitted, shows fields for the first available type and lists all available types. ' .
-                            'Call again with a different type to see its fields. Types may be filtered by backend TSconfig (some types hidden from the list).',
+                            'Call again with a different type to see its fields. Types may be filtered by backend TSconfig (some types hidden from the list). ' .
+                            'For tt_content with a pid, the result also names the columns (colPos) of that page that accept the type.',
                     ],
                     'pid' => [
                         'type' => 'integer',
@@ -178,7 +180,11 @@ class GetTableSchemaTool extends AbstractRecordTool
         // Add current record type section
         $result .= "CURRENT RECORD TYPE:\n";
         $result .= "-------------------\n";
-        $result .= "Type: " . $filterType . " (" . $typeLabel . ")\n\n";
+        $result .= "Type: " . $filterType . " (" . $typeLabel . ")\n";
+        if ($table === 'tt_content' && $pid !== null) {
+            $result .= $this->formatContentColumnsForType($pid, $filterType);
+        }
+        $result .= "\n";
         
         // Add fields section
         $result .= "FIELDS:\n";
@@ -458,4 +464,32 @@ class GetTableSchemaTool extends AbstractRecordTool
     }
     
     
+    protected function formatContentColumnsForType(int $pid, string $cType): string
+    {
+        $contentColumnService = GeneralUtility::makeInstance(ContentColumnService::class);
+        $columns = $contentColumnService->getColumns($pid);
+        if ($columns === []) {
+            return '';
+        }
+
+        $accepting = $contentColumnService->filterColumnsAcceptingType($columns, $cType);
+        $refusing = array_filter(
+            $columns,
+            static fn(array $column): bool => !$contentColumnService->acceptsType($column, $cType)
+        );
+        $format = static fn(array $list): string => implode(', ', array_map(
+            static fn(array $column): string => $contentColumnService->formatColumnName($column),
+            $list
+        ));
+
+        if ($accepting === []) {
+            return "Columns of page " . $pid . " that accept this type: none, so it cannot be placed on this page\n";
+        }
+        $line = ($refusing === [] ? "All columns of page " : "Columns of page ") . $pid
+            . " that accept this type: " . $format($accepting);
+        if ($refusing !== []) {
+            $line .= " (not accepted in " . $format($refusing) . ")";
+        }
+        return $line . "\n";
+    }
 }
