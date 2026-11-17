@@ -60,7 +60,7 @@ Tests using `#[DataProvider('modelProvider')]` run once per model automatically.
 These tests make actual API calls and will incur costs:
 - Each test typically makes 2-5 API calls (due to multi-step conversations)
 - Multi-model tests multiply the cost by the number of models
-- Claude Haiku 5.5 (default) is the cheapest model in the list
+- Single-model runs without a data provider use Claude Haiku 5.5 (the default model)
 - Tests are excluded from the default test suite to avoid unexpected charges
 - Consider using environment-specific keys to track costs
 - Use `--filter` to run specific tests when iterating
