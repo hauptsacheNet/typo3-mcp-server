@@ -486,6 +486,8 @@ class InvalidDataTest extends AbstractFunctionalTest
      */
     public function testArrayInNonArrayField(): void
     {
+        $titleBefore = $this->readPageTitle(1);
+
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
@@ -495,16 +497,22 @@ class InvalidDataTest extends AbstractFunctionalTest
             ]
         ]);
         
-        // TYPO3 might convert array to string
-        if ($result->isError) {
-            $this->assertStringContainsString('Invalid', $result->content[0]->text);
-        } else {
-            // If it succeeded, check what was stored
-            $data = json_decode($result->content[0]->text, true);
-            if (isset($data['title'])) {
-                $this->assertIsString($data['title']);
-            }
-        }
+        // DataHandler would store the string "Array" (with a PHP warning),
+        // so the tool refuses the write and names the field.
+        $this->assertTrue($result->isError, 'An array must not be written into a text field');
+        $this->assertStringContainsString("Field 'title' expects a single value", $result->content[0]->text);
+
+        // Read through the workspace-aware tool: a staged "Array" would only
+        // show up in the workspace version, not in the live row.
+        $this->assertSame($titleBefore, $this->readPageTitle(1));
+    }
+
+    private function readPageTitle(int $uid): string
+    {
+        $result = $this->readTool->execute(['table' => 'pages', 'uid' => $uid]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        return (string)json_decode($result->content[0]->text, true)['records'][0]['title'];
     }
     
     /**

@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use TYPO3\CMS\Backend\Form\FormDataCompiler;
-use TYPO3\CMS\Backend\Form\FormDataGroup\TcaDatabaseRecord;
+use TYPO3\CMS\Backend\Form\FormDataGroup\OrderedProviderList;
+use TYPO3\CMS\Backend\Form\FormDataProvider\TcaInputPlaceholders;
 use TYPO3\CMS\Core\Http\NormalizedParams;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Site\SiteFinder;
@@ -101,7 +102,17 @@ class SelectItemResolver
 
         $request = $this->createMinimalServerRequest($pid);
 
-        $formDataGroup = GeneralUtility::makeInstance(TcaDatabaseRecord::class);
+        // The regular record pipeline, minus TcaInputPlaceholders: placeholder
+        // values are irrelevant for select items, and resolving them on a blank
+        // "new" record can fail. sys_file_metadata.title has the placeholder
+        // __row|file|name; the core drops the empty "file" relation from the
+        // processed TCA and then casts its array value to a string ("Array to
+        // string conversion"). TcaColumnsProcessPlaceholders stays active, so the
+        // columns the active type's placeholders reference are still processed.
+        $providers = $GLOBALS['TYPO3_CONF_VARS']['SYS']['formEngine']['formDataGroup']['tcaDatabaseRecord'];
+        $providers[TcaInputPlaceholders::class]['disabled'] = true;
+        $formDataGroup = GeneralUtility::makeInstance(OrderedProviderList::class);
+        $formDataGroup->setProviderList($providers);
         $formDataCompiler = GeneralUtility::makeInstance(FormDataCompiler::class);
 
         $input = [

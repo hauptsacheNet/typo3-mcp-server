@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
+use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\ListTablesTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
@@ -68,6 +69,27 @@ class SysFileMetadataStandaloneTest extends FunctionalTestCase
         $configPath = $this->instancePath . '/typo3conf/sites/test-site';
         GeneralUtility::mkdir_deep($configPath);
         GeneralUtility::writeFile($configPath . '/config.yaml', Yaml::dump($siteConfiguration, 99, 2), true);
+    }
+
+    public function testSchemaOfSysFileMetadataTriggersNoPhpWarning(): void
+    {
+        // The title placeholder __row|file|name used to make the core cast an
+        // array to string while the select items were resolved for the schema.
+        $warnings = [];
+        set_error_handler(static function (int $errno, string $errstr, string $file, int $line) use (&$warnings): bool {
+            $warnings[] = $errstr . ' in ' . $file . ':' . $line;
+            return true;
+        }, E_WARNING);
+        try {
+            $result = GeneralUtility::makeInstance(GetTableSchemaTool::class)->execute(['table' => 'sys_file_metadata']);
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertSame([], $warnings, 'GetTableSchema must not trigger PHP warnings');
+        // The placeholder is only switched off while items are resolved.
+        $this->assertSame('__row|file|name', $GLOBALS['TCA']['sys_file_metadata']['columns']['title']['config']['placeholder'] ?? null);
     }
 
     public function testListTablesShowsSysFileMetadataAsCoreFile(): void

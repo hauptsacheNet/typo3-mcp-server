@@ -1445,6 +1445,12 @@ class TableAccessService implements SingletonInterface
         $config = $fieldConfig['config'] ?? [];
         $fieldType = $config['type'] ?? '';
 
+        // Fields that store a single scalar: an array would end up as the string
+        // "Array" in DataHandler (with a PHP warning), so name the problem instead.
+        if (is_array($value) && in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color', 'number', 'datetime', 'password', 'uuid', 'country', 'radio'], true)) {
+            return "Field '{$fieldName}' expects a single value, not a list";
+        }
+
         // Check max length for string fields
         if (in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color']) && is_string($value)) {
             $maxLength = $config['max'] ?? 0;
@@ -1455,17 +1461,25 @@ class TableAccessService implements SingletonInterface
 
         // Validate select fields (all sources: static, foreign_table, itemsProcFunc, TSconfig)
         if ($fieldType === 'select') {
+            // Handle multiple values: arrays (multi-select), comma-separated strings, or single values
+            if (is_array($value)) {
+                $values = $value;
+            } elseif (is_string($value)) {
+                $values = GeneralUtility::trimExplode(',', $value, true);
+            } else {
+                $values = [$value];
+            }
+
+            // The shape is checked even when no items resolve: a nested value such
+            // as [{"uid": 3}] instead of [3] would otherwise be cast to "Array".
+            foreach ($values as $val) {
+                if (!is_scalar($val) && $val !== null) {
+                    return "Field '{$fieldName}' expects a list of plain values (e.g. [1, 2]), but got a nested value: " . json_encode($val);
+                }
+            }
+
             $allowedValues = $this->getSelectFieldAllowedValues($table, $fieldName, $record);
             if ($allowedValues !== null) {
-                // Handle multiple values: arrays (multi-select), comma-separated strings, or single values
-                if (is_array($value)) {
-                    $values = $value;
-                } elseif (is_string($value)) {
-                    $values = GeneralUtility::trimExplode(',', $value, true);
-                } else {
-                    $values = [$value];
-                }
-
                 foreach ($values as $val) {
                     if (!in_array((string)$val, $allowedValues, true)) {
                         $allowedList = implode(', ', array_map(function($v) { return "'{$v}'"; }, $allowedValues));
