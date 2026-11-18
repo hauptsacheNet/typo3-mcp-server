@@ -121,7 +121,7 @@ class SelectItemResolver
         // form does not silently drop an out-of-range stored value. For *validation*
         // that is exactly wrong: it would make every submitted value resolve as
         // "allowed". We want the canonical item set, so suppress that affordance.
-        $restoreTca = $this->disableNoMatchingValueElement($table);
+        $restoreTca = $this->prepareTcaForItemResolution($table);
         try {
             $result = $formDataCompiler->compile($input, $formDataGroup);
         } finally {
@@ -133,36 +133,42 @@ class SelectItemResolver
     }
 
     /**
-     * Temporarily set disableNoMatchingValueElement on every select column of the
-     * table so the compiler does not add the seeded value back as an invalid
-     * pseudo-item. Returns a restore closure to revert the TCA afterwards.
+     * Temporarily adjust the TCA of the table for item resolution and return a
+     * closure that restores it:
+     *
+     * - disableNoMatchingValueElement on every select column, so the compiler
+     *   does not add the seeded value back as an invalid pseudo-item.
+     * - no placeholders: they are irrelevant for items, and resolving them on a
+     *   blank "new" record can fail. sys_file_metadata.title has the placeholder
+     *   __row|file|name, but the core drops the "file" column from the processed
+     *   TCA of a new record and then casts its array value to a string
+     *   ("Array to string conversion" in TcaInputPlaceholders).
      *
      * @return callable(): void
      */
-    private function disableNoMatchingValueElement(string $table): callable
+    private function prepareTcaForItemResolution(string $table): callable
     {
-        $columns = &$GLOBALS['TCA'][$table]['columns'];
-        if (!is_array($columns)) {
+        if (!is_array($GLOBALS['TCA'][$table] ?? null)) {
             return static function (): void {};
         }
 
-        $originals = [];
-        foreach ($columns as $fieldName => $fieldConfig) {
-            if (($fieldConfig['config']['type'] ?? '') !== 'select') {
-                continue;
+        // Only the TCA of this table is touched; a full copy restores it exactly.
+        $original = $GLOBALS['TCA'][$table];
+
+        foreach ($GLOBALS['TCA'][$table]['columns'] ?? [] as $fieldName => $fieldConfig) {
+            if (($fieldConfig['config']['type'] ?? '') === 'select') {
+                $GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['disableNoMatchingValueElement'] = true;
             }
-            $originals[$fieldName] = $columns[$fieldName]['config']['disableNoMatchingValueElement'] ?? null;
-            $columns[$fieldName]['config']['disableNoMatchingValueElement'] = true;
+            unset($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['placeholder']);
+        }
+        foreach ($GLOBALS['TCA'][$table]['types'] ?? [] as $typeName => $typeConfig) {
+            foreach ($typeConfig['columnsOverrides'] ?? [] as $fieldName => $override) {
+                unset($GLOBALS['TCA'][$table]['types'][$typeName]['columnsOverrides'][$fieldName]['config']['placeholder']);
+            }
         }
 
-        return static function () use ($table, $originals): void {
-            foreach ($originals as $fieldName => $original) {
-                if ($original === null) {
-                    unset($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['disableNoMatchingValueElement']);
-                } else {
-                    $GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['disableNoMatchingValueElement'] = $original;
-                }
-            }
+        return static function () use ($table, $original): void {
+            $GLOBALS['TCA'][$table] = $original;
         };
     }
 

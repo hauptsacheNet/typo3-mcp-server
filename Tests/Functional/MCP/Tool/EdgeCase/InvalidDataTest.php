@@ -495,16 +495,13 @@ class InvalidDataTest extends AbstractFunctionalTest
             ]
         ]);
         
-        // TYPO3 might convert array to string
-        if ($result->isError) {
-            $this->assertStringContainsString('Invalid', $result->content[0]->text);
-        } else {
-            // If it succeeded, check what was stored
-            $data = json_decode($result->content[0]->text, true);
-            if (isset($data['title'])) {
-                $this->assertIsString($data['title']);
-            }
-        }
+        // DataHandler would store the string "Array" (with a PHP warning),
+        // so the tool refuses the write and names the field.
+        $this->assertTrue($result->isError, 'An array must not be written into a text field');
+        $this->assertStringContainsString("Field 'title' expects a single value", $result->content[0]->text);
+
+        $record = BackendUtility::getRecord('pages', 1);
+        $this->assertNotSame('Array', $record['title']);
     }
     
     /**

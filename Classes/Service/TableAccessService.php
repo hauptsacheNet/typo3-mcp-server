@@ -1445,6 +1445,12 @@ class TableAccessService implements SingletonInterface
         $config = $fieldConfig['config'] ?? [];
         $fieldType = $config['type'] ?? '';
 
+        // Fields that store a single scalar: an array would end up as the string
+        // "Array" in DataHandler (with a PHP warning), so name the problem instead.
+        if (is_array($value) && in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color', 'number', 'datetime', 'password', 'uuid'], true)) {
+            return "Field '{$fieldName}' expects a single value, not a list";
+        }
+
         // Check max length for string fields
         if (in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color']) && is_string($value)) {
             $maxLength = $config['max'] ?? 0;
@@ -1467,6 +1473,11 @@ class TableAccessService implements SingletonInterface
                 }
 
                 foreach ($values as $val) {
+                    if (!is_scalar($val) && $val !== null) {
+                        // e.g. [{"uid": 3}] instead of [3]: name the expected shape
+                        // instead of casting the nested value to "Array".
+                        return "Field '{$fieldName}' expects a list of plain values (e.g. [1, 2]), but got a nested value: " . json_encode($val);
+                    }
                     if (!in_array((string)$val, $allowedValues, true)) {
                         $allowedList = implode(', ', array_map(function($v) { return "'{$v}'"; }, $allowedValues));
                         return "Field '{$fieldName}' value '{$val}' must be one of: {$allowedList}";
