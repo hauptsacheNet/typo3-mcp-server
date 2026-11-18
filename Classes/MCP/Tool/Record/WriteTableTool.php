@@ -19,6 +19,7 @@ use TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 
@@ -433,7 +434,10 @@ class WriteTableTool extends AbstractRecordTool
                         ->select('uid')
                         ->from($table)
                         ->where(
-                            $qb2->expr()->eq('pid', $qb2->createNamedParameter($refPid, ParameterType::INTEGER)),
+                            $qb2->expr()->and(
+                                $qb2->expr()->eq('pid', $qb2->createNamedParameter($refPid, ParameterType::INTEGER)),
+                                ...$this->getPredecessorConstraints($qb2, $table, $refRecord)
+                            ),
                             $qb2->expr()->or(
                                 $qb2->expr()->lt($sortingField, $qb2->createNamedParameter($refSorting, ParameterType::INTEGER)),
                                 $qb2->expr()->and(
@@ -902,6 +906,60 @@ class WriteTableTool extends AbstractRecordTool
     }
 
     /**
+     * Additional constraints for the predecessor lookup of "before:UID":
+     *
+     * - Only "siblings" of the reference record: same language, same column (colPos)
+     *   and, with EXT:container, the same container. Otherwise the container itself or
+     *   a record of another column may be picked, and the record is moved out of its
+     *   container (the core then rejects it with "disallowed value(s)").
+     * - In a workspace, skip live records that have a version in the current workspace.
+     *   WorkspaceRestriction returns both, and the outdated sorting of the live record
+     *   would otherwise be used, e.g. after the record was already moved in the workspace.
+     *
+     * @return list<string>
+     */
+    protected function getPredecessorConstraints(QueryBuilder $queryBuilder, string $table, array $refRecord): array
+    {
+        $fields = [];
+        $languageField = $GLOBALS['TCA'][$table]['ctrl']['languageField'] ?? null;
+        if (is_string($languageField) && $languageField !== '') {
+            $fields[] = $languageField;
+        }
+        foreach (['colPos', 'tx_container_parent'] as $field) {
+            if (isset($GLOBALS['TCA'][$table]['columns'][$field])) {
+                $fields[] = $field;
+            }
+        }
+
+        $constraints = [];
+        foreach ($fields as $field) {
+            if (!array_key_exists($field, $refRecord)) {
+                continue;
+            }
+            $constraints[] = $queryBuilder->expr()->eq(
+                $field,
+                $queryBuilder->createNamedParameter((int)$refRecord[$field], ParameterType::INTEGER)
+            );
+        }
+
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        if ($workspaceId > 0 && !empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS'])) {
+            $versionQuery = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
+            $versionQuery->getRestrictions()->removeAll();
+            $versionQuery
+                ->select('t3ver_oid')
+                ->from($table)
+                ->where(
+                    $versionQuery->expr()->eq('t3ver_wsid', $queryBuilder->createNamedParameter($workspaceId, ParameterType::INTEGER)),
+                    $versionQuery->expr()->gt('t3ver_oid', $queryBuilder->createNamedParameter(0, ParameterType::INTEGER))
+                );
+            $constraints[] = $queryBuilder->expr()->notIn('uid', $versionQuery->getSQL());
+        }
+
+        return $constraints;
+    }
+
+    /**
      * Convert a position string ("top", "bottom", "after:UID", "before:UID")
      * into a DataHandler move destination integer.
      *
@@ -1008,7 +1066,10 @@ class WriteTableTool extends AbstractRecordTool
                 ->select('uid')
                 ->from($table)
                 ->where(
-                    $qb->expr()->eq('pid', $qb->createNamedParameter($refPid, ParameterType::INTEGER)),
+                    $qb->expr()->and(
+                        $qb->expr()->eq('pid', $qb->createNamedParameter($refPid, ParameterType::INTEGER)),
+                        ...$this->getPredecessorConstraints($qb, $table, $refRecord)
+                    ),
                     $qb->expr()->or(
                         $qb->expr()->lt($sortingField, $qb->createNamedParameter($refSorting, ParameterType::INTEGER)),
                         $qb->expr()->and(
