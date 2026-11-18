@@ -6,6 +6,9 @@ namespace Hn\McpServer\Service;
 
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\ParameterType;
+use Hn\McpServer\Event\AfterRecordUrlGeneratedEvent;
+use Psr\EventDispatcher\EventDispatcherInterface;
+use Psr\Http\Message\UriInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Context\Context;
@@ -20,6 +23,7 @@ use TYPO3\CMS\Core\Http\Uri;
 use TYPO3\CMS\Core\Routing\InvalidRouteArgumentsException;
 use TYPO3\CMS\Core\Routing\RouterInterface;
 use TYPO3\CMS\Core\Site\Entity\Site;
+use TYPO3\CMS\Core\Site\Entity\SiteLanguage;
 use TYPO3\CMS\Core\Site\SiteFinder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Utility\HttpUtility;
@@ -35,7 +39,11 @@ use TYPO3\CMS\Core\Versioning\VersionState;
  * routing (route enhancers, slugs) makes of previewPageId, fieldToParameterMap
  * and additionalGetParameters. Records without a viewable target page (e.g.
  * content in a sysfolder, a table without TCEMAIN.preview) get no URL instead
- * of a misleading link to the site root.
+ * of a misleading link to the site root. URLs are generated through the site
+ * router, so listeners of the core AfterPageUriGeneratedEvent (TYPO3 14, e.g.
+ * EXT:headless) rewrite them as they do for the backend view button; the own
+ * AfterRecordUrlGeneratedEvent covers setups without that event (TYPO3 13).
+ * mapPublicUrlToSiteUrl() maps such URLs back onto the site base for GetPage.
  *
  * Two URLs are resolved per record:
  * - frontend_url: the record on the live website. Missing for records that so
@@ -84,6 +92,7 @@ class RecordUrlService
         protected readonly SiteFinder $siteFinder,
         protected readonly ConnectionPool $connectionPool,
         protected readonly SiteInformationService $siteInformationService,
+        protected readonly EventDispatcherInterface $eventDispatcher,
     ) {}
 
     /**
@@ -319,13 +328,11 @@ class RecordUrlService
             $url = null;
             $site = $this->getSite($pageId);
             try {
-                $uri = $site?->getRouter($context)->generateUri(
-                    $pageId,
-                    $target['parameters'],
-                    '',
-                    RouterInterface::ABSOLUTE_URL
-                );
-                $url = $uri !== null ? $this->siteInformationService->makeAbsoluteUrl((string)$uri) : null;
+                if ($site !== null) {
+                    $parameters = $target['parameters'];
+                    $language = $site->getLanguageById((int)($parameters['_language'] ?? 0));
+                    $url = $this->generatePageUrl($site, $language, $pageId, $parameters, $context, $workspaceId > 0);
+                }
             } catch (InvalidRouteArgumentsException|\InvalidArgumentException) {
                 // Unknown language or arguments the route rejects: no link
             }
@@ -337,6 +344,132 @@ class RecordUrlService
             return $url;
         }
         return $url . '#' . $target['fragment'];
+    }
+
+    /**
+     * Generate a page URL through the site router and let listeners move it to
+     * where visitors see the site: the core AfterPageUriGeneratedEvent inside the
+     * router (TYPO3 14), then the own AfterRecordUrlGeneratedEvent.
+     *
+     * @param int|array<string, mixed> $route Page uid or page row, as the router accepts it
+     * @param array<string, mixed> $parameters Route parameters, without _language
+     */
+    protected function generatePageUrl(
+        Site $site,
+        SiteLanguage $language,
+        int|array $route,
+        array $parameters,
+        Context $context,
+        bool $preview
+    ): string {
+        $parameters['_language'] = $language;
+        $uri = $site->getRouter($context)->generateUri($route, $parameters, '', RouterInterface::ABSOLUTE_URL);
+        $url = (string)$this->siteInformationService->makeAbsoluteUrl((string)$uri);
+
+        $pageId = is_array($route) ? (int)$route['uid'] : $route;
+        return $this->eventDispatcher->dispatch(
+            new AfterRecordUrlGeneratedEvent($url, $site, $language, $pageId, $preview)
+        )->getUrl();
+    }
+
+    /**
+     * Map a URL as this service hands it out back onto the TYPO3 site base, so
+     * the site matcher can resolve it. URLs that listeners moved elsewhere (e.g.
+     * EXT:headless to the frontendBase) are otherwise unknown to TYPO3.
+     * Other URLs are returned unchanged.
+     */
+    public function mapPublicUrlToSiteUrl(string $url): string
+    {
+        try {
+            $uri = new Uri($url);
+        } catch (\InvalidArgumentException) {
+            return $url;
+        }
+        $host = strtolower($uri->getHost());
+        if ($host === '') {
+            return $url;
+        }
+        $path = rtrim($uri->getPath(), '/') . '/';
+
+        // The longest matching base wins; a URL that is already below a site base
+        // (which may share the host with a public base) stays as it is
+        $match = null;
+        $matchLength = -1;
+        foreach ($this->getPublicBases() as $base) {
+            foreach (['site' => $base['site'], 'public' => $base['public']] as $kind => $candidate) {
+                $candidatePath = rtrim($candidate->getPath(), '/') . '/';
+                if (strtolower($candidate->getHost()) === $host
+                    && ($candidate->getPort() === null || $candidate->getPort() === $uri->getPort())
+                    && str_starts_with($path, $candidatePath)
+                    && strlen($candidatePath) > $matchLength
+                ) {
+                    $match = $kind === 'public' ? $base : null;
+                    $matchLength = strlen($candidatePath);
+                }
+            }
+        }
+        if ($match === null) {
+            return $url;
+        }
+
+        $remainder = substr(rtrim($uri->getPath(), '/'), $matchLength - 1);
+        $sitePath = rtrim($match['site']->getPath(), '/') . '/' . ltrim($remainder, '/');
+        return (string)$match['site']->withPath($sitePath)->withQuery($uri->getQuery())->withFragment($uri->getFragment());
+    }
+
+    /**
+     * Hosts visitors reach the sites under where they differ from the site bases
+     * (e.g. the frontendBase of EXT:headless).
+     *
+     * @return string[]
+     */
+    public function getPublicHosts(): array
+    {
+        $hosts = array_map(
+            static fn(array $base): string => strtolower($base['public']->getHost()),
+            $this->getPublicBases()
+        );
+        return array_values(array_unique($hosts));
+    }
+
+    /**
+     * The root URL of every site language as handed out (listeners applied),
+     * paired with the language base it stands for, where the two differ. Not
+     * memoized: the result depends on the site configuration and the current
+     * request, and costs one router call per language.
+     *
+     * @return list<array{public: UriInterface, site: UriInterface}>
+     */
+    protected function getPublicBases(): array
+    {
+        $context = $this->createContext(0);
+        $bases = [];
+        foreach ($this->siteFinder->getAllSites() as $site) {
+            foreach ($site->getLanguages() as $language) {
+                // The root page as row, so the router needs no database lookup
+                $rootPage = [
+                    'uid' => $site->getRootPageId(),
+                    'sys_language_uid' => $language->getLanguageId(),
+                    'l10n_parent' => 0,
+                    'slug' => '/',
+                ];
+                try {
+                    $public = new Uri($this->generatePageUrl($site, $language, $rootPage, [], $context, false));
+                } catch (\Throwable) {
+                    continue;
+                }
+                // Not generated through the router: on TYPO3 14 its URLs are already rewritten
+                $siteUri = $language->getBase();
+                $siteUri = $siteUri->withPath(rtrim($siteUri->getPath(), '/') . '/');
+                if ($public->getHost() === '' || $siteUri->getHost() === ''
+                    || (string)$public->withScheme('') === (string)$siteUri->withScheme('')
+                ) {
+                    continue;
+                }
+                $bases[] = ['public' => $public, 'site' => $siteUri];
+            }
+        }
+        return $bases;
     }
 
     protected function getSite(int $pageId): ?Site

@@ -11,3 +11,4 @@
 - If the TYPO3 instance has no language support, then hide all aspects of translation like parameters or even database fields. Check the LanguageService.php to check support.
 - Language overlays use TYPO3's PageRepository API while workspace overlays use custom implementation for transparency (see Documentation/Architecture/LanguageOverlays.md)
 - Tool output must be valid UTF-8 (cut strings with `mb_*`): the SDK's HTTP transport encodes with `JSON_THROW_ON_ERROR` and silently drops a response it cannot encode, so the client just times out.
+- Decoupled frontends (EXT:headless, require-dev only): no headless code in Classes/; URLs are moved by router/`AfterRecordUrlGeneratedEvent` listeners and mapped back for GetPage by `RecordUrlService::mapPublicUrlToSiteUrl()` (see Documentation/Architecture/RecordUrls.md).

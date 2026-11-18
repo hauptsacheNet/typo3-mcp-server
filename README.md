@@ -109,6 +109,47 @@ Records other than pages and content elements (news, events, ...) get a frontend
 `TCEMAIN.preview.<table>` is configured in Page TSconfig — the same setting that powers the
 "View" button in the backend. See [Record URLs](Documentation/Architecture/RecordUrls.md).
 
+#### Decoupled frontends (EXT:headless)
+
+With [EXT:headless](https://github.com/TYPO3-Headless/headless), page and record URLs should
+point at the site's `frontendBase`, not at the JSON API, and `GetPage` should accept them.
+
+- **TYPO3 14 + EXT:headless 5:** works out of the box, nothing to configure.
+- **TYPO3 13 + EXT:headless 4:** add this listener to your site package:
+
+```php
+<?php
+
+namespace Vendor\SitePackage\EventListener;
+
+use FriendsOfTYPO3\Headless\Utility\HeadlessModeInterface;
+use FriendsOfTYPO3\Headless\Utility\UrlUtility;
+use Hn\McpServer\Event\AfterRecordUrlGeneratedEvent;
+use TYPO3\CMS\Core\Attribute\AsEventListener;
+use TYPO3\CMS\Core\Http\ServerRequest;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
+
+#[AsEventListener]
+final class HeadlessRecordUrlListener
+{
+    public function __invoke(AfterRecordUrlGeneratedEvent $event): void
+    {
+        $request = $GLOBALS['TYPO3_REQUEST'] ?? new ServerRequest($event->getUrl());
+        $request = GeneralUtility::makeInstance(HeadlessModeInterface::class)
+            ->withRequest($request->withoutHeader('Accept'))
+            ->overrideBackendRequestBySite($event->getSite(), $event->getLanguage());
+        $event->setUrl(
+            GeneralUtility::makeInstance(UrlUtility::class)
+                ->withRequest($request)
+                ->getFrontendUrlWithSite($event->getUrl(), $event->getSite())
+        );
+    }
+}
+```
+
+Other decoupled frontends can rewrite URLs the same way, through the core
+`AfterPageUriGeneratedEvent` (TYPO3 14) or `AfterRecordUrlGeneratedEvent`.
+
 ## Usage
 
 ### Quick Start
