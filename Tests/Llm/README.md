@@ -34,20 +34,24 @@ These tests help ensure that:
 
 3. Run a specific test with a filter:
    ```bash
-   composer test:llm -- --filter testLlmFixesHeaderSpellingErrors
+   vendor/bin/phpunit -c Tests/Llm/phpunit-llm.xml --filter testLlmFixesHeaderSpellingErrors
    ```
 
 ### Supported Models
 
 When using OpenRouter, the following models are available via `modelProvider()`:
 
-| Key              | OpenRouter Model ID              |
-|------------------|----------------------------------|
-| `haiku`          | `anthropic/claude-3-5-haiku`     |
-| `gpt-5.2`       | `openai/gpt-5.2`                |
-| `gpt-oss`        | `openai/gpt-oss-120b`           |
-| `kimi-k2`        | `moonshotai/kimi-k2`            |
-| `mistral-medium` | `mistralai/mistral-medium-3`     |
+| Key                | OpenRouter Model ID            |
+|--------------------|--------------------------------|
+| `haiku-5.5`        | `anthropic/claude-haiku-5.5`   |
+| `gpt-6-luna`       | `openai/gpt-6-luna`            |
+| `mistral-large-4`  | `mistralai/mistral-large-4-0`  |
+| `gemini-3.8-flash` | `google/gemini-3.8-flash`      |
+| `glm-5.3-flash`    | `z-ai/glm-5.3-flash`           |
+| `deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash-1017` |
+| `qwen3.8-27b`      | `qwen/qwen3.8-27b`             |
+
+The list lives in `LlmTestCase::MODELS`; per-model request options (reasoning effort, temperature) in `LlmTestCase::MODEL_OPTIONS`. Keys are used as labels in the results and in the README badges, so they include the model version. A test case passes when it passes on a majority of the models (`--min-pass=4` of 7).
 
 Tests using `#[DataProvider('modelProvider')]` run once per model automatically.
 
@@ -56,7 +60,7 @@ Tests using `#[DataProvider('modelProvider')]` run once per model automatically.
 These tests make actual API calls and will incur costs:
 - Each test typically makes 2-5 API calls (due to multi-step conversations)
 - Multi-model tests multiply the cost by the number of models
-- Using Claude 3.5 Haiku (default) is cost-effective
+- Single-model runs without a data provider use Claude Haiku 5.5 (the default model)
 - Tests are excluded from the default test suite to avoid unexpected charges
 - Consider using environment-specific keys to track costs
 - Use `--filter` to run specific tests when iterating
@@ -64,8 +68,8 @@ These tests make actual API calls and will incur costs:
 ### Test Configuration
 
 The tests use:
-- **Temperature**: 0 (for deterministic responses)
-- **Default Model**: `anthropic/claude-3-5-haiku` via OpenRouter
+- **Temperature**: 0 (for deterministic responses), except for models that don't support it
+- **Default Model**: `anthropic/claude-haiku-5.5` via OpenRouter
 - **Max Tokens**: 4000 per call
 - **Provider**: OpenRouter
 
@@ -82,7 +86,7 @@ The tests use:
 ### Key Methods
 
 - `callLlm($prompt)` - Send initial prompt with all MCP tools available
-- `setModel($key)` - Set the model for subsequent calls (e.g., `'haiku'`, `'gpt-5.2'`)
+- `setModel($key)` - Set the model for subsequent calls (e.g., `'haiku-5.5'`, `'gpt-6-luna'`)
 - `assertToolCalled($response, $toolName, $expectedParams)` - Verify tool usage
 - `executeToolCall($toolCall)` - Execute a tool and get results
 - `continueWithToolResult($previousResponse, $toolResult)` - Continue conversation
@@ -175,7 +179,7 @@ public function testSomethingWithAllModels(string $modelKey): void
 {
     $this->setModel($modelKey);
 
-    if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku') {
+    if ($this->llmProvider !== 'openrouter' && $modelKey !== 'haiku-5.5') {
         $this->markTestSkipped("Model requires OpenRouter");
     }
 
