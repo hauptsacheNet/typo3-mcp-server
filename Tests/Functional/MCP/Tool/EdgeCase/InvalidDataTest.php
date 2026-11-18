@@ -486,6 +486,8 @@ class InvalidDataTest extends AbstractFunctionalTest
      */
     public function testArrayInNonArrayField(): void
     {
+        $titleBefore = $this->readPageTitle(1);
+
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
@@ -500,8 +502,17 @@ class InvalidDataTest extends AbstractFunctionalTest
         $this->assertTrue($result->isError, 'An array must not be written into a text field');
         $this->assertStringContainsString("Field 'title' expects a single value", $result->content[0]->text);
 
-        $record = BackendUtility::getRecord('pages', 1);
-        $this->assertNotSame('Array', $record['title']);
+        // Read through the workspace-aware tool: a staged "Array" would only
+        // show up in the workspace version, not in the live row.
+        $this->assertSame($titleBefore, $this->readPageTitle(1));
+    }
+
+    private function readPageTitle(int $uid): string
+    {
+        $result = $this->readTool->execute(['table' => 'pages', 'uid' => $uid]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        return (string)json_decode($result->content[0]->text, true)['records'][0]['title'];
     }
     
     /**

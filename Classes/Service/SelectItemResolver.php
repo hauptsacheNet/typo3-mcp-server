@@ -121,7 +121,11 @@ class SelectItemResolver
         // form does not silently drop an out-of-range stored value. For *validation*
         // that is exactly wrong: it would make every submitted value resolve as
         // "allowed". We want the canonical item set, so suppress that affordance.
-        $restoreTca = $this->prepareTcaForItemResolution($table);
+        [$restoreTca, $placeholderFields] = $this->prepareTcaForItemResolution($table);
+        // A __row|field placeholder makes the core process "field" even when no
+        // showitem lists it. Keep that processing although the placeholders
+        // themselves are switched off (the core only appends to this list).
+        $input['columnsToProcess'] = $placeholderFields;
         try {
             $result = $formDataCompiler->compile($input, $formDataGroup);
         } finally {
@@ -142,34 +146,48 @@ class SelectItemResolver
      *   blank "new" record can fail. sys_file_metadata.title has the placeholder
      *   __row|file|name, but the core drops the "file" column from the processed
      *   TCA of a new record and then casts its array value to a string
-     *   ("Array to string conversion" in TcaInputPlaceholders).
+     *   ("Array to string conversion" in TcaInputPlaceholders). The fields the
+     *   placeholders point at are returned, so they are still processed.
      *
-     * @return callable(): void
+     * @return array{0: callable(): void, 1: list<string>}
      */
-    private function prepareTcaForItemResolution(string $table): callable
+    private function prepareTcaForItemResolution(string $table): array
     {
         if (!is_array($GLOBALS['TCA'][$table] ?? null)) {
-            return static function (): void {};
+            return [static function (): void {}, []];
         }
 
         // Only the TCA of this table is touched; a full copy restores it exactly.
         $original = $GLOBALS['TCA'][$table];
+        $placeholderFields = [];
+        $collect = static function (mixed $placeholder) use (&$placeholderFields): void {
+            if (is_string($placeholder) && str_starts_with($placeholder, '__row|')) {
+                $referenced = GeneralUtility::trimExplode('|', $placeholder, true)[1] ?? '';
+                if ($referenced !== '') {
+                    $placeholderFields[$referenced] = $referenced;
+                }
+            }
+        };
 
         foreach ($GLOBALS['TCA'][$table]['columns'] ?? [] as $fieldName => $fieldConfig) {
             if (($fieldConfig['config']['type'] ?? '') === 'select') {
                 $GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['disableNoMatchingValueElement'] = true;
             }
+            $collect($fieldConfig['config']['placeholder'] ?? null);
             unset($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['placeholder']);
         }
         foreach ($GLOBALS['TCA'][$table]['types'] ?? [] as $typeName => $typeConfig) {
             foreach ($typeConfig['columnsOverrides'] ?? [] as $fieldName => $override) {
+                $collect($override['config']['placeholder'] ?? null);
                 unset($GLOBALS['TCA'][$table]['types'][$typeName]['columnsOverrides'][$fieldName]['config']['placeholder']);
             }
         }
 
-        return static function () use ($table, $original): void {
+        $restore = static function () use ($table, $original): void {
             $GLOBALS['TCA'][$table] = $original;
         };
+
+        return [$restore, array_values($placeholderFields)];
     }
 
     /**
