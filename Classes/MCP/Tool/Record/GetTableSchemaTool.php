@@ -82,6 +82,12 @@ class GetTableSchemaTool extends AbstractRecordTool
             }
             if ($pid === null || $pid <= 0) {
                 $pid = $pageAccess->getReadableMountRoots()[0] ?? null;
+                if ($pid === null) {
+                    throw new \InvalidArgumentException(
+                        'You have no access to any page, so no table schema can be provided. '
+                        . 'An administrator has to grant you a page mount with read access first.'
+                    );
+                }
             }
         }
 

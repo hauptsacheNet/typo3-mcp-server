@@ -12,6 +12,8 @@ use Hn\McpServer\MCP\Tool\ToolInterface;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Tests\Functional\Traits\RestrictedEditorTrait;
 use PHPUnit\Framework\Attributes\DataProvider;
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 /**
@@ -158,6 +160,7 @@ class RestrictedEditorReadIsolationTest extends FunctionalTestCase
     {
         $result = (new SearchTool())->execute(['terms' => ['Not mounted']]);
 
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringNotContainsString(
             'HTML block elsewhere',
             json_encode($result->jsonSerialize()),
@@ -204,7 +207,31 @@ class RestrictedEditorReadIsolationTest extends FunctionalTestCase
         $mounted = (new GetTableSchemaTool())->execute(['table' => 'tt_content', 'pid' => self::MOUNTED_PAGE_UID]);
 
         $this->assertFalse($withoutPid->isError, json_encode($withoutPid->jsonSerialize()));
+        $this->assertFalse($mounted->isError, json_encode($mounted->jsonSerialize()));
         $this->assertSame($mounted->content[0]->text, $withoutPid->content[0]->text);
+    }
+
+    #[DataProvider('unreadableMountProvider')]
+    public function testTableSchemaWithoutReadableMountIsRejected(string $mountPoints): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/restricted_editor_subpages.csv');
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('be_groups')
+            ->update('be_groups', ['db_mountpoints' => $mountPoints], ['uid' => 10]);
+        $this->actAsBackendUser(self::RESTRICTED_EDITOR_UID);
+
+        $result = (new GetTableSchemaTool())->execute(['table' => 'tt_content']);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('no access to any page', $result->content[0]->text);
+    }
+
+    public static function unreadableMountProvider(): array
+    {
+        return [
+            'no mount at all' => [''],
+            'mount without show permission' => ['22'],
+        ];
     }
 
     #[DataProvider('searchStringProvider')]
@@ -231,6 +258,42 @@ class RestrictedEditorReadIsolationTest extends FunctionalTestCase
             'present once' => ['Not mounted'],
             'present twice' => ['o'],
             'absent' => ['absent text'],
+        ];
+    }
+
+    /**
+     * The record lives inside the mount, but on a subpage without show
+     * permission. It must be refused before any field is checked, so neither
+     * the field checks (which depend on the record's type and page) nor the
+     * search string can reveal anything about it.
+     */
+    #[DataProvider('unreadableRecordFieldProvider')]
+    public function testSearchReplaceOnPageWithoutShowPermissionIsRefused(string $field, string $search): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/restricted_editor_subpages.csv');
+
+        $result = (new WriteTableTool())->execute([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 203,
+            'data' => [$field => [['search' => $search, 'replace' => 'x']]],
+        ]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString("Record 203 not found in table 'tt_content'", $result->content[0]->text);
+        $record = $this->fetchRawRecord('tt_content', 203);
+        $this->assertSame('<p>Secret markup</p>', $record['bodytext']);
+        $this->assertSame('default', $record['frame_class']);
+        $this->assertNull($this->fetchWorkspaceVersion('tt_content', 203, self::EDITORIAL_WORKSPACE_UID));
+    }
+
+    public static function unreadableRecordFieldProvider(): array
+    {
+        return [
+            'accessible text field' => ['bodytext', 'Secret markup'],
+            'field excluded for the editor' => ['frame_class', 'default'],
+            'non-string field' => ['colPos', '0'],
+            'unknown field' => ['no_such_field', 'x'],
         ];
     }
 
@@ -302,6 +365,7 @@ class RestrictedEditorReadIsolationTest extends FunctionalTestCase
 
         $result = (new SearchTool())->execute(['terms' => ['Secret markup']]);
 
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringNotContainsString('Secret block', json_encode($result->jsonSerialize()));
     }
 
