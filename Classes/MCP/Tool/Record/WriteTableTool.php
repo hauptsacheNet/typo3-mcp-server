@@ -1571,8 +1571,10 @@ class WriteTableTool extends AbstractRecordTool
             }
             $config = is_array($fieldConfig['config'] ?? null) ? $fieldConfig['config'] : $fieldConfig;
             $requiredItems = $this->getRequiredItemCount($config);
+            // A field with a displayCond may be hidden for this record, so an omitted
+            // value is not checked. A value the caller sends explicitly always is.
             if ($requiredItems === 0
-                || !empty($fieldConfig['displayCond'])
+                || (!empty($fieldConfig['displayCond']) && !array_key_exists($fieldName, $data))
                 || !empty($config['readOnly'])
                 || in_array($config['type'] ?? '', ['slug', 'uuid', 'passthrough', 'none', 'user', 'flex'], true)
             ) {
@@ -1657,7 +1659,18 @@ class WriteTableTool extends AbstractRecordTool
                 $items,
                 static fn($item) => $item !== null && $item !== '' && $item !== [] && !($zeroIsEmpty && ($item === 0 || $item === '0'))
             );
-            // The same record listed twice is one item. New inline children (arrays) are all distinct.
+            // The same record listed twice is one item, also as {"uid": N} object (the
+            // write maps both to one child). New inline children (no uid) are all distinct.
+            $seenChildUids = [];
+            $items = array_filter($items, static function ($item) use (&$seenChildUids): bool {
+                if (is_array($item) && is_numeric($item['uid'] ?? null) && (int)$item['uid'] > 0) {
+                    if (isset($seenChildUids[(int)$item['uid']])) {
+                        return false;
+                    }
+                    $seenChildUids[(int)$item['uid']] = true;
+                }
+                return true;
+            });
             $references = array_filter($items, 'is_scalar');
             return count(array_unique(array_map('strval', $references))) + count($items) - count($references);
         }
@@ -1669,6 +1682,11 @@ class WriteTableTool extends AbstractRecordTool
             }
             $text = trim(str_replace("\u{00A0}", ' ', $text));
             return $text !== '' ? 1 : 0;
+        }
+
+        // 0 is a valid number
+        if (($config['type'] ?? '') === 'number' && is_numeric($value)) {
+            return 1;
         }
 
         return empty($value) ? 0 : 1;

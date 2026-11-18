@@ -15,6 +15,7 @@ class RequiredFieldsTest extends AbstractFunctionalTest
 {
     private const TYPE = 'testrequired_textmedia';
     private const CATEGORIES_TYPE = 'testrequired_categories';
+    private const CONDITIONAL_TYPE = 'testrequired_conditional';
 
     protected array $testExtensionsToLoad = [
         __DIR__ . '/../../Fixtures/Extensions/test_required_fields',
@@ -399,6 +400,73 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         $this->assertStringContainsString('needs at least 2 items, got 0', $result->content[0]->text);
     }
 
+    public function testExplicitlyEmptiedFieldWithDisplayCondIsRefused(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::CONDITIONAL_TYPE,
+                'header' => 'Conditional',
+                'subheader' => 'Shown because the header is set',
+                'imagewidth' => 100,
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['subheader' => ''],
+        ]);
+
+        $this->assertTrue($result->isError, 'A required field the caller empties must be refused, displayCond or not');
+        $this->assertStringContainsString('subheader', $result->content[0]->text);
+    }
+
+    public function testOmittedFieldWithDisplayCondIsNotChecked(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::CONDITIONAL_TYPE,
+                'header' => 'Conditional',
+                'imagewidth' => 100,
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testZeroFillsARequiredNumberField(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::CONDITIONAL_TYPE,
+                'header' => 'Zero width',
+                'subheader' => 'Subheader',
+                'imagewidth' => 0,
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testSameExistingChildTwiceCountsAsOneItem(): void
+    {
+        $this->assertSame(1, $this->countItems(['type' => 'file', 'minitems' => 2], [['uid' => 5], ['uid' => 5]]));
+        $this->assertSame(2, $this->countItems(['type' => 'file', 'minitems' => 2], [['uid' => 5], ['uid' => 6]]));
+        $this->assertSame(2, $this->countItems(['type' => 'file', 'minitems' => 2], [['uid_local' => 1], ['uid_local' => 1]]));
+    }
+
     private function createValidElement(): int
     {
         $result = $this->write([
@@ -415,6 +483,12 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
 
         return (int)json_decode($result->content[0]->text, true)['uid'];
+    }
+
+    private function countItems(array $config, mixed $value): int
+    {
+        $method = new \ReflectionMethod(WriteTableTool::class, 'countFieldItems');
+        return $method->invoke(GeneralUtility::makeInstance(WriteTableTool::class), $config, $value);
     }
 
     private function write(array $params): \Mcp\Types\CallToolResult

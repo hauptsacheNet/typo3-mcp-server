@@ -49,3 +49,25 @@ $GLOBALS['TCA']['tt_content']['types']['testrequired_categories'] = [
         ],
     ],
 ];
+
+ExtensionManagementUtility::addTcaSelectItem('tt_content', 'CType', [
+    'label' => 'Element with a conditional and a numeric required field',
+    'value' => 'testrequired_conditional',
+]);
+
+$GLOBALS['TCA']['tt_content']['types']['testrequired_conditional'] = [
+    'showitem' => '--palette--;;general, header, subheader, imagewidth, --div--;Language, --palette--;;language',
+    'columnsOverrides' => [
+        'subheader' => [
+            'displayCond' => 'FIELD:header:REQ:true',
+            'config' => [
+                'required' => true,
+            ],
+        ],
+        'imagewidth' => [
+            'config' => [
+                'required' => true,
+            ],
+        ],
+    ],
+];
