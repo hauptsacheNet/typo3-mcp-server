@@ -6,6 +6,7 @@ namespace Hn\McpServer\Service;
 
 use TYPO3\CMS\Backend\Form\FormDataCompiler;
 use TYPO3\CMS\Backend\Form\FormDataGroup\TcaDatabaseRecord;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Http\NormalizedParams;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Site\SiteFinder;
@@ -36,7 +37,8 @@ class SelectItemResolver
      * @param string $table Table name
      * @param string $field Field name
      * @param array $record Record context (used for pid resolution and itemsProcFunc context).
-     *                      For updates: merge existing DB record with submitted data.
+     *                      For updates: merge existing DB record with submitted data; its
+     *                      uid makes the items resolve as in the backend edit form.
      *                      For creates: submitted data with pid.
      *                      For schema display: empty array (pid defaults to 0).
      * @return array|null Array with 'values' and 'labels' keys, or null on failure
@@ -80,6 +82,18 @@ class SelectItemResolver
      * tx_container_parent (and the current colPos) off the row to expose the
      * container's grid columns.
      *
+     * An existing record (the context carries the uid of a record in the database)
+     * is compiled like the backend edit form ("edit" on the record itself), so
+     * FormEngine checks the same rights the edit form and DataHandler check:
+     * edit on the page for a page, content edit on its page for other records.
+     * Compiling it as a "new" record on its parent would instead require the right
+     * to create records there. For a page that is PAGE_NEW on the parent page, which
+     * an editor allowed to edit the page often lacks; FormEngine then throws, and
+     * only the static TCA items would remain for validation. The submitted values
+     * are laid over the database row, so itemsProcFunc callbacks see the record as
+     * it will be written, except for the fields FormEngine's access check reads
+     * (see getAccessCheckedFields()).
+     *
      * @param string $table Table name
      * @param array $record Record context for databaseRow and pid resolution
      * @return array The compiled form data
@@ -89,31 +103,53 @@ class SelectItemResolver
         $pid = (int)($record['pid'] ?? 0);
         $rowValues = $this->extractRowValues($table, $record);
 
+        $uid = (int)($record['uid'] ?? 0);
+        $existingRow = $uid > 0 ? BackendUtility::getRecord($table, $uid) : null;
+        $command = is_array($existingRow) ? 'edit' : 'new';
+
         // The cache must key on the full record context, not just table:pid:
         // itemsProcFunc results can differ for two records on the same page
         // (e.g. depending on tx_container_parent or CType), so a table:pid key
         // would hand back a stale item list for a different record.
-        $cacheKey = $table . ':' . $pid . ':' . md5(serialize($rowValues));
+        $cacheKey = $table . ':' . $command . ':' . ($command === 'edit' ? $uid : $pid)
+            . ':' . md5(serialize($rowValues));
 
         if (isset($this->cache[$cacheKey])) {
             return $this->cache[$cacheKey];
         }
 
-        $request = $this->createMinimalServerRequest($pid);
-
         $formDataGroup = GeneralUtility::makeInstance(TcaDatabaseRecord::class);
         $formDataCompiler = GeneralUtility::makeInstance(FormDataCompiler::class);
 
-        $input = [
-            'request' => $request,
-            'tableName' => $table,
-            'vanillaUid' => $pid,
-            'command' => 'new',
-            // FormEngine seeds these into the databaseRow (the &defVals mechanism).
-            // Empty when no record context is given (e.g. schema display), which
-            // makes this a plain blank "new" record exactly as before.
-            'defaultValues' => $rowValues === [] ? [] : [$table => $rowValues],
-        ];
+        if ($command === 'edit') {
+            $input = [
+                'request' => $this->createMinimalServerRequest(
+                    $table === 'pages' ? $uid : (int)($existingRow['pid'] ?? 0)
+                ),
+                'tableName' => $table,
+                'vanillaUid' => $uid,
+                'command' => 'edit',
+                // A given databaseRow replaces the database lookup of the edit form
+                // (DatabaseEditRow). It keeps the control fields of the stored row
+                // (pid, page permissions, workspace fields) and carries the submitted
+                // values for the itemsProcFunc callbacks.
+                'databaseRow' => array_merge(
+                    $existingRow,
+                    array_diff_key($rowValues, array_flip($this->getAccessCheckedFields($table)))
+                ),
+            ];
+        } else {
+            $input = [
+                'request' => $this->createMinimalServerRequest($pid),
+                'tableName' => $table,
+                'vanillaUid' => $pid,
+                'command' => 'new',
+                // FormEngine seeds these into the databaseRow (the &defVals mechanism).
+                // Empty when no record context is given (e.g. schema display), which
+                // makes this a plain blank "new" record exactly as before.
+                'defaultValues' => $rowValues === [] ? [] : [$table => $rowValues],
+            ];
+        }
 
         // Because we seed the record's own field values (above), FormEngine would
         // otherwise echo any seeded select value back as a "[ invalid value ]"
@@ -130,6 +166,39 @@ class SelectItemResolver
         $this->cache[$cacheKey] = $result;
 
         return $result;
+    }
+
+    /**
+     * Fields whose stored values FormEngine's edit access check reads: the language
+     * and editlock fields and every authMode field (recordEditAccessInternals()),
+     * and for pages the doktype (pagetypes_select). They keep their stored values in
+     * the compiled row, so access is decided on the record as stored, as DataHandler
+     * does. A submitted value the editor may not use would otherwise make the check
+     * throw, and the static TCA fallback would then accept that very value. The
+     * submitted values are still validated against the item list, which FormEngine
+     * filters by authMode and allowed page types.
+     *
+     * @return list<string>
+     */
+    private function getAccessCheckedFields(string $table): array
+    {
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        $fields = [];
+        foreach (['languageField', 'editlock'] as $ctrlKey) {
+            if (!empty($ctrl[$ctrlKey]) && is_string($ctrl[$ctrlKey])) {
+                $fields[] = $ctrl[$ctrlKey];
+            }
+        }
+        if ($table === 'pages' && !empty($ctrl['type']) && is_string($ctrl['type'])) {
+            $fields[] = $ctrl['type'];
+        }
+        foreach ($GLOBALS['TCA'][$table]['columns'] ?? [] as $fieldName => $fieldConfig) {
+            if (!empty($fieldConfig['config']['authMode'])) {
+                $fields[] = (string)$fieldName;
+            }
+        }
+
+        return array_values(array_unique($fields));
     }
 
     /**
