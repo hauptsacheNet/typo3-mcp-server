@@ -614,7 +614,13 @@ class SearchTool extends AbstractRecordTool
      */
     protected function getSearchableFields(string $table): array
     {
-        return $this->tableAccessService->getSearchFields($table);
+        // Only fields the user may read: a term matching in an exclude field
+        // puts the record into the result and a snippet of the field next to
+        // it, which would make Search a way around the field permissions.
+        return array_values(array_filter(
+            $this->tableAccessService->getSearchFields($table),
+            fn(string $field): bool => $this->tableAccessService->canAccessField($table, $field)
+        ));
     }
 
     /**
