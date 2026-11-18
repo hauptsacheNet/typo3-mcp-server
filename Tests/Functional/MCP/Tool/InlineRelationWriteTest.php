@@ -58,7 +58,6 @@ class InlineRelationWriteTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => $pageUid,
             'data' => [
-                'datetime' => 1704103200,
                 'title' => 'News with inline content',
                 'bodytext' => 'Test news body',
             ],
@@ -188,7 +187,6 @@ class InlineRelationWriteTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => $pageUid,
             'data' => [
-                'datetime' => 1704103200,
                 'title' => 'News to update with inline content',
             ],
         ]);
@@ -266,7 +264,6 @@ class InlineRelationWriteTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => $pageUid,
             'data' => [
-                'datetime' => 1704103200,
                 'title' => 'News to update',
             ],
         ]);
@@ -332,7 +329,6 @@ class InlineRelationWriteTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => $pageUid,
             'data' => [
-                'datetime' => 1704103200,
                 'title' => 'News with sorted content',
             ],
         ]);
@@ -432,7 +428,6 @@ class InlineRelationWriteTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => $pageUid,
             'data' => [
-                'datetime' => 1704103200,
                 'title' => 'News for partial update test',
             ],
         ]);
@@ -544,7 +539,6 @@ class InlineRelationWriteTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'datetime' => 1704103200,
                 'title' => 'News for validation test',
             ],
         ]);

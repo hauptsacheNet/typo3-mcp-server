@@ -44,7 +44,6 @@ class ReadTableFieldFilterTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'datetime' => 1704103200,
                 'title' => 'News with links',
                 'bodytext' => 'Some text',
                 'related_links' => [
@@ -88,7 +87,6 @@ class ReadTableFieldFilterTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'datetime' => 1704103200,
                 'title' => 'News with links to include',
                 'bodytext' => 'Some text',
                 'related_links' => [
@@ -136,7 +134,6 @@ class ReadTableFieldFilterTest extends FunctionalTestCase
             'action' => 'create',
             'pid' => 1,
             'data' => [
-                'datetime' => 1704103200,
                 'title' => 'News with content elements',
                 'bodytext' => 'Some text',
             ],

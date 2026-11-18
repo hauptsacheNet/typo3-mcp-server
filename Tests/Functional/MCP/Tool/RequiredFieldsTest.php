@@ -14,6 +14,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class RequiredFieldsTest extends AbstractFunctionalTest
 {
     private const TYPE = 'testrequired_textmedia';
+    private const CATEGORIES_TYPE = 'testrequired_categories';
 
     protected array $testExtensionsToLoad = [
         __DIR__ . '/../../Fixtures/Extensions/test_required_fields',
@@ -299,6 +300,105 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         $this->assertStringContainsString('bodytext', $result->content[0]->text);
     }
 
+    public function testRecordTypeFromPageTsconfigDecidesTheRequiredFields(): void
+    {
+        $this->getConnectionForTable('pages')->update(
+            'pages',
+            ['TSconfig' => "TCAdefaults.tt_content.CType = " . self::TYPE . "\n"],
+            ['uid' => 1]
+        );
+
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => ['pid' => 1, 'header' => 'No type given'],
+        ]);
+        $this->assertTrue($result->isError, 'The type from TCAdefaults needs text and media');
+        $this->assertStringContainsString(self::TYPE, $result->content[0]->text);
+        $this->assertStringContainsString('bodytext', $result->content[0]->text);
+        $this->assertStringContainsString('assets', $result->content[0]->text);
+
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'header' => 'No type given',
+                'bodytext' => '<p>Text</p>',
+                'assets' => [['uid_local' => 1]],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = json_decode($result->content[0]->text, true)['uid'];
+        $this->assertSame(self::TYPE, BackendUtility::getRecordWSOL('tt_content', $uid)['CType']);
+    }
+
+    public function testSameRelationTwiceCountsAsOneItem(): void
+    {
+        $this->importCategories();
+
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::CATEGORIES_TYPE,
+                'header' => 'Two categories',
+                'categories' => [1, 1],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('categories', $result->content[0]->text);
+        $this->assertStringContainsString('needs at least 2 items, got 1', $result->content[0]->text);
+    }
+
+    public function testChangingTheTypeCountsTheRelationsOfTheWorkspaceVersion(): void
+    {
+        $this->importCategories();
+
+        // Element 101 has no categories live. Its workspace version gets two.
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 101,
+            'data' => ['categories' => [1, 2]],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 101,
+            'data' => ['CType' => self::CATEGORIES_TYPE],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertSame(self::CATEGORIES_TYPE, BackendUtility::getRecordWSOL('tt_content', 101)['CType']);
+    }
+
+    public function testChangingTheTypeIgnoresLiveRelationsRemovedInTheWorkspace(): void
+    {
+        $this->importCategories();
+
+        // Element 100 has two categories live. Its workspace version has none.
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => ['categories' => []],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => 100,
+            'data' => ['CType' => self::CATEGORIES_TYPE],
+        ]);
+        $this->assertTrue($result->isError, 'The workspace version has no categories');
+        $this->assertStringContainsString('needs at least 2 items, got 0', $result->content[0]->text);
+    }
+
     private function createValidElement(): int
     {
         $result = $this->write([
@@ -343,6 +443,12 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         );
 
         return $matches[0];
+    }
+
+    private function importCategories(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category.csv');
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_category_record_mm.csv');
     }
 
     private function countAssetReferences(int $contentUid): int

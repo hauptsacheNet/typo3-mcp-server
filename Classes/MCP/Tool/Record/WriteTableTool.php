@@ -11,6 +11,7 @@ use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
+use Hn\McpServer\Service\NewRecordInitializer;
 use Hn\McpServer\Service\RecordUrlService;
 use Hn\McpServer\Service\TableAccessService;
 use Mcp\Types\CallToolResult;
@@ -104,7 +105,7 @@ class WriteTableTool extends AbstractRecordTool
                             'children present in the previous record but missing from the new array are deleted. ' .
                             'To keep an existing child include it as {"uid": <existing>, ...}; only the fields you set are patched. ' .
                             'Array order drives display order. ' .
-                            'Fields that GetTableSchema marks [Required] for the record type must be filled on "create" and cannot be emptied on "update"; [minitems: N] means the relation needs at least N items. ' .
+                            'Fields that GetTableSchema marks [Required] for the record type must be filled on "create" (unless the backend form has a default for them, which is then used) and cannot be emptied on "update"; [minitems: N] means the relation needs at least N items. ' .
                             'For text fields in update actions, instead of providing the full text, you can provide an array of search-and-replace operations: ' .
                             '[{"search": "old text", "replace": "new text"}]. Each operation can optionally include "replaceAll": true. ' .
                             'Operations are applied sequentially. Each search string must match exactly once unless replaceAll is true.',
@@ -1226,12 +1227,14 @@ class WriteTableTool extends AbstractRecordTool
      *
      * A type given in the data wins. Otherwise an existing record keeps its type,
      * taken from the workspace version the write goes to (it may differ from the
-     * live row). A new record gets the TCA default of the type field. Tables
+     * live row). A new record gets the type the backend form initializes it with
+     * (TCAdefaults of page and user TSconfig, then the TCA default). Tables
      * without a local type field have no record type ('').
      *
      * @param array|null $existingRecord Existing record with workspace overlay applied, null for new records
+     * @param array|null $newRecordRow Row of a new record as the backend form initializes it
      */
-    protected function resolveRecordType(string $table, array $data, ?array $existingRecord): string
+    protected function resolveRecordType(string $table, array $data, ?array $existingRecord, ?array $newRecordRow = null): string
     {
         $typeField = $this->tableAccessService->getTypeFieldName($table);
         if ($typeField === null || $typeField === '') {
@@ -1242,6 +1245,9 @@ class WriteTableTool extends AbstractRecordTool
         }
         if ($existingRecord !== null) {
             return (string)($existingRecord[$typeField] ?? '');
+        }
+        if ($newRecordRow !== null && isset($newRecordRow[$typeField]) && is_scalar($newRecordRow[$typeField])) {
+            return (string)$newRecordRow[$typeField];
         }
         return (string)($GLOBALS['TCA'][$table]['columns'][$typeField]['config']['default'] ?? '');
     }
@@ -1353,11 +1359,18 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
+        // A new record starts with the values the backend form would give it. They
+        // decide the record type when the data has none (TCAdefaults) and fill
+        // required fields the data leaves empty (e.g. news "datetime").
+        $newRecordRow = $action === 'create'
+            ? GeneralUtility::makeInstance(NewRecordInitializer::class)->initialize($table, $effectivePid, $data)
+            : null;
+
         // Record type the record has after this write. TCEFORM may disable a field
         // globally and re-enable it for single types (or the other way round), so
         // the access check below has to know it, just like the backend form does.
         $typeField = $this->tableAccessService->getTypeFieldName($table);
-        $recordType = $this->resolveRecordType($table, $data, $currentRecord);
+        $recordType = $this->resolveRecordType($table, $data, $currentRecord, $newRecordRow);
 
         // Validate and convert field values
         foreach ($data as $fieldName => $value) {
@@ -1499,7 +1512,7 @@ class WriteTableTool extends AbstractRecordTool
             $recordType,
             $currentRecord,
             $uid,
-            $effectivePid,
+            $newRecordRow,
             $tsConfigPid
         );
         if ($requiredError !== null) {
@@ -1509,15 +1522,29 @@ class WriteTableTool extends AbstractRecordTool
         return true;
     }
 
+    /**
+     * Check that the required fields of the record type are filled after the write.
+     *
+     * - create: a required field the data leaves empty is filled with the value the
+     *   backend form initializes a new record with (see NewRecordInitializer), or else
+     *   the TCA default of the type. The value is written into $data, so the stored
+     *   record is the one that was checked. Fields that stay empty are refused.
+     * - update/translate: given fields must not be empty. Other fields are only
+     *   checked when the record type changes, against the stored values.
+     *
+     * @param array $data Record data; on create, filled defaults are added
+     * @param array|null $newRecordRow Row of a new record as the backend form initializes it
+     * @return string|null Error message, null if all required fields are filled
+     */
     protected function validateRequiredFields(
         string $table,
-        array $data,
+        array &$data,
         string $action,
         array $availableFields,
         string $recordType,
         ?array $currentRecord,
         ?int $uid,
-        int $pid,
+        ?array $newRecordRow,
         int $tsConfigPid
     ): ?string {
         $typeField = $this->tableAccessService->getTypeFieldName($table);
@@ -1551,11 +1578,17 @@ class WriteTableTool extends AbstractRecordTool
                 continue;
             }
 
-            if (array_key_exists($fieldName, $data)) {
+            if ($action === 'create') {
+                $itemCount = array_key_exists($fieldName, $data) ? $this->countFieldItems($config, $data[$fieldName]) : 0;
+                if ($itemCount < $requiredItems) {
+                    $default = $this->getDefaultValueForNewRecord($fieldName, $config, $newRecordRow);
+                    if ($default !== null && $this->countFieldItems($config, $default) >= $requiredItems) {
+                        $data[$fieldName] = $default;
+                        continue;
+                    }
+                }
+            } elseif (array_key_exists($fieldName, $data)) {
                 $itemCount = $this->countFieldItems($config, $data[$fieldName]);
-            } elseif ($action === 'create') {
-                $default = $this->getDefaultValueForNewRecord($table, $fieldName, $config, $recordType, $pid);
-                $itemCount = $this->countFieldItems($config, $default);
             } elseif ($typeChanged && $uid !== null) {
                 $itemCount = $this->countStoredFieldItems($table, $fieldName, $config, $currentRecord, $uid);
             } else {
@@ -1606,6 +1639,10 @@ class WriteTableTool extends AbstractRecordTool
         return in_array($config['type'] ?? '', ['inline', 'file', 'group', 'select', 'category', 'folder'], true);
     }
 
+    /**
+     * Number of items a value holds: distinct non-empty items for relation fields,
+     * 1 or 0 for everything else.
+     */
     protected function countFieldItems(array $config, mixed $value): int
     {
         if ($value === null || $value === false || $value === [] || $value === '') {
@@ -1615,10 +1652,13 @@ class WriteTableTool extends AbstractRecordTool
         if ($this->isRelationField($config)) {
             $items = is_array($value) ? $value : GeneralUtility::trimExplode(',', (string)$value, true);
             $zeroIsEmpty = ($config['type'] ?? '') !== 'select' || !empty($config['foreign_table']);
-            return count(array_filter(
+            $items = array_filter(
                 $items,
                 static fn($item) => $item !== null && $item !== '' && $item !== [] && !($zeroIsEmpty && ($item === 0 || $item === '0'))
-            ));
+            );
+            // The same record listed twice is one item. New inline children (arrays) are all distinct.
+            $references = array_filter($items, 'is_scalar');
+            return count(array_unique(array_map('strval', $references))) + count($items) - count($references);
         }
 
         if (is_string($value)) {
@@ -1633,6 +1673,13 @@ class WriteTableTool extends AbstractRecordTool
         return empty($value) ? 0 : 1;
     }
 
+    /**
+     * Number of items the stored record has in a field, read from the version the
+     * write goes to: a record with a workspace version keeps its own MM relations,
+     * which point to the workspace version's uid, not to the live uid.
+     *
+     * @param array $currentRecord Stored record with workspace overlay applied
+     */
     protected function countStoredFieldItems(string $table, string $fieldName, array $config, array $currentRecord, int $uid): int
     {
         $type = $config['type'] ?? '';
@@ -1644,37 +1691,46 @@ class WriteTableTool extends AbstractRecordTool
             return $this->countFieldItems($config, $storedValue);
         }
 
+        // workspaceOL() keeps the live uid in "uid" and puts the version's uid into
+        // "_ORIG_uid". RelationHandler::initializeForField() takes the version's uid
+        // for MM relations and the live uid (t3ver_oid) for foreign_field relations.
+        $versionUid = (int)($currentRecord['_ORIG_uid'] ?? 0);
+        $baseRecord = $versionUid > 0
+            ? ['uid' => $versionUid, 't3ver_oid' => $uid]
+            : ['uid' => $uid, 't3ver_oid' => 0];
+
         $relationHandler = GeneralUtility::makeInstance(RelationHandler::class);
         $relationHandler->setWorkspaceId((int)($GLOBALS['BE_USER']->workspace ?? 0));
-        $relationHandler->start(
-            (string)$storedValue,
-            $type === 'group' ? ($config['allowed'] ?? '') : ($config['foreign_table'] ?? ''),
-            $config['MM'] ?? '',
-            $uid,
-            $table,
-            $config
-        );
+        $relationHandler->initializeForField($table, $config, $baseRecord, is_scalar($storedValue) ? (string)$storedValue : null);
         $relationHandler->processDeletePlaceholder();
 
-        return count($relationHandler->itemArray);
-    }
-
-    protected function getDefaultValueForNewRecord(string $table, string $fieldName, array $config, string $recordType, int $pid): mixed
-    {
-        $tsConfigSources = [
-            BackendUtility::getPagesTSconfig($this->tableAccessService->resolveTSconfigPid($pid))['TCAdefaults.'][$table . '.'] ?? [],
-            $GLOBALS['BE_USER']->getTSConfig()['TCAdefaults.'][$table . '.'] ?? [],
-        ];
-        foreach ($tsConfigSources as $defaults) {
-            if ($recordType !== '' && isset($defaults[$fieldName . '.']['types.'][$recordType])) {
-                return $defaults[$fieldName . '.']['types.'][$recordType];
-            }
-            if (isset($defaults[$fieldName]) && !is_array($defaults[$fieldName])) {
-                return $defaults[$fieldName];
-            }
+        $distinctItems = [];
+        foreach ($relationHandler->itemArray as $item) {
+            $distinctItems[$item['table'] . ':' . $item['id']] = true;
         }
 
-        return $config['default'] ?? null;
+        return count($distinctItems);
+    }
+
+    /**
+     * Value a required field of a new record gets when the data leaves it empty: the
+     * value the backend form initializes the record with, else the TCA default of
+     * the record type. Relations (inline, file) are never filled.
+     *
+     * @param array|null $newRecordRow Row of a new record as the backend form initializes it
+     */
+    protected function getDefaultValueForNewRecord(string $fieldName, array $config, ?array $newRecordRow): mixed
+    {
+        if (in_array($config['type'] ?? '', ['inline', 'file'], true)) {
+            return null;
+        }
+        $value = $newRecordRow[$fieldName] ?? null;
+        if (is_scalar($value) && $this->countFieldItems($config, $value) > 0) {
+            return $value;
+        }
+        $default = $config['default'] ?? null;
+
+        return is_scalar($default) ? $default : null;
     }
     
     

@@ -33,3 +33,19 @@ $GLOBALS['TCA']['tt_content']['types']['testrequired_textmedia'] = [
         ],
     ],
 ];
+
+ExtensionManagementUtility::addTcaSelectItem('tt_content', 'CType', [
+    'label' => 'Element with at least two categories',
+    'value' => 'testrequired_categories',
+]);
+
+$GLOBALS['TCA']['tt_content']['types']['testrequired_categories'] = [
+    'showitem' => '--palette--;;general, header, categories, --div--;Language, --palette--;;language',
+    'columnsOverrides' => [
+        'categories' => [
+            'config' => [
+                'minitems' => 2,
+            ],
+        ],
+    ],
+];

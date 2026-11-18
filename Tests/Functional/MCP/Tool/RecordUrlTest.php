@@ -109,7 +109,7 @@ class RecordUrlTest extends AbstractFunctionalTest
             'action' => 'create',
             'table' => self::NEWS_TABLE,
             'pid' => self::STORAGE_PID,
-            'data' => ['title' => 'Brand New', 'path_segment' => 'brand-new', 'datetime' => 1704103200],
+            'data' => ['title' => 'Brand New', 'path_segment' => 'brand-new'],
         ]);
 
         $this->assertArrayNotHasKey('frontend_url', $result, 'A record that only exists as draft has no live URL');
