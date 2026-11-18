@@ -200,7 +200,7 @@ class SelectItemResolver
     /**
      * Create a minimal PSR-7 ServerRequest with site context for TSconfig resolution.
      */
-    private function createMinimalServerRequest(int $pid): \Psr\Http\Message\ServerRequestInterface
+    public function createMinimalServerRequest(int $pid): \Psr\Http\Message\ServerRequestInterface
     {
         $serverParams = [
             'REQUEST_METHOD' => 'GET',
