@@ -16,6 +16,9 @@ use TYPO3\CMS\Core\Site\Entity\SiteLanguage;
  * example a decoupled frontend. On TYPO3 14 the core AfterPageUriGeneratedEvent
  * (dispatched by that router call) is usually enough; this event also exists on
  * TYPO3 13 and is limited to the URLs handed to the MCP client.
+ *
+ * It is also dispatched for the root page of every site language, so that
+ * URLs moved elsewhere can be mapped back when the client passes them in.
  */
 final class AfterRecordUrlGeneratedEvent
 {

@@ -135,6 +135,16 @@ class SiteInformationService
             }
         }
 
+        // Hosts the URLs handed out point at, where listeners moved them off the site
+        // base (e.g. the frontendBase of a decoupled frontend)
+        try {
+            foreach (GeneralUtility::makeInstance(RecordUrlService::class)->getPublicHosts() as $publicHost) {
+                $domains[] = $publicHost;
+            }
+        } catch (\Throwable) {
+            // Domain hints are optional
+        }
+
         // If no domains found but we have a current request, try to use the host header
         if (empty($domains) && $this->currentRequest !== null) {
             $host = $this->currentRequest->getHeaderLine('Host');
@@ -143,7 +153,7 @@ class SiteInformationService
             }
         }
 
-        return array_unique($domains);
+        return array_values(array_unique($domains));
     }
 
     /**

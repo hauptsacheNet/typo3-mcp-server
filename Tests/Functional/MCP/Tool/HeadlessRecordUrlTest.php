@@ -20,7 +20,8 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * With EXT:headless the site base serves JSON, visitors use the frontendBase.
- * Record URLs must point there, like the backend's view button does.
+ * Record URLs must point there, like the backend's view button does, and
+ * GetPage must accept them back.
  *
  * mcp_server contains no headless code. On TYPO3 14, EXT:headless 5 rewrites
  * every router URL generated during a backend request (core
@@ -40,7 +41,11 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
     protected array $testExtensionsToLoad = [
         'mcp_server',
         'headless',
+        'news',
     ];
+
+    private const NEWS_TABLE = 'tx_news_domain_model_news';
+    private const DETAIL_PID = 8;
 
     protected function setUp(): void
     {
@@ -93,11 +98,27 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
         );
     }
 
+    /**
+     * Records linked through TCEMAIN.preview and a route enhancer move along.
+     */
+    public function testNewsRecordUrlPointsAtFrontendBase(): void
+    {
+        $this->writeSiteConfiguration(1);
+        $this->addNewsRecord();
+
+        $this->assertSame(
+            'https://www.example.com/news/article-1/live-news',
+            $this->readRecord(self::NEWS_TABLE, 1)['frontend_url'] ?? null
+        );
+    }
+
     public function testSiteWithoutHeadlessModeKeepsSiteBase(): void
     {
         $this->writeSiteConfiguration(0);
 
         $this->assertSame('https://api.example.com/about', $this->readRecord('pages', 2)['frontend_url'] ?? null);
+        $this->assertNotContains('www.example.com', GeneralUtility::makeInstance(SiteInformationService::class)->getAllDomains());
+        $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => 'https://api.example.com/about/team']));
     }
 
     public function testMixedModeKeepsSiteBaseByDefault(): void
@@ -114,6 +135,73 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
         $this->assertSame('https://www.example.com/about', $this->readRecord('pages', 2)['frontend_url'] ?? null);
     }
 
+    public function testGetPageResolvesFrontendBaseUrl(): void
+    {
+        $this->writeSiteConfiguration(1);
+
+        $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => 'https://www.example.com/about/team']));
+        $this->assertStringContainsString('UID: 1' . "\n", $this->executeGetPage(['url' => 'https://www.example.com/']));
+    }
+
+    public function testGetPageResolvesTranslatedFrontendBaseUrl(): void
+    {
+        $this->writeSiteConfiguration(1);
+        $this->addGermanTranslationOfAbout();
+
+        $text = $this->executeGetPage(['url' => 'https://www.example.com/de/ueber-uns']);
+
+        $this->assertStringContainsString('Title: Über uns' . "\n", $text);
+        $this->assertStringContainsString('URL: https://www.example.com/de/ueber-uns' . "\n", $text);
+    }
+
+    public function testGetPageStillResolvesSiteBaseUrl(): void
+    {
+        $this->writeSiteConfiguration(1);
+
+        $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => 'https://api.example.com/about/team']));
+    }
+
+    public function testFrontendDomainIsAdvertisedForGetPage(): void
+    {
+        $this->writeSiteConfiguration(1);
+
+        $domains = GeneralUtility::makeInstance(SiteInformationService::class)->getAllDomains();
+
+        $this->assertContains('api.example.com', $domains);
+        $this->assertContains('www.example.com', $domains);
+    }
+
+    /**
+     * EXT:headless reads a frontendBase without scheme as domain; the assistant
+     * may also pass URLs without scheme.
+     */
+    public function testFrontendBaseWithoutSchemeRoundTrips(): void
+    {
+        $this->writeSiteConfiguration(1, null, 'www.example.com');
+
+        $this->assertSame('https://www.example.com/about/team', $this->readRecord('pages', 4)['frontend_url'] ?? null);
+        $this->assertContains('www.example.com', GeneralUtility::makeInstance(SiteInformationService::class)->getAllDomains());
+        $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => 'www.example.com/about/team']));
+    }
+
+    /**
+     * A frontend served below a path: EXT:headless prefixes the page path with it,
+     * GetPage has to strip it again.
+     */
+    public function testFrontendBaseWithPathRoundTrips(): void
+    {
+        $this->writeSiteConfiguration(1, null, 'https://www.example.com/app/');
+
+        $record = $this->readRecord('pages', 4);
+        $this->assertSame('https://www.example.com/app/about/team', $record['frontend_url'] ?? null);
+
+        $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => $record['frontend_url']]));
+        $this->assertStringContainsString('UID: 1' . "\n", $this->executeGetPage(['url' => 'https://www.example.com/app/']));
+        $this->addGermanTranslationOfAbout();
+        $german = $this->executeGetPage(['url' => 'https://www.example.com/app/de/ueber-uns']);
+        $this->assertStringContainsString('URL: https://www.example.com/app/de/ueber-uns' . "\n", $german);
+    }
+
     /**
      * What McpServerMiddleware publishes for an HTTP MCP call: a backend request
      * with the Accept header MCP clients send.
@@ -125,6 +213,48 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
         ], ['HTTP_HOST' => 'api.example.com', 'HTTPS' => 'on', 'SCRIPT_NAME' => '/index.php']);
         $request = $request->withAttribute('normalizedParams', NormalizedParams::createFromRequest($request));
         $GLOBALS['TYPO3_REQUEST'] = $request->withAttribute('applicationType', SystemEnvironmentBuilder::REQUESTTYPE_BE);
+    }
+
+    private function addGermanTranslationOfAbout(): void
+    {
+        $this->getConnectionForTable('pages')->insert('pages', [
+            'uid' => 200,
+            'pid' => 1,
+            'title' => 'Über uns',
+            'doktype' => 1,
+            'slug' => '/ueber-uns',
+            'sys_language_uid' => 1,
+            'l10n_parent' => 2,
+        ]);
+    }
+
+    private function addNewsRecord(): void
+    {
+        $this->getConnectionForTable('pages')->insert('pages', [
+            'uid' => 20,
+            'pid' => 1,
+            'title' => 'News Storage',
+            'doktype' => 254,
+            'slug' => '/news-storage',
+            'sorting' => 1024,
+        ]);
+        $this->getConnectionForTable('pages')->update('pages', [
+            'TSconfig' => implode("\n", [
+                'TCEMAIN.preview.' . self::NEWS_TABLE . ' {',
+                '  previewPageId = ' . self::DETAIL_PID,
+                '  fieldToParameterMap.uid = tx_news_pi1[news]',
+                '  additionalGetParameters.tx_news_pi1.controller = News',
+                '  additionalGetParameters.tx_news_pi1.action = detail',
+                '}',
+            ]),
+        ], ['uid' => 1]);
+        $this->getConnectionForTable(self::NEWS_TABLE)->insert(self::NEWS_TABLE, [
+            'uid' => 1,
+            'pid' => 20,
+            'title' => 'Live News',
+            'path_segment' => 'live-news',
+            'datetime' => 1734875000,
+        ]);
     }
 
     private function readRecord(string $table, int $uid): array
@@ -150,15 +280,19 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
     /**
      * @param int $headlessMode 0 = off, 1 = full, 2 = mixed
      * @param int|null $previewOverrideMode Site setting headless.preview.overrideMode, unset when null
+     * @param string $frontendBase Site-wide frontendBase
      */
-    private function writeSiteConfiguration(int $headlessMode, ?int $previewOverrideMode = null): void
-    {
+    private function writeSiteConfiguration(
+        int $headlessMode,
+        ?int $previewOverrideMode = null,
+        string $frontendBase = 'https://www.example.com/'
+    ): void {
         $siteDir = $this->instancePath . '/typo3conf/sites/test-site';
         GeneralUtility::mkdir_deep($siteDir);
         GeneralUtility::writeFile($siteDir . '/config.yaml', Yaml::dump([
             'rootPageId' => 1,
             'base' => 'https://api.example.com/',
-            'frontendBase' => 'https://www.example.com/',
+            'frontendBase' => $frontendBase,
             'headless' => $headlessMode,
             'websiteTitle' => 'Test Site',
             'languages' => [
@@ -171,6 +305,29 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
                     'title' => 'German', 'enabled' => true, 'languageId' => 1, 'base' => '/de/',
                     'locale' => 'de_DE.UTF-8', 'iso-639-1' => 'de', 'hreflang' => 'de-de',
                     'direction' => 'ltr', 'fallbackType' => 'fallback', 'navigationTitle' => 'Deutsch',
+                ],
+            ],
+            'routeEnhancers' => [
+                'News' => [
+                    'type' => 'Extbase',
+                    'limitToPages' => [self::DETAIL_PID],
+                    'extension' => 'News',
+                    'plugin' => 'Pi1',
+                    'routes' => [
+                        [
+                            'routePath' => '/{news-title}',
+                            '_controller' => 'News::detail',
+                            '_arguments' => ['news-title' => 'news'],
+                        ],
+                    ],
+                    'defaultController' => 'News::list',
+                    'aspects' => [
+                        'news-title' => [
+                            'type' => 'PersistedAliasMapper',
+                            'tableName' => self::NEWS_TABLE,
+                            'routeFieldName' => 'path_segment',
+                        ],
+                    ],
                 ],
             ],
             'routes' => [],

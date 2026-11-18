@@ -95,28 +95,21 @@ visitors use the `frontendBase`. mcp_server contains no headless code:
   The deprecated stdio command has no request, its URLs stay on the site base.
 - **TYPO3 13 / EXT:headless 4:** the router dispatches no event, and headless only hooks
   the backend view button in the live workspace. `RecordUrlService` dispatches
-  `AfterRecordUrlGeneratedEvent` for every URL (before the preview token is appended);
-  register this listener in the site package:
+  `AfterRecordUrlGeneratedEvent` for every URL (before the preview token is appended); the
+  site package registers the small listener shown in the [README](../../README.md).
 
-```php
-#[\TYPO3\CMS\Core\Attribute\AsEventListener]
-final class HeadlessRecordUrlListener
-{
-    public function __invoke(\Hn\McpServer\Event\AfterRecordUrlGeneratedEvent $event): void
-    {
-        $request = ($GLOBALS['TYPO3_REQUEST'] ?? null) ?? new \TYPO3\CMS\Core\Http\ServerRequest($event->getUrl());
-        $request = GeneralUtility::makeInstance(\FriendsOfTYPO3\Headless\Utility\HeadlessModeInterface::class)
-            ->withRequest($request->withoutHeader('Accept'))
-            ->overrideBackendRequestBySite($event->getSite(), $event->getLanguage());
-        $event->setUrl(GeneralUtility::makeInstance(\FriendsOfTYPO3\Headless\Utility\UrlUtility::class)
-            ->withRequest($request)
-            ->getFrontendUrlWithSite($event->getUrl(), $event->getSite()));
-    }
-}
-```
+**The way back.** `GetPage` accepts the URLs it hands out. TYPO3 cannot match a
+`frontendBase` URL (EXT:headless only rewrites outgoing URLs), and mcp_server does not read
+headless configuration. Instead `RecordUrlService::mapPublicUrlToSiteUrl()` inverts whatever
+the listeners do: it generates the root URL of every site language through the same
+pipeline (one router call each, no database query), and where the result differs from the
+language base, a URL below it is moved onto the language base before the site matcher
+resolves it. This covers a `frontendBase` on another host, below a path, or per language,
+and also any other listener. The hosts are listed among the domains `GetPage` advertises.
 
-`HeadlessRecordUrlTest` covers both (the listener lives in the fixture extension
-`test_headless_bridge`, loaded on TYPO3 13 only).
+EXT:headless is a `require-dev` dependency only. `HeadlessRecordUrlTest` runs against the
+real extension (5.x on TYPO3 14, 4.x on TYPO3 13 with the README listener as fixture
+extension `test_headless_bridge`).
 
 ### Preview tokens
 

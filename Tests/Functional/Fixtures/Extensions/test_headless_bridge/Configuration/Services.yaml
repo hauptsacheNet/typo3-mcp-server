@@ -4,8 +4,5 @@ services:
     autoconfigure: true
     public: false
 
-  Hn\TestHeadlessBridge\HeadlessRecordUrlListener:
-    tags:
-      - name: event.listener
-        event: Hn\McpServer\Event\AfterRecordUrlGeneratedEvent
-        identifier: 'test-headless-bridge/record-url'
+  Hn\TestHeadlessBridge\:
+    resource: '../Classes/*'
