@@ -136,6 +136,11 @@ $writeTool->execute([
 - DataHandler only processes fields that are defined in TCA columns, so it ignores the foreign field
 - **Solution**: After DataHandler creates child records, we directly update the foreign field in the database
 - **Working Example**: Creating news with embedded links now works correctly
+- New children get the pid the backend form would give them (`TcaInline::addInlineFirstPid()`,
+  see `WriteTableTool::resolveInlineChildPid()`): children of a page are stored on that page
+  itself (its live uid), children of a page translation on the default-language page, children
+  of any other record on the record's pid. Nested children inherit the same pid. Page TSconfig
+  and permissions of a child are resolved from this pid.
 
 ### 2. File References (sys_file_reference)
 - `sys_file_reference` is fully supported as an embedded inline relation (`hideTable=true`)

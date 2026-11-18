@@ -501,7 +501,8 @@ class WriteTableTool extends AbstractRecordTool
         // Now process inline relations with the resolved parent UID
         if (!empty($inlineRelations)) {
             $childDataMap = [];
-            $embeddedRelations = $this->processInlineRelations($childDataMap, $table, $parentUid, $pid, $inlineRelations);
+            $childPid = $this->resolveInlineChildPid($table, $parentUid, $pid);
+            $embeddedRelations = $this->processInlineRelations($childDataMap, $table, $parentUid, $childPid, $inlineRelations);
 
             if (!empty($childDataMap)) {
                 // Create a new DataHandler instance for child records
@@ -611,12 +612,11 @@ class WriteTableTool extends AbstractRecordTool
         
         // Now process inline relations with the resolved parent UID
         if (!empty($inlineRelations)) {
-            // Get record's pid for creating new inline records
             $record = BackendUtility::getRecord($table, $workspaceUid, 'pid');
-            $pid = $record['pid'] ?? 0;
-            
+            $childPid = $this->resolveInlineChildPid($table, $workspaceUid, (int)$record['pid']);
+
             $childDataMap = [];
-            $embeddedRelations = $this->processInlineRelations($childDataMap, $table, $workspaceUid, $pid, $inlineRelations, $uid);
+            $embeddedRelations = $this->processInlineRelations($childDataMap, $table, $workspaceUid, $childPid, $inlineRelations, $uid);
 
             // A new DataHandler instance is needed even when $childDataMap ends up empty
             // (a pure reorder of already-existing children has nothing to patch), since
@@ -1545,6 +1545,29 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         return $parents;
+    }
+
+    /**
+     * The pid new inline children of a record are stored on, as the backend form
+     * does it (TcaInline::addInlineFirstPid()): children of a page live on that
+     * page itself, children of any other record share the record's pid. A page
+     * translation hands its children to the default-language page. Children
+     * always reference the live page uid, never a workspace version.
+     */
+    protected function resolveInlineChildPid(string $parentTable, int $parentUid, int $parentPid): int
+    {
+        $childPid = $parentTable === 'pages'
+            ? (int)(BackendUtility::getLiveVersionIdOfRecord('pages', $parentUid) ?? $parentUid)
+            : $parentPid;
+
+        $transOrigPointerField = (string)($GLOBALS['TCA']['pages']['ctrl']['transOrigPointerField'] ?? '');
+        if ($transOrigPointerField === '') {
+            return $childPid;
+        }
+        $page = BackendUtility::getRecord('pages', $childPid, $transOrigPointerField);
+        $defaultLanguagePageUid = (int)($page[$transOrigPointerField] ?? 0);
+
+        return $defaultLanguagePageUid > 0 ? $defaultLanguagePageUid : $childPid;
     }
 
     /**
