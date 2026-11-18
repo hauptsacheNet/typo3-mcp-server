@@ -83,6 +83,41 @@ check page access with uncached queries, and the workspace builder (13.4) writes
 semantics with public APIs (`BackendUtility::getPagesTSconfig()`, the site router,
 `PageRepository`) and batch-level memoization.
 
+### Decoupled frontends (EXT:headless)
+
+The router builds URLs on the site `base`. In a headless site that base serves JSON;
+visitors use the `frontendBase`. mcp_server contains no headless code:
+
+- **TYPO3 14 / EXT:headless 5:** the site router dispatches the core
+  `AfterPageUriGeneratedEvent`, and EXT:headless rewrites it to the `frontendBase` during
+  backend requests (the view button). The MCP endpoint publishes its request as a backend
+  request, so `frontend_url` and `preview_url` point at the frontend without any setup.
+  The deprecated stdio command has no request, its URLs stay on the site base.
+- **TYPO3 13 / EXT:headless 4:** the router dispatches no event, and headless only hooks
+  the backend view button in the live workspace. `RecordUrlService` dispatches
+  `AfterRecordUrlGeneratedEvent` for every URL (before the preview token is appended);
+  register this listener in the site package:
+
+```php
+#[\TYPO3\CMS\Core\Attribute\AsEventListener]
+final class HeadlessRecordUrlListener
+{
+    public function __invoke(\Hn\McpServer\Event\AfterRecordUrlGeneratedEvent $event): void
+    {
+        $request = ($GLOBALS['TYPO3_REQUEST'] ?? null) ?? new \TYPO3\CMS\Core\Http\ServerRequest($event->getUrl());
+        $request = GeneralUtility::makeInstance(\FriendsOfTYPO3\Headless\Utility\HeadlessModeInterface::class)
+            ->withRequest($request->withoutHeader('Accept'))
+            ->overrideBackendRequestBySite($event->getSite(), $event->getLanguage());
+        $event->setUrl(GeneralUtility::makeInstance(\FriendsOfTYPO3\Headless\Utility\UrlUtility::class)
+            ->withRequest($request)
+            ->getFrontendUrlWithSite($event->getUrl(), $event->getSite()));
+    }
+}
+```
+
+`HeadlessRecordUrlTest` covers both (the listener lives in the fixture extension
+`test_headless_bridge`, loaded on TYPO3 13 only).
+
 ### Preview tokens
 
 A preview token grants read access to **all** unpublished changes of the workspace, without
