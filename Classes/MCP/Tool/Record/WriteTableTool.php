@@ -11,6 +11,7 @@ use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
+use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\RecordUrlService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -2337,14 +2338,18 @@ class WriteTableTool extends AbstractRecordTool
             BackendUtility::workspaceOL($table, $record);
         }
 
+        // A record the user may not read is refused before anything about its fields
+        // is checked: the field checks depend on the record's type and page, so their
+        // error messages would otherwise reveal details of a record outside the mounts.
+        if (!is_array($record) || !GeneralUtility::makeInstance(PageAccessService::class)->isRecordReadable($table, $record)) {
+            throw new ValidationException(["Record {$uid} not found in table '{$table}'"]);
+        }
+
         // Field access depends on the page and record type (TCEFORM disabled per type),
         // resolved the same way as in validateRecordData(): a page record is its own
         // TSconfig context, any other record the page it lives on.
-        $recordType = is_array($record) ? $this->resolveRecordType($table, [], $record) : '';
-        $tsConfigPid = null;
-        if (is_array($record)) {
-            $tsConfigPid = $table === 'pages' ? $uid : (int)($record['pid'] ?? 0);
-        }
+        $recordType = $this->resolveRecordType($table, [], $record);
+        $tsConfigPid = $table === 'pages' ? $uid : (int)($record['pid'] ?? 0);
 
         // Validate all fields exist, are accessible, and are string-type before touching
         // the field values. Field access MUST be checked before any value is compared to
@@ -2362,10 +2367,6 @@ class WriteTableTool extends AbstractRecordTool
             if (!in_array($fieldType, $stringFieldTypes, true)) {
                 throw new ValidationException(["search_replace is not supported for field '{$fieldName}' (type: {$fieldType}). Only string fields (text, input, etc.) are supported."]);
             }
-        }
-
-        if (!is_array($record)) {
-            throw new ValidationException(["Record {$uid} not found in table '{$table}'"]);
         }
 
         $resolved = [];
