@@ -839,14 +839,27 @@ class ReadTableTool extends AbstractRecordTool
     protected function includeMmRelations(array &$records, string $fieldName, array $fieldConfig, string $table): void
     {
         $mmTable = $fieldConfig['config']['MM'];
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        $isVersionedInWorkspace = $workspaceId > 0 && !empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS']);
 
         // Get MM values for all records
         foreach ($records as &$record) {
             if (isset($record['uid'])) {
+                // The records carry the live uid. A live record edited in the workspace has a
+                // version with its own uid, and DataHandler attaches the workspace MM relations
+                // to that version uid, so read them from there.
+                $localUid = (int)$record['uid'];
+                if ($isVersionedInWorkspace) {
+                    $version = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, $table, $localUid, 'uid');
+                    if (is_array($version)) {
+                        $localUid = (int)$version['uid'];
+                    }
+                }
+
                 $mmValues = $this->getMmRelationValues(
                     $mmTable,
                     $table,
-                    $record['uid'],
+                    $localUid,
                     $fieldName,
                     $fieldConfig['config']
                 );

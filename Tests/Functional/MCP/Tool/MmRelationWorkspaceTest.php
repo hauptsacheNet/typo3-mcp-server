@@ -212,6 +212,64 @@ class MmRelationWorkspaceTest extends FunctionalTestCase
     }
 
     /**
+     * Read back MM relations of a record that is really live after changing them in a workspace.
+     *
+     * The tests above create their "live" record through WriteTableTool, which always
+     * writes into the workspace: such a record is new in the workspace and keeps a single
+     * uid. A record that already exists live gets a workspace version with a uid of its
+     * own, and DataHandler attaches the changed MM relations to that version uid.
+     */
+    public function testReadMmOfLiveRecordAfterWorkspaceUpdate(): void
+    {
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $mmTable = $GLOBALS['TCA']['tx_news_domain_model_news']['columns']['tags']['config']['MM'];
+
+        // A live news record with tags A,B, written directly so it never touches a workspace
+        foreach ([101 => 'Tag A', 102 => 'Tag B', 103 => 'Tag C', 104 => 'Tag D'] as $uid => $title) {
+            $connectionPool->getConnectionForTable('tx_news_domain_model_tag')
+                ->insert('tx_news_domain_model_tag', ['uid' => $uid, 'pid' => 1, 'title' => $title]);
+        }
+        $connectionPool->getConnectionForTable('tx_news_domain_model_news')->insert('tx_news_domain_model_news', [
+            'uid' => 201,
+            'pid' => 1,
+            'title' => 'Really live news',
+            'datetime' => time(),
+            'tags' => 2,
+        ]);
+        foreach ([101, 102] as $sorting => $tagUid) {
+            $connectionPool->getConnectionForTable($mmTable)
+                ->insert($mmTable, ['uid_local' => 201, 'uid_foreign' => $tagUid, 'sorting' => $sorting + 1]);
+        }
+
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+        $this->assertGreaterThan(0, $GLOBALS['BE_USER']->workspace);
+
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => 201,
+            'data' => ['tags' => [103, 104]],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $result = $this->readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => 201,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $news = json_decode($result->content[0]->text)->records[0];
+
+        $this->assertEquals(201, $news->uid, 'Client should see the live uid');
+        $this->assertEquals([103, 104], $news->tags, 'Should see the workspace tags, not the live ones');
+
+        // Live keeps its tags until the workspace is published
+        $liveTags = $connectionPool->getConnectionForTable($mmTable)
+            ->select(['uid_foreign'], $mmTable, ['uid_local' => 201], [], ['sorting' => 'ASC'])
+            ->fetchFirstColumn();
+        $this->assertEquals([101, 102], array_map('intval', $liveTags));
+    }
+
+    /**
      * Test that translating a record copies its MM relations to the translation.
      */
     public function testTranslateRecordCopiesMmRelations(): void
