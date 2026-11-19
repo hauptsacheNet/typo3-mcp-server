@@ -185,6 +185,20 @@ TSCONFIG;
         $this->assertStringContainsString('colPos 3 "Banner"', $result->content[0]->text);
     }
 
+    public function testCreateWithoutCTypeChecksTheTypeFromTcaDefaults(): void
+    {
+        $this->getConnectionForTable('pages')->update('pages', ['TSconfig' => 'TCAdefaults.tt_content.CType = image'], ['uid' => self::PAGE]);
+
+        $refused = $this->write('create', ['pid' => self::PAGE, 'header' => 'Banner', 'colPos' => 0]);
+        $this->assertTrue($refused->isError, 'TCAdefaults makes the new element an image, which column 0 refuses');
+        $this->assertStringContainsString('colPos 0 "Main" does not accept the type "image"', $refused->content[0]->text);
+
+        $accepted = $this->write('create', ['pid' => self::PAGE, 'header' => 'Banner', 'colPos' => 3]);
+        $this->assertFalse($accepted->isError, json_encode($accepted->jsonSerialize()));
+        $record = $this->readRecord((int)json_decode($accepted->content[0]->text, true)['uid']);
+        $this->assertSame('image', $record['CType']);
+    }
+
     public function testCreateInAColumnThatDoesNotExistNamesTheFittingColumn(): void
     {
         $result = $this->write('create', ['pid' => self::PAGE, 'CType' => 'image', 'header' => 'Banner', 'colPos' => 4]);
