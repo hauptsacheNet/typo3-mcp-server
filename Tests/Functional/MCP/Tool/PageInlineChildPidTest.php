@@ -100,6 +100,33 @@ class PageInlineChildPidTest extends AbstractFunctionalTest
         $this->assertSame([4], $this->findMediaReferencePids($translationUid));
     }
 
+    #[Test]
+    public function recordMovedInWorkspaceStoresNewInlineChildrenOnItsNewPage(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $moveResult = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => 100,
+            'data' => ['pid' => 2],
+        ]);
+        $this->assertFalse($moveResult->isError, json_encode($moveResult->jsonSerialize()));
+
+        $updateResult = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => 100,
+            'data' => [
+                'assets' => [
+                    ['uid_local' => 1, 'title' => 'Image after the move'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($updateResult->isError, json_encode($updateResult->jsonSerialize()));
+
+        $this->assertSame([2], $this->findReferencePids('tt_content', 'assets', 100));
+    }
+
     /**
      * Pids of all pages.media references of the page, workspace versions included.
      *
@@ -107,15 +134,25 @@ class PageInlineChildPidTest extends AbstractFunctionalTest
      */
     private function findMediaReferencePids(int $pageUid): array
     {
+        return $this->findReferencePids('pages', 'media', $pageUid);
+    }
+
+    /**
+     * Pids of all file references of a record field, workspace versions included.
+     *
+     * @return list<int>
+     */
+    private function findReferencePids(string $table, string $field, int $uid): array
+    {
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('sys_file_reference');
         $queryBuilder->getRestrictions()->removeAll();
         $pids = $queryBuilder
             ->select('pid')
             ->from('sys_file_reference')
             ->where(
-                $queryBuilder->expr()->eq('tablenames', $queryBuilder->createNamedParameter('pages')),
-                $queryBuilder->expr()->eq('fieldname', $queryBuilder->createNamedParameter('media')),
-                $queryBuilder->expr()->eq('uid_foreign', $queryBuilder->createNamedParameter($pageUid, ParameterType::INTEGER)),
+                $queryBuilder->expr()->eq('tablenames', $queryBuilder->createNamedParameter($table)),
+                $queryBuilder->expr()->eq('fieldname', $queryBuilder->createNamedParameter($field)),
+                $queryBuilder->expr()->eq('uid_foreign', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)),
                 $queryBuilder->expr()->eq('deleted', 0)
             )
             ->orderBy('uid')

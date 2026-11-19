@@ -501,7 +501,7 @@ class WriteTableTool extends AbstractRecordTool
         // Now process inline relations with the resolved parent UID
         if (!empty($inlineRelations)) {
             $childDataMap = [];
-            $childPid = $this->resolveInlineChildPid($table, $parentUid, $pid);
+            $childPid = $this->resolveInlineChildPid($table, $parentUid);
             $embeddedRelations = $this->processInlineRelations($childDataMap, $table, $parentUid, $childPid, $inlineRelations);
 
             if (!empty($childDataMap)) {
@@ -612,8 +612,7 @@ class WriteTableTool extends AbstractRecordTool
         
         // Now process inline relations with the resolved parent UID
         if (!empty($inlineRelations)) {
-            $record = BackendUtility::getRecord($table, $workspaceUid, 'pid');
-            $childPid = $this->resolveInlineChildPid($table, $workspaceUid, (int)$record['pid']);
+            $childPid = $this->resolveInlineChildPid($table, $workspaceUid);
 
             $childDataMap = [];
             $embeddedRelations = $this->processInlineRelations($childDataMap, $table, $workspaceUid, $childPid, $inlineRelations, $uid);
@@ -1553,12 +1552,23 @@ class WriteTableTool extends AbstractRecordTool
      * page itself, children of any other record share the record's pid. A page
      * translation hands its children to the default-language page. Children
      * always reference the live page uid, never a workspace version.
+     *
+     * The record's pid is read with its workspace overlay: a record moved in the
+     * workspace has its new page in the move pointer, while the live row still
+     * names the page it was moved away from. Children stored there would vanish
+     * with that page.
      */
-    protected function resolveInlineChildPid(string $parentTable, int $parentUid, int $parentPid): int
+    protected function resolveInlineChildPid(string $parentTable, int $parentUid): int
     {
-        $childPid = $parentTable === 'pages'
-            ? (int)(BackendUtility::getLiveVersionIdOfRecord('pages', $parentUid) ?? $parentUid)
-            : $parentPid;
+        if ($parentTable === 'pages') {
+            $childPid = (int)(BackendUtility::getLiveVersionIdOfRecord('pages', $parentUid) ?? $parentUid);
+        } else {
+            $parentRecord = BackendUtility::getRecordWSOL($parentTable, $parentUid, 'pid');
+            if (!is_array($parentRecord)) {
+                throw new \RuntimeException(sprintf('Inline parent %s:%d not found', $parentTable, $parentUid), 1795100001);
+            }
+            $childPid = (int)$parentRecord['pid'];
+        }
 
         $transOrigPointerField = (string)($GLOBALS['TCA']['pages']['ctrl']['transOrigPointerField'] ?? '');
         if ($transOrigPointerField === '') {

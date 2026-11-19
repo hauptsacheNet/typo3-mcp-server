@@ -141,6 +141,10 @@ $writeTool->execute([
   itself (its live uid), children of a page translation on the default-language page, children
   of any other record on the record's pid. Nested children inherit the same pid. Page TSconfig
   and permissions of a child are resolved from this pid.
+- The record's pid is read with its workspace overlay. A record moved in the workspace keeps
+  its old page in the live row; the move pointer holds the new one. Children stored on the old
+  page would be deleted with it, and publishing fails once that page is gone ("not assigned to
+  a valid page").
 
 ### 2. File References (sys_file_reference)
 - `sys_file_reference` is fully supported as an embedded inline relation (`hideTable=true`)
