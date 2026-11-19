@@ -98,7 +98,7 @@ class ContentColumnService
         $fitting = $this->filterColumnsAcceptingType($columns, $cType);
         if ($fitting === []) {
             return sprintf(
-                'No column of page %d accepts the type "%s"; choose another type (GetPage lists the columns and the types they accept).',
+                'No backend layout column of page %d accepts the type "%s"; choose another type or a container column (GetPage lists the columns and the types they accept).',
                 $pageId,
                 $cType
             );

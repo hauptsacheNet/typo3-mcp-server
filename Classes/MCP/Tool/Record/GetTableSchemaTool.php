@@ -501,7 +501,7 @@ class GetTableSchemaTool extends AbstractRecordTool
         ));
 
         if ($accepting === []) {
-            return "Columns of page " . $pid . " that accept this type: none, so it cannot be placed on this page\n";
+            return "Backend layout columns of page " . $pid . " that accept this type: none (container columns can still take it)\n";
         }
         $line = ($refusing === [] ? "All columns of page " : "Columns of page ") . $pid
             . " that accept this type: " . $format($accepting);

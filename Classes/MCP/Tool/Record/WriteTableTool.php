@@ -1293,7 +1293,8 @@ class WriteTableTool extends AbstractRecordTool
                 . $contentColumnService->describeColumnsAcceptingType($pageId, $columns, $cType);
         }
 
-        if ($action !== 'create' && !array_key_exists('colPos', $data)) {
+        $pageChanged = $currentRecord !== null && $pageId !== (int)($currentRecord['pid'] ?? $pageId);
+        if ($action !== 'create' && !array_key_exists('colPos', $data) && !$pageChanged) {
             return null;
         }
         $colPosError = $this->tableAccessService->validateFieldValue(

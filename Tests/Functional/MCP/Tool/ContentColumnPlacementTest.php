@@ -291,6 +291,16 @@ TSCONFIG;
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
     }
 
+    public function testMovingAnElementFromAColumnOutsideTheTargetLayoutIsRefused(): void
+    {
+        $this->getConnectionForTable('tt_content')->update('tt_content', ['pid' => 6], ['uid' => 110]);
+
+        $result = $this->write('update', ['pid' => self::PAGE], 110);
+
+        $this->assertTrue($result->isError, 'Column 10 is not part of the layout of page ' . self::PAGE);
+        $this->assertStringContainsString('colPos 10 does not exist on page ' . self::PAGE, $result->content[0]->text);
+    }
+
     private function getPageTool(): GetPageTool
     {
         return new GetPageTool(
