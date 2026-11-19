@@ -135,6 +135,7 @@ $writeTool->execute([
 - The foreign field (e.g., `parent` in `tx_news_domain_model_link`) is NOT defined in the child table's TCA columns by design
 - DataHandler only processes fields that are defined in TCA columns, so it ignores the foreign field
 - **Solution**: After DataHandler creates child records, we directly update the foreign field in the database
+- The same goes for `foreign_table_field` (e.g. `tablenames`) and `foreign_match_fields` (e.g. `fieldname`): when the child table has no TCA column for them, DataHandler drops them from the datamap and TYPO3 can no longer find the child through its parent (empty relation in the backend form, page module and Record API). They are written in the same direct UPDATE as the foreign field
 - **Working Example**: Creating news with embedded links now works correctly
 
 ### 2. File References (sys_file_reference)
@@ -236,8 +237,9 @@ $dataMap = [
         'NEW456' => ['other_field' => 'value']  // Note: foreign field NOT included
     ]
 ];
-// After DataHandler processing, foreign fields are updated directly:
-$connection->update('child_table', ['parent_field' => $parentUid], ['uid' => $childUid]);
+// After DataHandler processing, foreign fields are updated directly
+// (together with foreign_table_field / foreign_match_fields, if the relation has them):
+$connection->update('child_table', ['parent_field' => $parentUid, 'tablenames' => 'parent_table'], ['uid' => $childUid]);
 ```
 
 ## Future Improvements
