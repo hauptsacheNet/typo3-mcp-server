@@ -227,9 +227,21 @@ class TcaFormattingUtility
                 break;
         }
         
-        // Add required flag if set
-        if (isset($config['eval']) && strpos($config['eval'], 'required') !== false) {
+        $minItems = (int)($config['minitems'] ?? 0);
+        $maxItems = (int)($config['maxitems'] ?? 0);
+        $isRequired = !empty($config['required'])
+            || $minItems > 0
+            || in_array('required', GeneralUtility::trimExplode(',', (string)($config['eval'] ?? ''), true), true);
+        if ($isRequired) {
             $result .= " [Required]";
+        }
+        if (in_array($type, ['inline', 'file', 'group', 'select', 'category', 'folder'], true)) {
+            if ($minItems > 0) {
+                $result .= " [minitems: " . $minItems . "]";
+            }
+            if ($maxItems > 0) {
+                $result .= " [maxitems: " . $maxItems . "]";
+            }
         }
         
         // Add default value if set

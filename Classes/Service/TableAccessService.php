@@ -398,7 +398,7 @@ class TableAccessService implements SingletonInterface
                     $fields[$field->getName()] = $field->getConfiguration();
                 }
             }
-        } elseif (!empty($type) && $schema->hasSubSchema($type)) {
+        } elseif ($type !== '' && $schema->hasSubSchema($type)) {
             $subSchema = $schema->getSubSchema($type);
 
             // Get fields from the sub-schema
@@ -409,13 +409,13 @@ class TableAccessService implements SingletonInterface
         } else {
             // No specific type or type doesn't exist - use main schema
             // Try to fall back to a reasonable default type
-            if (empty($type) && $schema->supportsSubSchema()) {
+            if ($type === '' && $schema->supportsSubSchema()) {
                 // Get the default type from TCA configuration
                 $tca = $GLOBALS['TCA'][$table] ?? [];
                 $defaultType = $tca['columns'][$schema->getSubSchemaTypeInformation()->getFieldName()]['config']['default'] ?? '';
                 
-                if (!empty($defaultType) && $schema->hasSubSchema($defaultType)) {
-                    $subSchema = $schema->getSubSchema($defaultType);
+                if ((string)$defaultType !== '' && $schema->hasSubSchema((string)$defaultType)) {
+                    $subSchema = $schema->getSubSchema((string)$defaultType);
                     foreach ($subSchema->getFields() as $field) {
                         $fieldName = $field->getName();
                         $fields[$fieldName] = $field->getConfiguration();
@@ -1471,16 +1471,6 @@ class TableAccessService implements SingletonInterface
                         $allowedList = implode(', ', array_map(function($v) { return "'{$v}'"; }, $allowedValues));
                         return "Field '{$fieldName}' value '{$val}' must be one of: {$allowedList}";
                     }
-                }
-            }
-        }
-
-        // Validate required fields
-        if (!empty($config['required']) || !empty($config['eval'])) {
-            $evalRules = GeneralUtility::trimExplode(',', $config['eval'] ?? '', true);
-            if (!empty($config['required']) || in_array('required', $evalRules)) {
-                if ($value === null || $value === '' || (is_array($value) && empty($value))) {
-                    return "Field '{$fieldName}' is required";
                 }
             }
         }
