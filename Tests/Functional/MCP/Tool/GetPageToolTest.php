@@ -289,6 +289,11 @@ class GetPageToolTest extends FunctionalTestCase
         $this->assertStringContainsString('[colPos: 0]', $content);
         // Column name can vary based on backend layout configuration
         $this->assertMatchesRegularExpression('/Column: .+ \[colPos: 0\]/', $content);
+
+        // Every content element exposes its frontend anchor (#c<uid>), so an
+        // LLM can link to it with t3://page?uid=2#c<uid>
+        $this->assertStringContainsString('Anchor: #c102', $content);
+        $this->assertStringContainsString('Anchor: #c103', $content);
     }
 
     /**
