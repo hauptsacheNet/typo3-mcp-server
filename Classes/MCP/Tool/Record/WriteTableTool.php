@@ -81,7 +81,8 @@ class WriteTableTool extends AbstractRecordTool
                 'properties' => [
                     'action' => [
                         'type' => 'string',
-                        'description' => 'Action to perform: "create", "update", "translate", or "delete"',
+                        'description' => 'Action to perform: "create", "update", "translate", or "delete". ' .
+                            '"delete" only STAGES the deletion in the workspace (a delete placeholder) — nothing is removed from the live site until the workspace is published, so a delete is reversible until then.',
                         'enum' => ['create', 'update', 'translate', 'delete'],
                     ],
                     'table' => [
@@ -128,7 +129,13 @@ class WriteTableTool extends AbstractRecordTool
             ],
             'annotations' => [
                 'readOnlyHint' => false,
-                'idempotentHint' => false
+                'idempotentHint' => false,
+                // Absent destructiveHint defaults to TRUE per MCP spec, which
+                // makes cautious clients refuse delete calls outright. Every
+                // write (deletes included) is only staged in a workspace and
+                // touches nothing live until published — so the tool call
+                // itself is not destructive.
+                'destructiveHint' => false
             ]
         ];
     }
