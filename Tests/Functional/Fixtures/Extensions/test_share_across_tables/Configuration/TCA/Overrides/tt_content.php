@@ -24,9 +24,27 @@ $GLOBALS['TCA']['tt_content']['columns']['tx_testsat_items'] = [
     ],
 ];
 
+/*
+ * Same relation, but the child table (tx_testsat_bare) has no TCA column for
+ * foreign_field, foreign_table_field or foreign_match_fields.
+ */
+$GLOBALS['TCA']['tt_content']['columns']['tx_testsat_bare_items'] = [
+    'label' => 'Test inline items without ownership TCA columns',
+    'config' => [
+        'type' => 'inline',
+        'foreign_table' => 'tx_testsat_bare',
+        'foreign_field' => 'foreign_table_parent_uid',
+        'foreign_table_field' => 'tablenames',
+        'foreign_match_fields' => [
+            'fieldname' => 'tx_testsat_bare_items',
+        ],
+        'foreign_sortby' => 'sorting',
+    ],
+];
+
 ExtensionManagementUtility::addToAllTCAtypes(
     'tt_content',
-    'tx_testsat_items',
+    'tx_testsat_items,tx_testsat_bare_items',
     '',
     'after:bodytext',
 );

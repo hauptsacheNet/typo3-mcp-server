@@ -1849,6 +1849,7 @@ class WriteTableTool extends AbstractRecordTool
                 $embeddedRelations[$fieldName] = [
                     'foreignTable' => $foreignTable,
                     'foreignField' => $foreignField,
+                    'ownershipFields' => $this->getInlineOwnershipFields($config, $parentTable),
                     'order' => $order,
                 ];
             } else {
@@ -1860,6 +1861,27 @@ class WriteTableTool extends AbstractRecordTool
         return $embeddedRelations;
     }
     
+    /**
+     * Columns a child row needs besides the foreign field so TYPO3 resolves it back
+     * to its parent: foreign_table_field (the parent table) and foreign_match_fields.
+     *
+     * @return array<string, mixed> column => value
+     */
+    protected function getInlineOwnershipFields(array $config, string $parentTable): array
+    {
+        $fields = [];
+
+        if (is_array($config['foreign_match_fields'] ?? null)) {
+            $fields = $config['foreign_match_fields'];
+        }
+
+        if (!empty($config['foreign_table_field']) && $parentTable !== '') {
+            $fields[$config['foreign_table_field']] = $parentTable;
+        }
+
+        return $fields;
+    }
+
     /**
      * Process embedded inline relations (hideTable=true)
      */
@@ -2015,7 +2037,7 @@ class WriteTableTool extends AbstractRecordTool
      * is therefore enforced the same way the TYPO3 backend itself reorders records: a
      * chain of DataHandler "move after" commands.
      *
-     * @param array $embeddedRelations fieldName => ['foreignTable', 'foreignField', 'order'],
+     * @param array $embeddedRelations fieldName => ['foreignTable', 'foreignField', 'ownershipFields', 'order'],
      *              as returned by processInlineRelations()
      * @return CallToolResult|null an error result if TYPO3 rejected a reorder, null on success
      */
@@ -2049,6 +2071,9 @@ class WriteTableTool extends AbstractRecordTool
 
             // Point newly created children back at their parent. RelationHandler's
             // writeForeignField is for MM relations, not direct foreign fields.
+            // foreign_table_field and foreign_match_fields go along: DataHandler drops
+            // them from the child datamap when the child table has no TCA column for
+            // them, and TYPO3 can't find the child again without them.
             if (!empty($newUids)) {
                 $connection = GeneralUtility::makeInstance(ConnectionPool::class)
                     ->getConnectionForTable($foreignTable);
@@ -2056,7 +2081,7 @@ class WriteTableTool extends AbstractRecordTool
                 foreach ($newUids as $childUid) {
                     $connection->update(
                         $foreignTable,
-                        [$foreignField => $parentLiveUid],
+                        [$foreignField => $parentLiveUid] + ($relation['ownershipFields'] ?? []),
                         ['uid' => $childUid]
                     );
                 }
