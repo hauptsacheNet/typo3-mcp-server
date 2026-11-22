@@ -137,6 +137,15 @@ $writeTool->execute([
 - **Solution**: After DataHandler creates child records, we directly update the foreign field in the database
 - The same goes for `foreign_table_field` (e.g. `tablenames`) and `foreign_match_fields` (e.g. `fieldname`): when the child table has no TCA column for them, DataHandler drops them from the datamap and TYPO3 can no longer find the child through its parent (empty relation in the backend form, page module and Record API). They are written in the same direct UPDATE as the foreign field
 - **Working Example**: Creating news with embedded links now works correctly
+- New children get the pid the backend form would give them (`TcaInline::addInlineFirstPid()`,
+  see `WriteTableTool::resolveInlineChildPid()`): children of a page are stored on that page
+  itself (its live uid), children of a page translation on the default-language page, children
+  of any other record on the record's pid. Nested children inherit the same pid. Page TSconfig
+  and permissions of a child are resolved from this pid.
+- The record's pid is read with its workspace overlay. A record moved in the workspace keeps
+  its old page in the live row; the move pointer holds the new one. Children stored on the old
+  page would be deleted with it, and publishing fails once that page is gone ("not assigned to
+  a valid page").
 
 ### 2. File References (sys_file_reference)
 - `sys_file_reference` is fully supported as an embedded inline relation (`hideTable=true`)
