@@ -1447,7 +1447,12 @@ class TableAccessService implements SingletonInterface
 
         // Fields that store a single scalar: an array would end up as the string
         // "Array" in DataHandler (with a PHP warning), so name the problem instead.
-        if (is_array($value) && in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color', 'number', 'datetime', 'password', 'uuid', 'country', 'radio'], true)) {
+        // A FlexForm stored in a plain text column (recognised by its name) is
+        // written as an array of settings and converted to XML afterwards.
+        if (is_array($value)
+            && in_array($fieldType, ['input', 'text', 'email', 'link', 'slug', 'color', 'number', 'datetime', 'password', 'uuid', 'country', 'radio'], true)
+            && !$this->isFlexFormField($table, $fieldName)
+        ) {
             return "Field '{$fieldName}' expects a single value, not a list";
         }
 

@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool\EdgeCase;
 
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use PHPUnit\Framework\Attributes\DataProvider;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -505,6 +506,33 @@ class InvalidDataTest extends AbstractFunctionalTest
         // Read through the workspace-aware tool: a staged "Array" would only
         // show up in the workspace version, not in the live row.
         $this->assertSame($titleBefore, $this->readPageTitle(1));
+    }
+
+    /**
+     * A FlexForm kept in a text column is recognised by its field name and
+     * takes an array of settings, so the single-value check must not apply.
+     */
+    public function testArrayIsAcceptedForFlexFormInTextColumn(): void
+    {
+        $GLOBALS['TCA']['tt_content']['columns']['tx_test_flexform'] = [
+            'label' => 'FlexForm in a text column',
+            'config' => ['type' => 'text'],
+        ];
+        $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+
+        try {
+            $this->assertNull($tableAccessService->validateFieldValue(
+                'tt_content',
+                'tx_test_flexform',
+                ['settings' => ['limit' => 5]]
+            ));
+            $this->assertStringContainsString(
+                'expects a single value',
+                (string)$tableAccessService->validateFieldValue('tt_content', 'bodytext', ['a', 'b'])
+            );
+        } finally {
+            unset($GLOBALS['TCA']['tt_content']['columns']['tx_test_flexform']);
+        }
     }
 
     private function readPageTitle(int $uid): string
