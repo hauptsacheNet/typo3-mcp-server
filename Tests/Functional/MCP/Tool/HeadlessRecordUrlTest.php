@@ -12,6 +12,7 @@ use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Symfony\Component\Yaml\Yaml;
 use TYPO3\CMS\Core\Cache\CacheManager;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Core\SystemEnvironmentBuilder;
 use TYPO3\CMS\Core\Http\NormalizedParams;
 use TYPO3\CMS\Core\Http\ServerRequest;
@@ -60,6 +61,8 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
     protected function tearDown(): void
     {
         unset($GLOBALS['TYPO3_REQUEST']);
+        // The instance is shared by all tests of this class
+        GeneralUtility::rmdir($this->instancePath . '/typo3conf/sites/shop-site', true);
         parent::tearDown();
     }
 
@@ -159,6 +162,20 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
         $this->writeSiteConfiguration(1);
 
         $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => 'https://api.example.com/about/team']));
+    }
+
+    /**
+     * A second site without headless mode lives below the host the first site
+     * publishes to. Its URLs are site URLs already and must not be mapped onto
+     * the API host of the first site.
+     */
+    public function testGetPageKeepsUrlOfOtherSiteSharingThePublicHost(): void
+    {
+        $this->writeSiteConfiguration(1);
+        $this->addShopSite('https://www.example.com/shop/');
+
+        $this->assertStringContainsString('UID: 51' . "\n", $this->executeGetPage(['url' => 'https://www.example.com/shop/cart']));
+        $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => 'https://www.example.com/about/team']));
     }
 
     public function testFrontendDomainIsAdvertisedForGetPage(): void
@@ -275,6 +292,35 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
         $result = $tool->execute($params);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         return $result->content[0]->text;
+    }
+
+    /**
+     * A second site with its own page tree (root 50, subpage 51 "/cart"), not headless.
+     */
+    private function addShopSite(string $base): void
+    {
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable('pages');
+        $connection->insert('pages', ['uid' => 50, 'pid' => 0, 'title' => 'Shop', 'slug' => '/', 'doktype' => 1, 'is_siteroot' => 1]);
+        $connection->insert('pages', ['uid' => 51, 'pid' => 50, 'title' => 'Cart', 'slug' => '/cart', 'doktype' => 1]);
+
+        $siteDir = $this->instancePath . '/typo3conf/sites/shop-site';
+        GeneralUtility::mkdir_deep($siteDir);
+        GeneralUtility::writeFile($siteDir . '/config.yaml', Yaml::dump([
+            'rootPageId' => 50,
+            'base' => $base,
+            'headless' => 0,
+            'websiteTitle' => 'Shop',
+            'languages' => [
+                0 => [
+                    'title' => 'English', 'enabled' => true, 'languageId' => 0, 'base' => '/',
+                    'locale' => 'en_US.UTF-8', 'iso-639-1' => 'en', 'hreflang' => 'en-us',
+                    'direction' => 'ltr', 'navigationTitle' => 'English',
+                ],
+            ],
+            'routes' => [],
+            'errorHandling' => [],
+        ], 99, 2), true);
+        GeneralUtility::makeInstance(CacheManager::class)->getCache('core')->flush();
     }
 
     /**

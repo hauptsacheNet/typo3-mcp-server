@@ -391,21 +391,33 @@ class RecordUrlService
         }
         $path = rtrim($uri->getPath(), '/') . '/';
 
-        // The longest matching base wins; a URL that is already below a site base
-        // (which may share the host with a public base) stays as it is
+        $matches = function (UriInterface $candidate) use ($host, $uri, $path): int {
+            $candidatePath = rtrim($candidate->getPath(), '/') . '/';
+            return strtolower($candidate->getHost()) === $host
+                && ($candidate->getPort() === null || $candidate->getPort() === $uri->getPort())
+                && str_starts_with($path, $candidatePath)
+                ? strlen($candidatePath)
+                : -1;
+        };
+
+        // The longest matching base wins
+        $bases = $this->getPublicBases();
         $match = null;
         $matchLength = -1;
-        foreach ($this->getPublicBases() as $base) {
-            foreach (['site' => $base['site'], 'public' => $base['public']] as $kind => $candidate) {
-                $candidatePath = rtrim($candidate->getPath(), '/') . '/';
-                if (strtolower($candidate->getHost()) === $host
-                    && ($candidate->getPort() === null || $candidate->getPort() === $uri->getPort())
-                    && str_starts_with($path, $candidatePath)
-                    && strlen($candidatePath) > $matchLength
-                ) {
-                    $match = $kind === 'public' ? $base : null;
-                    $matchLength = strlen($candidatePath);
-                }
+        foreach ($bases['public'] as $base) {
+            $length = $matches($base['public']);
+            if ($length > $matchLength) {
+                $match = $base;
+                $matchLength = $length;
+            }
+        }
+        // A URL that is already below a site base stays as it is. That holds for
+        // every site, also one whose URLs no listener moves and which shares the
+        // host with the public base of another site. On a tie the site base wins:
+        // TYPO3 resolves that URL already.
+        foreach ($bases['site'] as $siteBase) {
+            if ($matches($siteBase) >= $matchLength) {
+                return $url;
             }
         }
         if ($match === null) {
@@ -427,25 +439,35 @@ class RecordUrlService
     {
         $hosts = array_map(
             static fn(array $base): string => strtolower($base['public']->getHost()),
-            $this->getPublicBases()
+            $this->getPublicBases()['public']
         );
         return array_values(array_unique($hosts));
     }
 
     /**
-     * The root URL of every site language as handed out (listeners applied),
-     * paired with the language base it stands for, where the two differ. Not
-     * memoized: the result depends on the site configuration and the current
+     * "public": the root URL of every site language as handed out (listeners
+     * applied), paired with the language base it stands for, where the two differ.
+     * "site": the base of every site language, moved or not.
+     *
+     * Not memoized: the result depends on the site configuration and the current
      * request, and costs one router call per language.
      *
-     * @return list<array{public: UriInterface, site: UriInterface}>
+     * @return array{public: list<array{public: UriInterface, site: UriInterface}>, site: list<UriInterface>}
      */
     protected function getPublicBases(): array
     {
         $context = $this->createContext(0);
-        $bases = [];
+        $bases = ['public' => [], 'site' => []];
         foreach ($this->siteFinder->getAllSites() as $site) {
             foreach ($site->getLanguages() as $language) {
+                // Not generated through the router: on TYPO3 14 its URLs are already rewritten
+                $siteUri = $language->getBase();
+                $siteUri = $siteUri->withPath(rtrim($siteUri->getPath(), '/') . '/');
+                if ($siteUri->getHost() === '') {
+                    continue;
+                }
+                $bases['site'][] = $siteUri;
+
                 // The root page as row, so the router needs no database lookup
                 $rootPage = [
                     'uid' => $site->getRootPageId(),
@@ -458,15 +480,12 @@ class RecordUrlService
                 } catch (\Throwable) {
                     continue;
                 }
-                // Not generated through the router: on TYPO3 14 its URLs are already rewritten
-                $siteUri = $language->getBase();
-                $siteUri = $siteUri->withPath(rtrim($siteUri->getPath(), '/') . '/');
-                if ($public->getHost() === '' || $siteUri->getHost() === ''
+                if ($public->getHost() === ''
                     || (string)$public->withScheme('') === (string)$siteUri->withScheme('')
                 ) {
                     continue;
                 }
-                $bases[] = ['public' => $public, 'site' => $siteUri];
+                $bases['public'][] = ['public' => $public, 'site' => $siteUri];
             }
         }
         return $bases;
