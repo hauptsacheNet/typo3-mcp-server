@@ -28,25 +28,25 @@ abstract class LlmTestCase extends FunctionalTestCase
      * Keys are used as labels in TestDox output and must include model version.
      */
     protected const MODELS = [
-        'haiku-4.5' => 'anthropic/claude-haiku-4.5',
-        'gpt-5.4-mini' => 'openai/gpt-5.4-mini',
-        'gpt-oss-120b' => 'openai/gpt-oss-120b',
-        'mistral-large-2512' => 'mistralai/mistral-large-2512',
-        'gemini-3-flash' => 'google/gemini-3-flash-preview',
+        'haiku-5.5' => 'anthropic/claude-haiku-5.5',
+        'gpt-6-luna' => 'openai/gpt-6-luna',
+        'mistral-large-4' => 'mistralai/mistral-large-4-0',
+        'gemini-3.8-flash' => 'google/gemini-3.8-flash',
+        // Open-weight models, as used for self-hosting
+        'glm-5.3-flash' => 'z-ai/glm-5.3-flash',
+        'deepseek-v4.1-flash' => 'deepseek/deepseek-v4.1-flash-1017',
+        'qwen3.8-27b' => 'qwen/qwen3.8-27b',
     ];
 
     protected const MODEL_OPTIONS = [
-        // 'medium' instead of 'high': gpt-5.4-mini and haiku-4.5 dominate the
-        // OpenRouter spend (~$5 + ~$4 per full suite run). 'high' was added in
-        // PR #59 for reliability; 'medium' keeps tool-use coherent without the
-        // extra reasoning-token tax. Re-tighten if majority-pass starts failing.
-        'gpt-5.4-mini' => ['reasoning' => ['effort' => 'medium']],
-        // Claude Haiku 4.5 extended thinking explicitly enabled. Empirically
-        // measured (haiku-only filter, 32 tests): with reasoning OFF we get
-        // 3 hard failures retried 3× each (~9 retry rounds), with reasoning ON
-        // we get 0 failures, 1 retry, and ~10% lower avg test time. The extra
-        // reasoning tokens are cheaper than the avoided retry round-trips.
-        'haiku-4.5' => ['reasoning' => ['enabled' => true]],
+        // 'medium' instead of 'high' keeps tool use coherent without the extra
+        // reasoning-token tax (measured on gpt-5.4-mini, PR #59). Re-tighten if
+        // majority-pass starts failing.
+        'gpt-6-luna' => ['reasoning' => ['effort' => 'medium']],
+        // Claude Haiku 5.5 thinks by default (adaptive, effort medium). It does
+        // not support a non-default temperature; OpenRouter silently drops it,
+        // so it is left out instead of pretending to run at temperature 0.
+        'haiku-5.5' => ['temperature' => null],
     ];
 
     protected array $coreExtensionsToLoad = [
@@ -233,7 +233,7 @@ abstract class LlmTestCase extends FunctionalTestCase
             $this->llmClient = new OpenRouterClient($openRouterKey);
             $this->llmProvider = 'openrouter';
             if (empty($this->llmModel)) {
-                $this->llmModel = self::MODELS['haiku-4.5'];
+                $this->llmModel = self::MODELS['haiku-5.5'];
             }
             return;
         }

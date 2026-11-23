@@ -29,6 +29,8 @@ class TableAccessService implements SingletonInterface
     protected TcaSchemaFactory $tcaSchemaFactory;
     protected ?array $additionalReadOnlyTables = null;
     protected ?array $additionalStandaloneTables = null;
+    protected ?array $allowedTables = null;
+    protected ?array $excludedTables = null;
     protected ?int $cachedDefaultTSconfigPid = null;
 
     public function __construct()
@@ -82,6 +84,78 @@ class TableAccessService implements SingletonInterface
             $this->additionalStandaloneTables = GeneralUtility::trimExplode(',', (string)$config, true);
         }
         return $this->additionalStandaloneTables;
+    }
+
+    /**
+     * Get the table patterns the MCP tools are limited to. Empty means no limit.
+     * Configured via extension settings (allowedTables).
+     */
+    public function getAllowedTables(): array
+    {
+        if ($this->allowedTables === null) {
+            $this->allowedTables = $this->getTableListSetting('allowedTables');
+        }
+        return $this->allowedTables;
+    }
+
+    /**
+     * Get the table patterns the MCP tools never expose.
+     * Configured via extension settings (excludedTables).
+     */
+    public function getExcludedTables(): array
+    {
+        if ($this->excludedTables === null) {
+            $this->excludedTables = $this->getTableListSetting('excludedTables');
+        }
+        return $this->excludedTables;
+    }
+
+    /**
+     * Whether the extension settings allowedTables / excludedTables let the MCP
+     * tools expose this table. This applies on top of the backend user's
+     * permissions and to admins as well, so a site can keep tables with personal
+     * data (form submissions, leads, ...) out of reach of AI clients while the
+     * editors still work with them in the backend.
+     */
+    public function isTableExposedByConfiguration(string $table): bool
+    {
+        if ($this->matchesTablePatterns($table, $this->getExcludedTables())) {
+            return false;
+        }
+        $allowedTables = $this->getAllowedTables();
+        return $allowedTables === [] || $this->matchesTablePatterns($table, $allowedTables);
+    }
+
+    /**
+     * Read a comma-separated table list from the extension settings.
+     */
+    protected function getTableListSetting(string $setting): array
+    {
+        try {
+            $config = GeneralUtility::makeInstance(ExtensionConfiguration::class)
+                ->get('mcp_server', $setting);
+        } catch (\Exception) {
+            $config = '';
+        }
+        return GeneralUtility::trimExplode(',', (string)$config, true);
+    }
+
+    /**
+     * Whether a table matches one of the patterns: an exact table name, or a
+     * prefix followed by "*" (e.g. tx_powermail_domain_model_*).
+     */
+    protected function matchesTablePatterns(string $table, array $patterns): bool
+    {
+        foreach ($patterns as $pattern) {
+            if (str_ends_with($pattern, '*')) {
+                if (str_starts_with($table, substr($pattern, 0, -1))) {
+                    return true;
+                }
+            } elseif ($table === $pattern) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -181,6 +255,12 @@ class TableAccessService implements SingletonInterface
             return $info;
         }
         
+        // Check the allowedTables / excludedTables extension settings
+        if (!$this->isTableExposedByConfiguration($table)) {
+            $info['reasons'][] = 'Table is not exposed to MCP clients by the extension configuration (allowedTables / excludedTables)';
+            return $info;
+        }
+
         // Check if table is a truly restricted system table
         if ($this->isRestrictedSystemTable($table)) {
             $info['reasons'][] = 'Table is restricted for security or system integrity reasons';
@@ -318,7 +398,7 @@ class TableAccessService implements SingletonInterface
                     $fields[$field->getName()] = $field->getConfiguration();
                 }
             }
-        } elseif (!empty($type) && $schema->hasSubSchema($type)) {
+        } elseif ($type !== '' && $schema->hasSubSchema($type)) {
             $subSchema = $schema->getSubSchema($type);
 
             // Get fields from the sub-schema
@@ -329,13 +409,13 @@ class TableAccessService implements SingletonInterface
         } else {
             // No specific type or type doesn't exist - use main schema
             // Try to fall back to a reasonable default type
-            if (empty($type) && $schema->supportsSubSchema()) {
+            if ($type === '' && $schema->supportsSubSchema()) {
                 // Get the default type from TCA configuration
                 $tca = $GLOBALS['TCA'][$table] ?? [];
                 $defaultType = $tca['columns'][$schema->getSubSchemaTypeInformation()->getFieldName()]['config']['default'] ?? '';
                 
-                if (!empty($defaultType) && $schema->hasSubSchema($defaultType)) {
-                    $subSchema = $schema->getSubSchema($defaultType);
+                if ((string)$defaultType !== '' && $schema->hasSubSchema((string)$defaultType)) {
+                    $subSchema = $schema->getSubSchema((string)$defaultType);
                     foreach ($subSchema->getFields() as $field) {
                         $fieldName = $field->getName();
                         $fields[$fieldName] = $field->getConfiguration();
@@ -743,6 +823,17 @@ class TableAccessService implements SingletonInterface
             if ($foreignTable && !$this->canAccessTable($foreignTable)) {
                 return false;
             }
+        }
+
+        // Fields the backend shows to admins only (pages.TSconfig, tsconfig_includes,
+        // editlock). They are no exclude fields, so non_exclude_fields cannot grant
+        // them, and DataHandler drops them for every non-admin
+        // (DataHandler::getExcludeListArray()). Offering them would make WriteTable
+        // report a change that is never stored.
+        if (($fieldConfig['displayCond'] ?? '') === 'HIDE_FOR_NON_ADMINS'
+            && !$this->getBackendUser()->isAdmin()
+        ) {
+            return false;
         }
 
         // Check exclude fields
@@ -1384,16 +1475,6 @@ class TableAccessService implements SingletonInterface
             }
         }
 
-        // Validate required fields
-        if (!empty($config['required']) || !empty($config['eval'])) {
-            $evalRules = GeneralUtility::trimExplode(',', $config['eval'] ?? '', true);
-            if (!empty($config['required']) || in_array('required', $evalRules)) {
-                if ($value === null || $value === '' || (is_array($value) && empty($value))) {
-                    return "Field '{$fieldName}' is required";
-                }
-            }
-        }
-
         return null;
     }
     
@@ -1407,9 +1488,18 @@ class TableAccessService implements SingletonInterface
     
     /**
      * Translate a TCA label using TYPO3's language system
+     *
+     * Handles `LLL:` references and, since TYPO3 14, label references in the
+     * short translation domain syntax (e.g. `frontend.db.tt_content:bodytext`,
+     * `core.form.tabs:general`). Any other string is a constant label and is
+     * returned unchanged.
      */
     public static function translateLabel(string $label): string
     {
+        if (self::isLabelDomainReference($label)) {
+            return self::translateLabelReference($label);
+        }
+
         if (strpos($label, 'LLL:') === 0) {
             // Check if language service is available, initialize if not
             if (!isset($GLOBALS['LANG'])) {
@@ -1457,5 +1547,39 @@ class TableAccessService implements SingletonInterface
         }
         
         return $label;
+    }
+
+    /**
+     * Whether the label uses the TYPO3 14 translation domain syntax
+     * `<extension>.<resource>:<key>`. The domain part follows the core's
+     * TranslationDomainResolver::isValidDomainName(), so plain labels and
+     * values such as `uid_local:type` are not mistaken for references.
+     */
+    private static function isLabelDomainReference(string $label): bool
+    {
+        return (bool)preg_match('/^[a-z0-9_]+(\.[a-z0-9_]+)+:\S+$/', $label);
+    }
+
+    /**
+     * Resolve a label reference without `LLL:` prefix (TYPO3 14 translation
+     * domain syntax, e.g. `frontend.db.tt_content:bodytext`).
+     *
+     * LanguageService::sL() resolves these on TYPO3 14 and returns the input
+     * unchanged when nothing is found. TYPO3 13 does not know the syntax and
+     * returns the input unchanged as well.
+     */
+    private static function translateLabelReference(string $label): string
+    {
+        try {
+            if (!isset($GLOBALS['LANG'])) {
+                $GLOBALS['LANG'] = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(\TYPO3\CMS\Core\Localization\LanguageServiceFactory::class)
+                    ->create('default');
+            }
+            $translated = (string)$GLOBALS['LANG']->sL($label);
+        } catch (\Throwable) {
+            return $label;
+        }
+
+        return $translated !== '' ? $translated : $label;
     }
 }

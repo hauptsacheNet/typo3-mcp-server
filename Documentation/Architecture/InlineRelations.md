@@ -135,6 +135,7 @@ $writeTool->execute([
 - The foreign field (e.g., `parent` in `tx_news_domain_model_link`) is NOT defined in the child table's TCA columns by design
 - DataHandler only processes fields that are defined in TCA columns, so it ignores the foreign field
 - **Solution**: After DataHandler creates child records, we directly update the foreign field in the database
+- The same goes for `foreign_table_field` (e.g. `tablenames`) and `foreign_match_fields` (e.g. `fieldname`): when the child table has no TCA column for them, DataHandler drops them from the datamap and TYPO3 can no longer find the child through its parent (empty relation in the backend form, page module and Record API). They are written in the same direct UPDATE as the foreign field
 - Because the children are linked after the parent was written, DataHandler's own bookkeeping for the parent field is missing: the counter column stays 0 and `sys_refindex` has no rows for the relation. Both are synced after linking (`syncInlineParentBookkeeping()`), also for nested children, always on the workspace version of the parent and never on its live row. Without the `sys_refindex` rows the workspace dependency resolver does not see the children, so publishing the parent would leave them in the workspace
 - **Working Example**: Creating news with embedded links now works correctly
 
@@ -197,6 +198,16 @@ parent's inline descendants (live rows and rows created in the workspace) before
 versioning and writes back every column that changed afterwards, so only new
 version rows remain.
 
+The workspace module groups a parent and its children into one collection by the
+parent's `sys_refindex` rows in the workspace (`CollectionService`, `ElementEntity::getChildren()`).
+For a `foreign_field` relation these rows belong to the parent, but DataHandler only
+reindexes the record it writes, so a child written on its own would be listed apart
+from its news. `InlineParentService` therefore also recomputes the workspace rows of the
+written record and every ancestor (`ReferenceIndex::updateRefIndexTable()`). Known gap:
+core's `RelationHandler` resolves foreign field children from the live rows, so a child
+pointed at another parent in the workspace stays grouped below its old parent until it
+is published.
+
 ### 5. Sorting and Positioning
 - Sorting is handled through `sorting` or `sorting_foreign` fields
 - Position management (before/after) not fully implemented for inline relations
@@ -237,8 +248,9 @@ $dataMap = [
         'NEW456' => ['other_field' => 'value']  // Note: foreign field NOT included
     ]
 ];
-// After DataHandler processing, foreign fields are updated directly:
-$connection->update('child_table', ['parent_field' => $parentUid], ['uid' => $childUid]);
+// After DataHandler processing, foreign fields are updated directly
+// (together with foreign_table_field / foreign_match_fields, if the relation has them):
+$connection->update('child_table', ['parent_field' => $parentUid, 'tablenames' => 'parent_table'], ['uid' => $childUid]);
 ```
 
 ## Future Improvements

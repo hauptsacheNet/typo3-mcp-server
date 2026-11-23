@@ -372,7 +372,11 @@ case "${TEST_SUITE}" in
 
             echo "Running Playwright tests..."
             cd "${ROOT_DIR}/Build"
-            if [ ! -d node_modules ]; then
+            # Reinstall when the lockfile changed since the last install (npm keeps
+            # a copy in node_modules/.package-lock.json), so an existing install
+            # never runs an outdated Playwright version.
+            if [ ! -f node_modules/.package-lock.json ] \
+                || [ package-lock.json -nt node_modules/.package-lock.json ]; then
                 npm ci
             fi
             # Idempotent: a no-op once the matching browser is cached.
@@ -453,7 +457,7 @@ case "${TEST_SUITE}" in
             -w /app \
             -e "TYPO3_BASE_URL=http://web:8080" \
             -e "CI=${CI:-}" \
-            "mcr.microsoft.com/playwright:v1.52.0-noble" \
+            "mcr.microsoft.com/playwright:v1.64.1-noble" \
             /bin/bash -c "npm ci 2>/dev/null && npx playwright test ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
         ;;
     *)

@@ -108,7 +108,15 @@ class PermissionEdgeCaseTest extends AbstractFunctionalTest
         $user = $this->setUpBackendUser(2);
         $user->groupData['tables_select'] = 'pages,tt_content';
         $user->groupData['tables_modify'] = 'tt_content'; // Can only modify tt_content
-        
+        // Writes need a workspace the user is a member of: without one the tool
+        // refuses to write instead of falling back to live
+        $this->connectionPool->getConnectionForTable('sys_workspace')->insert('sys_workspace', [
+            'pid' => 0,
+            'title' => 'Editor workspace',
+            'adminusers' => 'be_users_1',
+            'members' => 'be_users_2',
+        ]);
+
         // Should be able to read pages
         $readResult = $this->readTool->execute([
             'table' => 'pages',

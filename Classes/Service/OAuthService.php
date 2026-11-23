@@ -372,24 +372,33 @@ class OAuthService
     {
         $currentTime = time();
 
-        // Clean up expired authorization codes
-        $codeConnection = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('tx_mcpserver_oauth_codes');
-
-        $codeConnection->delete(
-            'tx_mcpserver_oauth_codes',
-            ['expires' => $codeConnection->createQueryBuilder()->expr()->lt('expires', $currentTime)]
-        );
+        // Connection::delete()/update() compare their criteria for equality,
+        // so a range condition needs the query builder.
+        $codeQueryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_mcpserver_oauth_codes');
+        $codeQueryBuilder
+            ->delete('tx_mcpserver_oauth_codes')
+            ->where($codeQueryBuilder->expr()->lt(
+                'expires',
+                $codeQueryBuilder->createNamedParameter($currentTime, \Doctrine\DBAL\ParameterType::INTEGER)
+            ))
+            ->executeStatement();
 
         // Mark expired tokens as deleted
-        $tokenConnection = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('tx_mcpserver_access_tokens');
-
-        $tokenConnection->update(
-            'tx_mcpserver_access_tokens',
-            ['deleted' => 1, 'tstamp' => $currentTime],
-            ['expires' => $tokenConnection->createQueryBuilder()->expr()->lt('expires', $currentTime)]
-        );
+        $tokenQueryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_mcpserver_access_tokens');
+        $tokenQueryBuilder
+            ->update('tx_mcpserver_access_tokens')
+            ->set('deleted', 1)
+            ->set('tstamp', $currentTime)
+            ->where(
+                $tokenQueryBuilder->expr()->eq('deleted', $tokenQueryBuilder->createNamedParameter(0, \Doctrine\DBAL\ParameterType::INTEGER)),
+                $tokenQueryBuilder->expr()->lt(
+                    'expires',
+                    $tokenQueryBuilder->createNamedParameter($currentTime, \Doctrine\DBAL\ParameterType::INTEGER)
+                )
+            )
+            ->executeStatement();
 
         $this->cleanupStaleClients($currentTime);
     }
