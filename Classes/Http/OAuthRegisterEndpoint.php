@@ -39,6 +39,8 @@ class OAuthRegisterEndpoint
      * room for many users behind one address. It can be changed through
      * $GLOBALS['TYPO3_CONF_VARS']['SYS']['rateLimiter']['mcp-oauth-register'].
      */
+    private const RATE_LIMIT_LOCK_SLOTS = 16;
+
     private const RATE_LIMIT = [
         'id' => 'mcp-oauth-register',
         'policy' => 'sliding_window',
@@ -143,8 +145,11 @@ class OAuthRegisterEndpoint
         // The limiter reads, decides and saves its state in separate steps.
         // Without a lock across PHP workers, parallel requests would each see
         // the same remaining allowance and could repeatedly exceed the limit.
+        // The file lock strategy keeps one file per lock name, so addresses
+        // share a fixed pool of locks instead of getting one each.
+        $lockSlot = crc32($remoteAddress) % self::RATE_LIMIT_LOCK_SLOTS;
         $locker = GeneralUtility::makeInstance(LockFactory::class)
-            ->createLocker('mcp-oauth-register-' . sha1($remoteAddress));
+            ->createLocker('mcp-oauth-register-' . $lockSlot);
         $locker->acquire();
         try {
             $storage = new CachingFrameworkStorage(GeneralUtility::makeInstance(CacheManager::class));
