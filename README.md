@@ -104,6 +104,11 @@ The defaults work out of the box. All settings live in the extension configurati
 | `excludedTables`             | *(empty)*           | Tables the MCP never exposes, whatever the backend user may access (admins included). A trailing `*` matches a prefix. For tables with personal data that editors still need in the backend, e.g. `tx_powermail_domain_model_mail,tx_powermail_domain_model_answer` |
 | `allowedTables`              | *(empty)*           | If set, the MCP only exposes these tables (prefix `*` allowed), so tables of extensions added later stay hidden until listed. `excludedTables` wins. Empty means every table the user may access |
 | `workspacePreviewLinks`      | `1`                 | Adds login-free workspace preview links to pages and records with unpublished changes, so the AI can show the result of its edits. Anyone with such a link sees all unpublished changes of the workspace until it expires |
+| `oauthAccessTokenMinutes`    | `60`                | Access token lifetime for MCP clients that support refresh tokens (e.g. Claude). They renew it automatically |
+| `oauthTokenHoursWithoutRefresh` | `12`             | Access token lifetime for MCP clients without refresh tokens: the user authorizes them again once per working day |
+| `oauthRefreshTokenDays`      | `30`                | How long a client may stay unused before the user has to authorize it again; every refresh starts this period anew |
+| `oauthMaxSessionHours`       | `0`                 | Upper limit from the authorization on, however actively a client is used; after it the user authorizes again (e.g. to pass SSO group checks). `0` = no limit |
+| `manualTokenDays`            | `30`                | Lifetime of tokens created in the backend module or with `mcp:oauth create`, for tools that cannot do OAuth (e.g. n8n) |
 
 Records other than pages and content elements (news, events, ...) get a frontend URL once
 `TCEMAIN.preview.<table>` is configured in Page TSconfig — the same setting that powers the

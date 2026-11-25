@@ -105,6 +105,7 @@ class McpServerModuleController
             'wellKnownAuthServerUrl' => $wellKnownAuthServerUrl,
             'wellKnownProtectedResourceUrl' => $wellKnownProtectedResourceUrl,
             'createWorkspaceUrl' => $createWorkspaceUrl,
+            'invalidLifetimeSettings' => $backendUser->isAdmin() ? $this->oauthService->getInvalidLifetimeSettings() : [],
         ];
         
         // Include CSS for endpoint status indicators
@@ -233,6 +234,8 @@ class McpServerModuleController
             $client = $clients[$clientUid] ?? null;
             $isWellKnown = $client !== null && $client['client_id'] === OAuthService::WELL_KNOWN_CLIENT_ID;
             $tokenLabel = (string)($token['client_name'] ?? '');
+            $refreshExpires = (int)($token['refresh_expires'] ?? 0);
+            $renews = $refreshExpires > time();
 
             if ($client !== null && !$isWellKnown) {
                 $primary = $client['client_name'] !== '' ? $client['client_name'] : $tokenLabel;
@@ -248,7 +251,10 @@ class McpServerModuleController
                 'token_label' => $secondary,
                 'created' => date('Y-m-d H:i:s', $token['crdate']),
                 'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
-                'expires' => date('Y-m-d H:i:s', $token['expires']),
+                // A grant with a refresh token stays connected until the refresh
+                // token expires; its short-lived access token renews on its own.
+                'expires' => date('Y-m-d H:i:s', $renews ? $refreshExpires : max((int)$token['expires'], $refreshExpires)),
+                'renews' => $renews,
             ];
         }, $tokens);
     }

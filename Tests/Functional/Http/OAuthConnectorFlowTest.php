@@ -56,6 +56,9 @@ class OAuthConnectorFlowTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/be_users.csv');
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/pages.csv');
         $this->importRestrictedEditorFixture();
+        // Every test registers clients from the same address; the registration
+        // rate limit is counted across tests in the cache
+        GeneralUtility::makeInstance(\TYPO3\CMS\Core\Cache\CacheManager::class)->getCache('ratelimiter')->flush();
     }
 
     protected function tearDown(): void
@@ -233,6 +236,280 @@ class OAuthConnectorFlowTest extends FunctionalTestCase
     // Helpers
     // ------------------------------------------------------------------
 
+    public function testClientWithRefreshGrantRenewsItsAccessSilently(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+
+        $this->assertNotEmpty($token['refresh_token'] ?? null, 'A client that registered the refresh_token grant gets a refresh token');
+        $this->assertSame(3600, $token['expires_in']);
+
+        $refreshed = $this->decodeJson($this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $token['refresh_token'],
+            'client_id' => $client['client_id'],
+        ]), 200);
+
+        $this->assertNotSame($token['access_token'], $refreshed['access_token']);
+        $this->assertNotSame($token['refresh_token'], $refreshed['refresh_token'], 'The refresh token rotates');
+        $this->assertSame(3600, $refreshed['expires_in']);
+
+        // The new access token works, the replaced one no longer does
+        $this->assertSame(200, $this->callTool($refreshed['access_token'])->getStatusCode());
+        $old = $this->callTool($token['access_token']);
+        $this->assertSame(401, $old->getStatusCode());
+        $this->assertStringContainsString('error="invalid_token"', $old->getHeaderLine('WWW-Authenticate'));
+    }
+
+    public function testClientWithoutRefreshGrantGetsATokenForAWorkingDay(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK], ['authorization_code']);
+        $token = $this->obtainToken($client);
+
+        $this->assertArrayNotHasKey('refresh_token', $token);
+        $this->assertSame(12 * 3600, $token['expires_in']);
+    }
+
+    public function testLifetimesFollowTheExtensionConfiguration(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server']['oauthAccessTokenMinutes'] = '5';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server']['oauthTokenHoursWithoutRefresh'] = '8h';
+
+        $withRefresh = $this->obtainToken($this->registerClient([self::HOSTED_CALLBACK]));
+        $withoutRefresh = $this->obtainToken($this->registerClient([self::HOSTED_CALLBACK], ['authorization_code']));
+
+        $this->assertSame(300, $withRefresh['expires_in']);
+        $this->assertSame(12 * 3600, $withoutRefresh['expires_in'], 'An invalid value falls back to the default');
+        $this->assertSame(
+            ['oauthTokenHoursWithoutRefresh'],
+            GeneralUtility::makeInstance(\Hn\McpServer\Service\OAuthService::class)->getInvalidLifetimeSettings(),
+            'The invalid value is reported for the backend module'
+        );
+    }
+
+    public function testRefreshTokenIsBoundToItsClient(): void
+    {
+        $token = $this->obtainToken($this->registerClient([self::HOSTED_CALLBACK]));
+        $otherClient = $this->registerClient([self::HOSTED_CALLBACK]);
+
+        $response = $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $token['refresh_token'],
+            'client_id' => $otherClient['client_id'],
+        ]);
+
+        $this->assertSame('invalid_grant', $this->decodeJson($response, 400)['error']);
+    }
+
+    public function testReplacedRefreshTokenIsRefusedWithinGracePeriodAndRevokesTheGrantLater(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+        $refresh = fn(string $refreshToken) => $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshToken,
+            'client_id' => $client['client_id'],
+        ]);
+
+        $current = $this->decodeJson($refresh($token['refresh_token']), 200);
+
+        // A retry right after the rotation (lost response, parallel refresh) is only refused
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($token['refresh_token']), 400)['error']);
+        $this->assertSame(200, $this->callTool($current['access_token'])->getStatusCode());
+
+        // Later the old token can only be in someone else's hands: the grant ends
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_refresh_token_history')
+            ->update('tx_mcpserver_refresh_token_history', ['replaced' => time() - 120], ['grant_uid' => $this->grantUid()]);
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($token['refresh_token']), 400)['error']);
+        $this->assertSame(401, $this->callTool($current['access_token'])->getStatusCode());
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($current['refresh_token']), 400)['error']);
+    }
+
+    /**
+     * Whoever holds a stolen refresh token may refresh twice before the
+     * legitimate client does: its token, two rotations old, must still be
+     * recognised as replaced and end the grant.
+     */
+    public function testRefreshTokenReplacedSeveralRotationsAgoRevokesTheGrant(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+        $refresh = fn(string $refreshToken) => $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshToken,
+            'client_id' => $client['client_id'],
+        ]);
+
+        $second = $this->decodeJson($refresh($token['refresh_token']), 200);
+        $third = $this->decodeJson($refresh($second['refresh_token']), 200);
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_refresh_token_history')
+            ->update('tx_mcpserver_refresh_token_history', ['replaced' => time() - 120], ['grant_uid' => $this->grantUid()]);
+
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($token['refresh_token']), 400)['error']);
+        $this->assertSame(401, $this->callTool($third['access_token'])->getStatusCode());
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($third['refresh_token']), 400)['error']);
+    }
+
+    /**
+     * Lowering the refresh lifetime must not make the cleanup forget replaced
+     * tokens that would still have been valid under the lifetime they got.
+     */
+    public function testCleanupKeepsReplacedRefreshTokensAfterTheLifetimeWasLowered(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+        $refresh = fn(string $refreshToken) => $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshToken,
+            'client_id' => $client['client_id'],
+        ]);
+        $current = $this->decodeJson($refresh($token['refresh_token']), 200);
+
+        // Rotated two days ago, then the lifetime is lowered to one day
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_refresh_token_history')
+            ->update('tx_mcpserver_refresh_token_history', ['replaced' => time() - 2 * 86400], ['grant_uid' => $this->grantUid()]);
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server']['oauthRefreshTokenDays'] = '1';
+        GeneralUtility::makeInstance(\Hn\McpServer\Service\OAuthService::class)->cleanupExpired();
+
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($token['refresh_token']), 400)['error']);
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($current['refresh_token']), 400)['error'], 'The replay still ends the grant');
+    }
+
+    /**
+     * A client whose access token expired but whose refresh token is still
+     * valid is in use: the cleanup must not remove it.
+     */
+    public function testCleanupKeepsClientWithLiveRefreshToken(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+        $longAgo = time() - 400 * 86400;
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_oauth_clients')
+            ->update('tx_mcpserver_oauth_clients', ['crdate' => $longAgo, 'last_used' => $longAgo], ['client_id' => $client['client_id']]);
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->update('tx_mcpserver_access_tokens', ['expires' => time() - 1], ['uid' => $this->grantUid()]);
+
+        GeneralUtility::makeInstance(\Hn\McpServer\Service\OAuthService::class)->cleanupExpired();
+
+        $this->decodeJson($this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $token['refresh_token'],
+            'client_id' => $client['client_id'],
+        ]), 200);
+    }
+
+    /**
+     * With a maximum session length the user has to authorize again after it
+     * (e.g. to pass the SSO login), however actively the client refreshes.
+     */
+    public function testRefreshIsRefusedAfterTheMaximumSessionLength(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server']['oauthMaxSessionHours'] = '1';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server']['oauthAccessTokenMinutes'] = '90';
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+        $this->assertSame(3600, $token['expires_in'], 'No token outlives the session');
+
+        $refresh = fn(string $refreshToken) => $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshToken,
+            'client_id' => $client['client_id'],
+        ]);
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->update('tx_mcpserver_access_tokens', ['crdate' => time() - 3000], ['uid' => $this->grantUid()]);
+        $refreshed = $this->decodeJson($refresh($token['refresh_token']), 200);
+        $this->assertLessThanOrEqual(600, $refreshed['expires_in'], 'A refresh near the end only runs up to it');
+
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->update('tx_mcpserver_access_tokens', ['crdate' => time() - 3601], ['uid' => $this->grantUid()]);
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($refreshed['refresh_token']), 400)['error']);
+    }
+
+    public function testRefreshIsRefusedForADisabledBackendUser(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+
+        $this->getConnectionPool()->getConnectionForTable('be_users')
+            ->update('be_users', ['disable' => 1], ['uid' => self::RESTRICTED_EDITOR_UID]);
+
+        $response = $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $token['refresh_token'],
+            'client_id' => $client['client_id'],
+        ]);
+        $this->assertSame('invalid_grant', $this->decodeJson($response, 400)['error']);
+    }
+
+    public function testExpiredRefreshTokenIsRefused(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->update('tx_mcpserver_access_tokens', ['refresh_expires' => time() - 1], ['deleted' => 0]);
+
+        $response = $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $token['refresh_token'],
+            'client_id' => $client['client_id'],
+        ]);
+        $this->assertSame('invalid_grant', $this->decodeJson($response, 400)['error']);
+    }
+
+    public function testTokenResponsesAreNotCached(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        [$verifier, $challenge] = $this->createPkcePair();
+        $code = $this->authorize(self::RESTRICTED_EDITOR_UID, $client['client_id'], self::HOSTED_CALLBACK, $challenge, 's');
+        $response = $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'authorization_code',
+            'code' => $code,
+            'redirect_uri' => self::HOSTED_CALLBACK,
+            'client_id' => $client['client_id'],
+            'code_verifier' => $verifier,
+        ]);
+
+        $this->assertSame('no-store', $response->getHeaderLine('Cache-Control'));
+    }
+
+    /**
+     * The one grant the test created.
+     */
+    private function grantUid(): int
+    {
+        return (int)$this->getConnectionPool()->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->select(['uid'], 'tx_mcpserver_access_tokens', ['deleted' => 0])
+            ->fetchOne();
+    }
+
+    /**
+     * Authorization code flow up to the token response.
+     */
+    private function obtainToken(array $client): array
+    {
+        [$verifier, $challenge] = $this->createPkcePair();
+        $code = $this->authorize(self::RESTRICTED_EDITOR_UID, $client['client_id'], self::HOSTED_CALLBACK, $challenge, 's');
+        return $this->decodeJson($this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'authorization_code',
+            'code' => $code,
+            'redirect_uri' => self::HOSTED_CALLBACK,
+            'client_id' => $client['client_id'],
+            'code_verifier' => $verifier,
+        ]), 200);
+    }
+
+    private function callTool(string $accessToken): ResponseInterface
+    {
+        $this->unsetBackendUserContext();
+        return $this->dispatchJson('POST', '/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'tools/call',
+            'params' => ['name' => 'GetPageTree', 'arguments' => ['startPage' => 0, 'depth' => 1], '_meta' => self::modernMeta()],
+        ], $accessToken, ['MCP-Protocol-Version' => '2026-07-28', 'Mcp-Method' => 'tools/call', 'Mcp-Name' => 'GetPageTree']);
+    }
+
     private static function modernMeta(): array
     {
         return [
@@ -245,12 +522,12 @@ class OAuthConnectorFlowTest extends FunctionalTestCase
     /**
      * RFC 7591 registration as a public client, the way remote MCP clients do it.
      */
-    private function registerClient(array $redirectUris): array
+    private function registerClient(array $redirectUris, array $grantTypes = ['authorization_code', 'refresh_token']): array
     {
         $response = $this->dispatchJson('POST', '/mcp_oauth/register', [
             'client_name' => 'Remote MCP client',
             'redirect_uris' => $redirectUris,
-            'grant_types' => ['authorization_code', 'refresh_token'],
+            'grant_types' => $grantTypes,
             'response_types' => ['code'],
             'token_endpoint_auth_method' => 'none',
         ]);
