@@ -28,5 +28,8 @@ oauthTokenHoursWithoutRefresh = 12
 # cat=mcp/oauth; type=int+; label=Refresh token lifetime (days): How long a client may stay unused before the user has to authorize it again. Each refresh starts this period anew, so a client in regular use stays connected. Default: 30
 oauthRefreshTokenDays = 30
 
+# cat=mcp/oauth; type=int+; label=Maximum session length (hours): Upper limit counted from the moment the user authorized a client, however actively it is used. After it the user has to authorize again, e.g. to pass the SSO login and its group checks again. 0 = no limit. Default: 0
+oauthMaxSessionHours = 0
+
 # cat=mcp/oauth; type=int+; label=Manual token lifetime (days): Lifetime of tokens created in the MCP Server backend module or with "mcp:oauth create", for tools that cannot do OAuth (e.g. n8n). Default: 30
 manualTokenDays = 30

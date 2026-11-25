@@ -8,6 +8,7 @@ use Hn\McpServer\Exception\InvalidClientMetadataException;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\Connection;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Log\LogManager;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use Psr\Http\Message\ServerRequestInterface;
@@ -50,6 +51,17 @@ class OAuthService
     private const REFRESH_REUSE_GRACE_SECONDS = 60;
 
     private const REFRESH_HISTORY_TABLE = 'tx_mcpserver_refresh_token_history';
+
+    /**
+     * The lifetime settings, with whether 0 is a valid value ("no limit").
+     */
+    private const LIFETIME_SETTINGS = [
+        'oauthAccessTokenMinutes' => false,
+        'oauthTokenHoursWithoutRefresh' => false,
+        'oauthRefreshTokenDays' => false,
+        'oauthMaxSessionHours' => true,
+        'manualTokenDays' => false,
+    ];
 
     /**
      * Generate authorization URL for OAuth flow
@@ -209,6 +221,10 @@ class OAuthService
         $now = time();
         $accessToken = $this->generateSecureToken();
         $accessLifetime = $supportsRefresh ? $this->getAccessTokenLifetime() : $this->getTokenLifetimeWithoutRefresh();
+        $maxSession = $this->getMaxSessionLifetime();
+        if ($maxSession > 0) {
+            $accessLifetime = min($accessLifetime, $maxSession);
+        }
         $row = [
             'pid' => 0,
             'tstamp' => $now,
@@ -227,7 +243,7 @@ class OAuthService
         if ($supportsRefresh) {
             $refreshToken = $this->generateSecureToken();
             $row['refresh_token'] = $this->hashToken($refreshToken);
-            $row['refresh_expires'] = $now + $this->getRefreshTokenLifetime();
+            $row['refresh_expires'] = $now + ($maxSession > 0 ? min($this->getRefreshTokenLifetime(), $maxSession) : $this->getRefreshTokenLifetime());
         }
 
         GeneralUtility::makeInstance(ConnectionPool::class)
@@ -283,9 +299,20 @@ class OAuthService
             return null;
         }
 
+        // The session ends at the configured maximum after the authorization,
+        // however actively it is used: the user has to log in again.
+        $sessionEnd = PHP_INT_MAX;
+        $maxSession = $this->getMaxSessionLifetime();
+        if ($maxSession > 0) {
+            $sessionEnd = (int)$grant['crdate'] + $maxSession;
+            if ($now >= $sessionEnd) {
+                return null;
+            }
+        }
+
         $accessToken = $this->generateSecureToken();
         $newRefreshToken = $this->generateSecureToken();
-        $accessLifetime = $this->getAccessTokenLifetime();
+        $accessLifetime = min($this->getAccessTokenLifetime(), $sessionEnd - $now);
         $clientIp = $request !== null ? (string)($request->getServerParams()['REMOTE_ADDR'] ?? '') : '';
 
         // Only the request that still finds the old refresh token rotates it:
@@ -297,7 +324,7 @@ class OAuthService
             ->set('token_version', 1)
             ->set('expires', $now + $accessLifetime)
             ->set('refresh_token', $this->hashToken($newRefreshToken))
-            ->set('refresh_expires', $now + $this->getRefreshTokenLifetime())
+            ->set('refresh_expires', min($now + $this->getRefreshTokenLifetime(), $sessionEnd))
             ->set('tstamp', $now)
             ->set('last_used', $now)
             ->set('last_used_ip', $clientIp)
@@ -1258,22 +1285,78 @@ class OAuthService
     }
 
     /**
-     * A positive whole number from the extension configuration, in seconds.
-     * Anything else (unset, 0, negative, not a number) means the default:
-     * a token must never become unlimited by a typo.
+     * Upper limit for a grant counted from the authorization, in seconds;
+     * 0 = none. After it, refreshing is refused and the user has to authorize
+     * again, e.g. to pass the SSO login and its group checks again.
+     * Extension setting "oauthMaxSessionHours".
      */
-    private function getLifetimeSetting(string $name, int $default, int $unitSeconds): int
+    public function getMaxSessionLifetime(): int
+    {
+        return $this->getLifetimeSetting('oauthMaxSessionHours', 0, 3600, true);
+    }
+
+    /**
+     * Token lifetime settings that hold a value which is not a valid whole
+     * number and therefore fall back to their default. Shown in the backend
+     * module, since a typo here changes how long tokens live.
+     *
+     * @return list<string> setting names
+     */
+    public function getInvalidLifetimeSettings(): array
+    {
+        $invalid = [];
+        foreach (self::LIFETIME_SETTINGS as $name => $zeroAllowed) {
+            if (!$this->isValidLifetimeValue($this->readExtensionSetting($name), $zeroAllowed)) {
+                $invalid[] = $name;
+            }
+        }
+        return $invalid;
+    }
+
+    /**
+     * A whole number from the extension configuration, in seconds. An empty
+     * value means the default (configuration never saved). Anything else that
+     * is not a valid number also means the default and is logged: the default
+     * may be longer than intended, but a token never becomes unlimited.
+     */
+    private function getLifetimeSetting(string $name, int $default, int $unitSeconds, bool $zeroAllowed = false): int
+    {
+        $value = $this->readExtensionSetting($name);
+        if ($value === null || $value === '') {
+            return $default * $unitSeconds;
+        }
+        if (!$this->isValidLifetimeValue($value, $zeroAllowed)) {
+            GeneralUtility::makeInstance(LogManager::class)->getLogger(__CLASS__)->warning(
+                sprintf(
+                    'The extension setting mcp_server.%s has the invalid value "%s"; using the default %d instead.',
+                    $name,
+                    is_scalar($value) ? (string)$value : get_debug_type($value),
+                    $default
+                )
+            );
+            return $default * $unitSeconds;
+        }
+        return (int)$value * $unitSeconds;
+    }
+
+    private function isValidLifetimeValue(mixed $value, bool $zeroAllowed): bool
+    {
+        if ($value === null || $value === '') {
+            return true;
+        }
+        return filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => $zeroAllowed ? 0 : 1]]) !== false;
+    }
+
+    private function readExtensionSetting(string $name): mixed
     {
         try {
             // The whole array, not the path: a missing path makes core sync
             // all ext_conf_template.txt files on every call
             $settings = GeneralUtility::makeInstance(ExtensionConfiguration::class)->get('mcp_server');
         } catch (\Throwable) {
-            $settings = [];
+            return null;
         }
-        $value = is_array($settings) ? ($settings[$name] ?? null) : null;
-        $value = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-        return ($value === false ? $default : $value) * $unitSeconds;
+        return is_array($settings) ? ($settings[$name] ?? null) : null;
     }
 
     /**

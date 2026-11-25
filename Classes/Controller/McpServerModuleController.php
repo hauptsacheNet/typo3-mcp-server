@@ -105,6 +105,7 @@ class McpServerModuleController
             'wellKnownAuthServerUrl' => $wellKnownAuthServerUrl,
             'wellKnownProtectedResourceUrl' => $wellKnownProtectedResourceUrl,
             'createWorkspaceUrl' => $createWorkspaceUrl,
+            'invalidLifetimeSettings' => $backendUser->isAdmin() ? $this->oauthService->getInvalidLifetimeSettings() : [],
         ];
         
         // Include CSS for endpoint status indicators
