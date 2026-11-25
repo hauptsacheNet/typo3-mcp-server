@@ -113,6 +113,11 @@ class RequestBodyLimitTest extends AbstractFunctionalTest
                 range(1, 21)
             )]],
             'redirect_uri too long' => [['redirect_uris' => ['https://example.com/' . str_repeat('a', 2048)]]],
+            // Each one within the limit, but the JSON-escaped slashes exceed the text column
+            'redirect_uris too long once encoded' => [['redirect_uris' => array_map(
+                static fn(int $i): string => 'https://example.com/' . $i . str_repeat('/', 2020),
+                range(1, 20)
+            )]],
         ];
     }
 

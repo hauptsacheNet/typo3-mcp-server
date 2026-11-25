@@ -527,6 +527,11 @@ class OAuthService
                 throw new InvalidClientMetadataException('A redirect_uri must not be longer than 2048 characters');
             }
         }
+        // Stored JSON-encoded in a text column (64 KiB); json_encode() escapes
+        // every "/", so the stored value can be about twice the raw length.
+        if (strlen((string)json_encode($redirectUris)) > 65535) {
+            throw new InvalidClientMetadataException('redirect_uris is too long');
+        }
     }
 
     /**
