@@ -315,38 +315,45 @@ class OAuthService
         $accessLifetime = min($this->getAccessTokenLifetime(), $sessionEnd - $now);
         $clientIp = $request !== null ? (string)($request->getServerParams()['REMOTE_ADDR'] ?? '') : '';
 
-        // Only the request that still finds the old refresh token rotates it:
-        // two parallel refreshes cannot both get a new pair.
-        $updateBuilder = $connection->createQueryBuilder();
-        $rotated = $updateBuilder
-            ->update('tx_mcpserver_access_tokens')
-            ->set('token', $this->hashToken($accessToken))
-            ->set('token_version', 1)
-            ->set('expires', $now + $accessLifetime)
-            ->set('refresh_token', $this->hashToken($newRefreshToken))
-            ->set('refresh_expires', min($now + $this->getRefreshTokenLifetime(), $sessionEnd))
-            ->set('tstamp', $now)
-            ->set('last_used', $now)
-            ->set('last_used_ip', $clientIp)
-            ->where(
-                $updateBuilder->expr()->eq('uid', $updateBuilder->createNamedParameter((int)$grant['uid'], Connection::PARAM_INT)),
-                $updateBuilder->expr()->eq('refresh_token', $updateBuilder->createNamedParameter($refreshHash))
-            )
-            ->executeStatement();
-        if ($rotated === 0) {
-            return null;
-        }
+        // Rotation and history entry commit together: a rotation without its
+        // history entry would leave the replaced token unrecognised, and the
+        // client without a usable pair if the second write failed.
+        $rotated = $connection->transactional(function (Connection $connection) use ($grant, $refreshHash, $accessToken, $newRefreshToken, $now, $accessLifetime, $sessionEnd, $clientIp): bool {
+            // Only the request that still finds the old refresh token rotates it:
+            // two parallel refreshes cannot both get a new pair.
+            $updateBuilder = $connection->createQueryBuilder();
+            $affected = $updateBuilder
+                ->update('tx_mcpserver_access_tokens')
+                ->set('token', $this->hashToken($accessToken))
+                ->set('token_version', 1)
+                ->set('expires', $now + $accessLifetime)
+                ->set('refresh_token', $this->hashToken($newRefreshToken))
+                ->set('refresh_expires', min($now + $this->getRefreshTokenLifetime(), $sessionEnd))
+                ->set('tstamp', $now)
+                ->set('last_used', $now)
+                ->set('last_used_ip', $clientIp)
+                ->where(
+                    $updateBuilder->expr()->eq('uid', $updateBuilder->createNamedParameter((int)$grant['uid'], Connection::PARAM_INT)),
+                    $updateBuilder->expr()->eq('refresh_token', $updateBuilder->createNamedParameter($refreshHash))
+                )
+                ->executeStatement();
+            if ($affected === 0) {
+                return false;
+            }
 
-        // Every replaced refresh token stays known to its grant, not only the
-        // last one: whoever refreshes twice with a stolen token must not leave
-        // the legitimate client's older token unrecognised.
-        GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable(self::REFRESH_HISTORY_TABLE)
-            ->insert(self::REFRESH_HISTORY_TABLE, [
+            // Every replaced refresh token stays known to its grant, not only the
+            // last one: whoever refreshes twice with a stolen token must not leave
+            // the legitimate client's older token unrecognised.
+            $connection->insert(self::REFRESH_HISTORY_TABLE, [
                 'refresh_token' => $refreshHash,
                 'grant_uid' => (int)$grant['uid'],
                 'replaced' => $now,
             ]);
+            return true;
+        });
+        if (!$rotated) {
+            return null;
+        }
 
         $this->touchClient($clientUid);
 
