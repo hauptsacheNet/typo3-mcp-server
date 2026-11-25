@@ -104,8 +104,9 @@ CREATE TABLE tx_mcpserver_refresh_token_history (
 	refresh_token varchar(255) DEFAULT '' NOT NULL,
 	grant_uid int(11) unsigned DEFAULT '0' NOT NULL,
 	replaced int(11) unsigned DEFAULT '0' NOT NULL,
+	expires int(11) unsigned DEFAULT '0' NOT NULL,
 
 	PRIMARY KEY (uid),
 	KEY refresh_token (refresh_token),
-	KEY replaced (replaced)
+	KEY expires (expires)
 );

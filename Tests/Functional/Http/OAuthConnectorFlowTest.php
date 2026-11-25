@@ -56,6 +56,9 @@ class OAuthConnectorFlowTest extends FunctionalTestCase
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/be_users.csv');
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/pages.csv');
         $this->importRestrictedEditorFixture();
+        // Every test registers clients from the same address; the registration
+        // rate limit is counted across tests in the cache
+        GeneralUtility::makeInstance(\TYPO3\CMS\Core\Cache\CacheManager::class)->getCache('ratelimiter')->flush();
     }
 
     protected function tearDown(): void
@@ -345,6 +348,31 @@ class OAuthConnectorFlowTest extends FunctionalTestCase
         $this->assertSame('invalid_grant', $this->decodeJson($refresh($token['refresh_token']), 400)['error']);
         $this->assertSame(401, $this->callTool($third['access_token'])->getStatusCode());
         $this->assertSame('invalid_grant', $this->decodeJson($refresh($third['refresh_token']), 400)['error']);
+    }
+
+    /**
+     * Lowering the refresh lifetime must not make the cleanup forget replaced
+     * tokens that would still have been valid under the lifetime they got.
+     */
+    public function testCleanupKeepsReplacedRefreshTokensAfterTheLifetimeWasLowered(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+        $refresh = fn(string $refreshToken) => $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshToken,
+            'client_id' => $client['client_id'],
+        ]);
+        $current = $this->decodeJson($refresh($token['refresh_token']), 200);
+
+        // Rotated two days ago, then the lifetime is lowered to one day
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_refresh_token_history')
+            ->update('tx_mcpserver_refresh_token_history', ['replaced' => time() - 2 * 86400], ['grant_uid' => $this->grantUid()]);
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['mcp_server']['oauthRefreshTokenDays'] = '1';
+        GeneralUtility::makeInstance(\Hn\McpServer\Service\OAuthService::class)->cleanupExpired();
+
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($token['refresh_token']), 400)['error']);
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($current['refresh_token']), 400)['error'], 'The replay still ends the grant');
     }
 
     /**

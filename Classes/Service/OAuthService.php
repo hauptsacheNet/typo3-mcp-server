@@ -348,6 +348,9 @@ class OAuthService
                 'refresh_token' => $refreshHash,
                 'grant_uid' => (int)$grant['uid'],
                 'replaced' => $now,
+                // Until then the replaced token would have been valid: as long
+                // as it could be used, its reuse must be recognised
+                'expires' => (int)$grant['refresh_expires'],
             ]);
             return true;
         });
@@ -621,15 +624,16 @@ class OAuthService
             )
             ->executeStatement();
 
-        // A replaced refresh token is remembered for as long as it could still
-        // have been valid; after that it is refused like any unknown token.
+        // A replaced refresh token is remembered for as long as it would have
+        // been valid; after that it is refused like any unknown token. Its own
+        // expiry counts, not the current setting, which may have been lowered.
         $historyQueryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable(self::REFRESH_HISTORY_TABLE);
         $historyQueryBuilder
             ->delete(self::REFRESH_HISTORY_TABLE)
             ->where($historyQueryBuilder->expr()->lt(
-                'replaced',
-                $historyQueryBuilder->createNamedParameter($currentTime - $this->getRefreshTokenLifetime(), \Doctrine\DBAL\ParameterType::INTEGER)
+                'expires',
+                $historyQueryBuilder->createNamedParameter($currentTime, \Doctrine\DBAL\ParameterType::INTEGER)
             ))
             ->executeStatement();
 
