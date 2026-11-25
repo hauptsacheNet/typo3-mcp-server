@@ -50,7 +50,7 @@ The value is the complete list of children; the array order is the display order
 
 - A `uid` must belong to the current parent. Children cannot be moved between parents;
   a foreign uid is rejected instead of silently deleting the real children.
-- An existing child is written on its workspace version, never on the live row.
+- When a workspace is active, an existing child is written on its workspace version, never on the live row.
 - Children can have embedded children themselves (a file inside a collection item).
   Nested relations to independent tables are rejected: those records need their own
   write so the client gets their uids back.
