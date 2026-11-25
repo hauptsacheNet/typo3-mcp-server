@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Service;
 
+use Hn\McpServer\Exception\InvalidClientMetadataException;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
@@ -490,6 +491,50 @@ class OAuthService
     }
 
     /**
+     * Reject client metadata the client table cannot hold.
+     *
+     * Registration is open to anyone, so nothing here may be trusted to have a
+     * sane size or type: an over-long value would otherwise be truncated or,
+     * with a strict SQL mode, fail the insert with a database error.
+     *
+     * @throws InvalidClientMetadataException
+     */
+    private function assertClientMetadataFitsStorage(mixed $clientName, mixed $scope, array $grantTypes, array $redirectUris): void
+    {
+        foreach (['client_name' => $clientName, 'scope' => $scope] as $field => $value) {
+            if (!is_string($value)) {
+                throw new InvalidClientMetadataException($field . ' must be a string');
+            }
+            if (mb_strlen($value) > 255) {
+                throw new InvalidClientMetadataException($field . ' must not be longer than 255 characters');
+            }
+        }
+
+        foreach ($grantTypes as $grantType) {
+            if (!is_string($grantType)) {
+                throw new InvalidClientMetadataException('grant_types must be a list of strings');
+            }
+        }
+        if (strlen((string)json_encode($grantTypes)) > 255) {
+            throw new InvalidClientMetadataException('grant_types is too long');
+        }
+
+        if (count($redirectUris) > 20) {
+            throw new InvalidClientMetadataException('No more than 20 redirect_uris are allowed');
+        }
+        foreach ($redirectUris as $uri) {
+            if (strlen($uri) > 2048) {
+                throw new InvalidClientMetadataException('A redirect_uri must not be longer than 2048 characters');
+            }
+        }
+        // Stored JSON-encoded in a text column (64 KiB); json_encode() escapes
+        // every "/", so the stored value can be about twice the raw length.
+        if (strlen((string)json_encode($redirectUris)) > 65535) {
+            throw new InvalidClientMetadataException('redirect_uris is too long');
+        }
+    }
+
+    /**
      * Register a new OAuth client dynamically (RFC 7591).
      *
      * The plain client_secret (if any) is returned to the caller exactly once
@@ -541,8 +586,9 @@ class OAuthService
             $storedSecret = $this->hashToken($plainSecret);
         }
 
-        $clientName = (string)($clientData['client_name'] ?? 'MCP Client');
-        $scope = (string)($clientData['scope'] ?? 'mcp_access');
+        $clientName = $clientData['client_name'] ?? 'MCP Client';
+        $scope = $clientData['scope'] ?? 'mcp_access';
+        $this->assertClientMetadataFitsStorage($clientName, $scope, $grantTypes, $redirectUris);
 
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable(self::CLIENTS_TABLE);

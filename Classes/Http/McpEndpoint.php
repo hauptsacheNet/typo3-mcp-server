@@ -29,6 +29,14 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class McpEndpoint
 {
     use CorsHeadersTrait;
+    use RequestBodyLimitTrait;
+
+    /**
+     * Upper bound for a JSON-RPC request body. Tool calls carry text, never
+     * files (those go through the upload endpoint), so this is far beyond
+     * anything a client legitimately sends.
+     */
+    private const MAX_BODY_BYTES = 4194304;
     use RequestUrlTrait;
 
     /**
@@ -202,7 +210,14 @@ class McpEndpoint
             // runner handle it directly. This keeps the whole request/response
             // cycle inside PSR-7 (no superglobals, no output buffering), which
             // also makes the endpoint testable in functional tests.
-            $mcpRequest = new HttpMessage((string)$request->getBody());
+            //
+            // The SDK buffers and decodes the body without a size limit, so it
+            // is bounded here, before the SDK sees it.
+            $requestBody = $this->readBodyWithLimit($request, self::MAX_BODY_BYTES);
+            if ($requestBody === null) {
+                return $this->createPayloadTooLargeResponse($request);
+            }
+            $mcpRequest = new HttpMessage($requestBody);
             $mcpRequest->setMethod($request->getMethod());
             $mcpRequest->setUri((string)$request->getUri());
             $mcpRequest->setQueryParams($request->getQueryParams());
@@ -313,6 +328,23 @@ class McpEndpoint
         // Fallback to query parameter for backward compatibility
         $queryParams = $request->getQueryParams();
         return $queryParams['token'] ?? null;
+    }
+
+    /**
+     * Answer a request whose body exceeds MAX_BODY_BYTES
+     */
+    private function createPayloadTooLargeResponse(ServerRequestInterface $request): ResponseInterface
+    {
+        $stream = new Stream('php://temp', 'rw');
+        $stream->write(json_encode([
+            'error' => 'Payload Too Large',
+            'message' => 'The request body exceeds the limit of ' . self::MAX_BODY_BYTES . ' bytes.',
+        ]));
+        $stream->rewind();
+
+        $response = new Response($stream, 413, ['Content-Type' => 'application/json']);
+
+        return $this->addCorsHeaders($response, $request);
     }
 
     /**
