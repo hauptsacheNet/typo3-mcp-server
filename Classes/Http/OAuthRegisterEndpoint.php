@@ -11,6 +11,7 @@ use Psr\Http\Message\ServerRequestInterface;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
 use TYPO3\CMS\Core\Cache\CacheManager;
 use TYPO3\CMS\Core\Http\NormalizedParams;
+use TYPO3\CMS\Core\Locking\LockFactory;
 use TYPO3\CMS\Core\RateLimiter\Storage\CachingFrameworkStorage;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Core\Http\Stream;
@@ -137,11 +138,22 @@ class OAuthRegisterEndpoint
             $GLOBALS['TYPO3_CONF_VARS']['SYS']['rateLimiter'][self::RATE_LIMIT['id']] ?? []
         );
         $normalizedParams = $request->getAttribute('normalizedParams') ?? NormalizedParams::createFromRequest($request);
+        $remoteAddress = $normalizedParams->getRemoteAddress();
 
-        $storage = new CachingFrameworkStorage(GeneralUtility::makeInstance(CacheManager::class));
-        $limit = (new RateLimiterFactory($config, $storage))
-            ->create($normalizedParams->getRemoteAddress())
-            ->consume();
+        // The limiter reads, decides and saves its state in separate steps.
+        // Without a lock across PHP workers, parallel requests would each see
+        // the same remaining allowance and could repeatedly exceed the limit.
+        $locker = GeneralUtility::makeInstance(LockFactory::class)
+            ->createLocker('mcp-oauth-register-' . sha1($remoteAddress));
+        $locker->acquire();
+        try {
+            $storage = new CachingFrameworkStorage(GeneralUtility::makeInstance(CacheManager::class));
+            $limit = (new RateLimiterFactory($config, $storage))
+                ->create($remoteAddress)
+                ->consume();
+        } finally {
+            $locker->release();
+        }
         if ($limit->isAccepted()) {
             return null;
         }
