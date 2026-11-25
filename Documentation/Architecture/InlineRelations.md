@@ -136,6 +136,7 @@ $writeTool->execute([
 - DataHandler only processes fields that are defined in TCA columns, so it ignores the foreign field
 - **Solution**: After DataHandler creates child records, we directly update the foreign field in the database
 - The same goes for `foreign_table_field` (e.g. `tablenames`) and `foreign_match_fields` (e.g. `fieldname`): when the child table has no TCA column for them, DataHandler drops them from the datamap and TYPO3 can no longer find the child through its parent (empty relation in the backend form, page module and Record API). They are written in the same direct UPDATE as the foreign field
+- Because the children are linked after the parent was written, DataHandler's own bookkeeping for the parent field is missing: the counter column stays 0 and `sys_refindex` has no rows for the relation. Both are synced after linking (`syncInlineParentBookkeeping()`), also for nested children, always on the workspace version of the parent and never on its live row. Without the `sys_refindex` rows the workspace dependency resolver does not see the children, so publishing the parent would leave them in the workspace
 - **Working Example**: Creating news with embedded links now works correctly
 
 ### 2. File References (sys_file_reference)
