@@ -127,6 +127,15 @@ For secure remote access with proper authentication:
 
 The HTTP endpoint runs with the permissions of the logged-in backend user: DB mounts, table and field permissions, and workspaces apply as in the TYPO3 backend.
 
+MCP clients register themselves through OAuth dynamic client registration (`/mcp_oauth/register`), which needs no login. It accepts 20 registrations per IP address within 15 minutes; a client registers once or twice when a connection is set up. To change the limit, override it in `config/system/additional.php`:
+
+```php
+$GLOBALS['TYPO3_CONF_VARS']['SYS']['rateLimiter']['mcp-oauth-register'] = [
+    'limit' => 50,
+    'interval' => '15 minutes',
+];
+```
+
 #### Option 2: Local Command Line Connection (Deprecated)
 
 > [!WARNING]
