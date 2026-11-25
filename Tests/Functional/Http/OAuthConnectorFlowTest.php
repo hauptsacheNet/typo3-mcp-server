@@ -310,11 +310,59 @@ class OAuthConnectorFlowTest extends FunctionalTestCase
         $this->assertSame(200, $this->callTool($current['access_token'])->getStatusCode());
 
         // Later the old token can only be in someone else's hands: the grant ends
-        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_access_tokens')
-            ->update('tx_mcpserver_access_tokens', ['tstamp' => time() - 120], ['deleted' => 0]);
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_refresh_token_history')
+            ->update('tx_mcpserver_refresh_token_history', ['replaced' => time() - 120], ['grant_uid' => $this->grantUid()]);
         $this->assertSame('invalid_grant', $this->decodeJson($refresh($token['refresh_token']), 400)['error']);
         $this->assertSame(401, $this->callTool($current['access_token'])->getStatusCode());
         $this->assertSame('invalid_grant', $this->decodeJson($refresh($current['refresh_token']), 400)['error']);
+    }
+
+    /**
+     * Whoever holds a stolen refresh token may refresh twice before the
+     * legitimate client does: its token, two rotations old, must still be
+     * recognised as replaced and end the grant.
+     */
+    public function testRefreshTokenReplacedSeveralRotationsAgoRevokesTheGrant(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+        $refresh = fn(string $refreshToken) => $this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshToken,
+            'client_id' => $client['client_id'],
+        ]);
+
+        $second = $this->decodeJson($refresh($token['refresh_token']), 200);
+        $third = $this->decodeJson($refresh($second['refresh_token']), 200);
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_refresh_token_history')
+            ->update('tx_mcpserver_refresh_token_history', ['replaced' => time() - 120], ['grant_uid' => $this->grantUid()]);
+
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($token['refresh_token']), 400)['error']);
+        $this->assertSame(401, $this->callTool($third['access_token'])->getStatusCode());
+        $this->assertSame('invalid_grant', $this->decodeJson($refresh($third['refresh_token']), 400)['error']);
+    }
+
+    /**
+     * A client whose access token expired but whose refresh token is still
+     * valid is in use: the cleanup must not remove it.
+     */
+    public function testCleanupKeepsClientWithLiveRefreshToken(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $token = $this->obtainToken($client);
+        $longAgo = time() - 400 * 86400;
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_oauth_clients')
+            ->update('tx_mcpserver_oauth_clients', ['crdate' => $longAgo, 'last_used' => $longAgo], ['client_id' => $client['client_id']]);
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->update('tx_mcpserver_access_tokens', ['expires' => time() - 1], ['uid' => $this->grantUid()]);
+
+        GeneralUtility::makeInstance(\Hn\McpServer\Service\OAuthService::class)->cleanupExpired();
+
+        $this->decodeJson($this->dispatchForm('/mcp_oauth/token', [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $token['refresh_token'],
+            'client_id' => $client['client_id'],
+        ]), 200);
     }
 
     public function testRefreshIsRefusedForADisabledBackendUser(): void
@@ -363,6 +411,16 @@ class OAuthConnectorFlowTest extends FunctionalTestCase
         ]);
 
         $this->assertSame('no-store', $response->getHeaderLine('Cache-Control'));
+    }
+
+    /**
+     * The one grant the test created.
+     */
+    private function grantUid(): int
+    {
+        return (int)$this->getConnectionPool()->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->select(['uid'], 'tx_mcpserver_access_tokens', ['deleted' => 0])
+            ->fetchOne();
     }
 
     /**

@@ -49,6 +49,8 @@ class OAuthService
      */
     private const REFRESH_REUSE_GRACE_SECONDS = 60;
 
+    private const REFRESH_HISTORY_TABLE = 'tx_mcpserver_refresh_token_history';
+
     /**
      * Generate authorization URL for OAuth flow
      */
@@ -295,7 +297,6 @@ class OAuthService
             ->set('token_version', 1)
             ->set('expires', $now + $accessLifetime)
             ->set('refresh_token', $this->hashToken($newRefreshToken))
-            ->set('refresh_token_previous', $refreshHash)
             ->set('refresh_expires', $now + $this->getRefreshTokenLifetime())
             ->set('tstamp', $now)
             ->set('last_used', $now)
@@ -309,6 +310,17 @@ class OAuthService
             return null;
         }
 
+        // Every replaced refresh token stays known to its grant, not only the
+        // last one: whoever refreshes twice with a stolen token must not leave
+        // the legitimate client's older token unrecognised.
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable(self::REFRESH_HISTORY_TABLE)
+            ->insert(self::REFRESH_HISTORY_TABLE, [
+                'refresh_token' => $refreshHash,
+                'grant_uid' => (int)$grant['uid'],
+                'replaced' => $now,
+            ]);
+
         $this->touchClient($clientUid);
 
         return $this->buildTokenResponse($accessToken, $accessLifetime, $newRefreshToken);
@@ -320,27 +332,29 @@ class OAuthService
      */
     private function handleReplacedRefreshToken(string $refreshHash, int $clientUid, int $now): void
     {
-        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getConnectionForTable('tx_mcpserver_access_tokens');
-        $queryBuilder = $connection->createQueryBuilder();
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable(self::REFRESH_HISTORY_TABLE);
         $queryBuilder->getRestrictions()->removeAll();
-        $grant = $queryBuilder
-            ->select('uid', 'tstamp')
-            ->from('tx_mcpserver_access_tokens')
+        $replaced = $queryBuilder
+            ->select('h.grant_uid', 'h.replaced')
+            ->from(self::REFRESH_HISTORY_TABLE, 'h')
+            ->join('h', 'tx_mcpserver_access_tokens', 't', $queryBuilder->expr()->eq('t.uid', $queryBuilder->quoteIdentifier('h.grant_uid')))
             ->where(
-                $queryBuilder->expr()->eq('refresh_token_previous', $queryBuilder->createNamedParameter($refreshHash)),
-                $queryBuilder->expr()->eq('client_uid', $queryBuilder->createNamedParameter($clientUid, Connection::PARAM_INT)),
-                $queryBuilder->expr()->eq('deleted', $queryBuilder->createNamedParameter(0, Connection::PARAM_INT))
+                $queryBuilder->expr()->eq('h.refresh_token', $queryBuilder->createNamedParameter($refreshHash)),
+                $queryBuilder->expr()->eq('t.client_uid', $queryBuilder->createNamedParameter($clientUid, Connection::PARAM_INT)),
+                $queryBuilder->expr()->eq('t.deleted', $queryBuilder->createNamedParameter(0, Connection::PARAM_INT))
             )
             ->executeQuery()
             ->fetchAssociative();
 
-        if ($grant && $now - (int)$grant['tstamp'] > self::REFRESH_REUSE_GRACE_SECONDS) {
-            $connection->update(
-                'tx_mcpserver_access_tokens',
-                ['deleted' => 1, 'tstamp' => $now],
-                ['uid' => (int)$grant['uid']]
-            );
+        if ($replaced && $now - (int)$replaced['replaced'] > self::REFRESH_REUSE_GRACE_SECONDS) {
+            GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable('tx_mcpserver_access_tokens')
+                ->update(
+                    'tx_mcpserver_access_tokens',
+                    ['deleted' => 1, 'tstamp' => $now],
+                    ['uid' => (int)$replaced['grant_uid']]
+                );
         }
     }
 
@@ -573,6 +587,18 @@ class OAuthService
             )
             ->executeStatement();
 
+        // A replaced refresh token is remembered for as long as it could still
+        // have been valid; after that it is refused like any unknown token.
+        $historyQueryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable(self::REFRESH_HISTORY_TABLE);
+        $historyQueryBuilder
+            ->delete(self::REFRESH_HISTORY_TABLE)
+            ->where($historyQueryBuilder->expr()->lt(
+                'replaced',
+                $historyQueryBuilder->createNamedParameter($currentTime - $this->getRefreshTokenLifetime(), \Doctrine\DBAL\ParameterType::INTEGER)
+            ))
+            ->executeStatement();
+
         $this->cleanupStaleClients($currentTime);
     }
 
@@ -624,7 +650,10 @@ class OAuthService
             ->where(
                 $tqb->expr()->in('client_uid', $tqb->createNamedParameter($candidateUids, \Doctrine\DBAL\ArrayParameterType::INTEGER)),
                 $tqb->expr()->eq('deleted', $tqb->createNamedParameter(0)),
-                $tqb->expr()->gt('expires', $tqb->createNamedParameter($currentTime))
+                $tqb->expr()->or(
+                    $tqb->expr()->gt('expires', $tqb->createNamedParameter($currentTime)),
+                    $tqb->expr()->gt('refresh_expires', $tqb->createNamedParameter($currentTime))
+                )
             )
             ->executeQuery()
             ->fetchFirstColumn();
