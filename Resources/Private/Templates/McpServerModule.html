@@ -387,7 +387,12 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]</code></pre>
                                                     </td>
                                                     <td><small class="text-muted">{token.created}</small></td>
                                                     <td><small class="text-muted">{token.last_used}</small></td>
-                                                    <td><small class="text-muted">{token.expires}</small></td>
+                                                    <td>
+                                                        <small class="text-muted">{token.expires}</small>
+                                                        <f:if condition="{token.renews}">
+                                                            <br><small class="text-muted" title="The client renews its access automatically. The date moves forward each time it does.">renews while in use</small>
+                                                        </f:if>
+                                                    </td>
                                                     <td>
                                                         <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="{token.uid}">
                                                             <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-delete" data-identifier="actions-delete">

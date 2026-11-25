@@ -36,6 +36,7 @@ class OAuthTokenEndpoint
             // Extract parameters (support both form data and JSON)
             $grantType = $parsedBody['grant_type'] ?? '';
             $code = $parsedBody['code'] ?? '';
+            $refreshToken = $parsedBody['refresh_token'] ?? '';
             $clientId = $parsedBody['client_id'] ?? '';
             $clientSecret = $parsedBody['client_secret'] ?? null;
             $codeVerifier = $parsedBody['code_verifier'] ?? null;
@@ -50,12 +51,15 @@ class OAuthTokenEndpoint
             }
 
             // Validate required parameters
-            if ($grantType !== 'authorization_code') {
-                return $this->createErrorResponse($request, 'unsupported_grant_type', 'Only authorization_code grant type is supported');
+            if ($grantType !== 'authorization_code' && $grantType !== 'refresh_token') {
+                return $this->createErrorResponse($request, 'unsupported_grant_type', 'Supported grant types: authorization_code, refresh_token');
             }
 
-            if (empty($code)) {
+            if ($grantType === 'authorization_code' && empty($code)) {
                 return $this->createErrorResponse($request, 'invalid_request', 'Missing required parameter: code');
+            }
+            if ($grantType === 'refresh_token' && (!is_string($refreshToken) || $refreshToken === '')) {
+                return $this->createErrorResponse($request, 'invalid_request', 'Missing required parameter: refresh_token');
             }
 
             $oauthService = GeneralUtility::makeInstance(OAuthService::class);
@@ -67,26 +71,35 @@ class OAuthTokenEndpoint
                 return $this->createErrorResponse($request, 'invalid_client', 'Invalid client_secret');
             }
 
-            // Exchange code for token (also enforces redirect_uri match per RFC 6749 §4.1.3
-            // and code-to-client binding per RFC 6749 §10.5)
-            $tokenData = $oauthService->exchangeCodeForToken($code, $codeVerifier, $request, $redirectUri, $client['client_id']);
-
-            if (!$tokenData) {
-                return $this->createErrorResponse($request, 'invalid_grant', 'Invalid or expired authorization code');
+            if ($grantType === 'refresh_token') {
+                // RFC 6749 §6: the refresh token must have been issued to this client
+                $tokenData = $oauthService->refreshAccessToken($refreshToken, $client, $request);
+                if (!$tokenData) {
+                    return $this->createErrorResponse($request, 'invalid_grant', 'Invalid or expired refresh token');
+                }
+            } else {
+                // Exchange code for token (also enforces redirect_uri match per RFC 6749 §4.1.3
+                // and code-to-client binding per RFC 6749 §10.5)
+                $tokenData = $oauthService->exchangeCodeForToken($code, $codeVerifier, $request, $redirectUri, $client['client_id']);
+                if (!$tokenData) {
+                    return $this->createErrorResponse($request, 'invalid_grant', 'Invalid or expired authorization code');
+                }
             }
 
-            // Log successful token exchange for debugging
-            error_log("OAuth: Successfully exchanged code for token: " . substr($tokenData['access_token'], 0, 20) . "...");
-            
             // Return token response
             $stream = new Stream('php://temp', 'rw');
             $stream->write(json_encode($tokenData));
             $stream->rewind();
 
+            // RFC 6749 §5.1: responses carrying tokens must not be cached
             $response = new Response(
                 $stream,
                 200,
-                ['Content-Type' => 'application/json']
+                [
+                    'Content-Type' => 'application/json',
+                    'Cache-Control' => 'no-store',
+                    'Pragma' => 'no-cache',
+                ]
             );
             
             return $this->addCorsHeaders($response, $request);

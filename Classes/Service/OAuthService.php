@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Hn\McpServer\Service;
 
 use Hn\McpServer\Exception\InvalidClientMetadataException;
+use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
+use TYPO3\CMS\Core\Database\Connection;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
@@ -24,7 +26,28 @@ class OAuthService
     public const REDIRECT_URI_LOOPBACK_SENTINEL = 'loopback:*';
     private const CLIENTS_TABLE = 'tx_mcpserver_oauth_clients';
     private const CODE_EXPIRY_SECONDS = 600; // 10 minutes
-    private const TOKEN_EXPIRY_SECONDS = 2592000; // 30 days
+
+    /**
+     * Default lifetimes, each overridable in the extension configuration.
+     *
+     * A client that registered the refresh_token grant gets a short-lived
+     * access token and renews it silently, so a token that leaks (it is sent
+     * with every request) is useless after an hour. Clients without refresh
+     * support get a token for a working day. Tokens created by hand (backend
+     * module, CLI) are for tools that cannot do OAuth at all and live longer.
+     */
+    private const DEFAULT_ACCESS_TOKEN_MINUTES = 60;
+    private const DEFAULT_TOKEN_HOURS_WITHOUT_REFRESH = 12;
+    private const DEFAULT_REFRESH_TOKEN_DAYS = 30;
+    private const DEFAULT_MANUAL_TOKEN_DAYS = 30;
+
+    /**
+     * A refresh token that was just replaced is answered with invalid_grant
+     * for this long instead of ending the session: clients that refresh twice
+     * in parallel or retry after a lost response would otherwise log their
+     * user out. Used later than that, it is treated as stolen.
+     */
+    private const REFRESH_REUSE_GRACE_SECONDS = 60;
 
     /**
      * Generate authorization URL for OAuth flow
@@ -150,10 +173,6 @@ class OAuthService
             }
         }
 
-        // Generate access token
-        $accessToken = $this->generateSecureToken();
-        $expires = time() + self::TOKEN_EXPIRY_SECONDS;
-
         // Get client IP
         $clientIp = '';
         if ($request !== null) {
@@ -175,41 +194,186 @@ class OAuthService
         // Resolve the issuing client so the token is linked to it for cascade
         // revocation and observability.
         $clientUid = 0;
+        $supportsRefresh = false;
         if (!empty($authCode['client_id'])) {
             $boundClient = $this->getClient((string)$authCode['client_id']);
             if ($boundClient !== null) {
                 $clientUid = (int)$boundClient['uid'];
+                $supportsRefresh = in_array('refresh_token', $boundClient['grant_types'], true);
                 $this->touchClient($clientUid);
             }
         }
 
-        // Create access token
-        $tokenConnection = GeneralUtility::makeInstance(ConnectionPool::class)
+        $now = time();
+        $accessToken = $this->generateSecureToken();
+        $accessLifetime = $supportsRefresh ? $this->getAccessTokenLifetime() : $this->getTokenLifetimeWithoutRefresh();
+        $row = [
+            'pid' => 0,
+            'tstamp' => $now,
+            'crdate' => $now,
+            'token' => $this->hashToken($accessToken),
+            'be_user_uid' => $authCode['be_user_uid'],
+            'client_uid' => $clientUid,
+            'client_name' => $authCode['client_name'],
+            'expires' => $now + $accessLifetime,
+            'last_used' => $now,
+            'created_ip' => $clientIp,
+            'last_used_ip' => $clientIp,
+            'token_version' => 1,
+        ];
+        $refreshToken = null;
+        if ($supportsRefresh) {
+            $refreshToken = $this->generateSecureToken();
+            $row['refresh_token'] = $this->hashToken($refreshToken);
+            $row['refresh_expires'] = $now + $this->getRefreshTokenLifetime();
+        }
+
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens')
+            ->insert('tx_mcpserver_access_tokens', $row);
+
+        return $this->buildTokenResponse($accessToken, $accessLifetime, $refreshToken);
+    }
+
+    /**
+     * Exchange a refresh token for a new access token (RFC 6749 §6).
+     *
+     * The refresh token is rotated with every use: the response carries a new
+     * one and the old one stops working. One row in tx_mcpserver_access_tokens
+     * holds the whole grant, so the backend module lists one entry per
+     * connection and revoking it ends access and refresh token together.
+     *
+     * A replaced refresh token presented again after the short grace period
+     * means two parties hold it, so the grant is revoked (RFC 9700 §4.14.2).
+     *
+     * @param array $client The authenticated client (getClient()), whose grant it must be
+     */
+    public function refreshAccessToken(string $refreshToken, array $client, ?ServerRequestInterface $request = null): ?array
+    {
+        if ($refreshToken === '') {
+            return null;
+        }
+        $refreshHash = $this->hashToken($refreshToken);
+        $clientUid = (int)$client['uid'];
+        $now = time();
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable('tx_mcpserver_access_tokens');
+        $queryBuilder = $connection->createQueryBuilder();
+        $queryBuilder->getRestrictions()->removeAll();
+        $grant = $queryBuilder
+            ->select('*')
+            ->from('tx_mcpserver_access_tokens')
+            ->where(
+                $queryBuilder->expr()->eq('refresh_token', $queryBuilder->createNamedParameter($refreshHash)),
+                $queryBuilder->expr()->eq('client_uid', $queryBuilder->createNamedParameter($clientUid, Connection::PARAM_INT)),
+                $queryBuilder->expr()->gt('refresh_expires', $queryBuilder->createNamedParameter($now, Connection::PARAM_INT)),
+                $queryBuilder->expr()->eq('deleted', $queryBuilder->createNamedParameter(0, Connection::PARAM_INT))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
 
-        $tokenConnection->insert(
-            'tx_mcpserver_access_tokens',
-            [
-                'pid' => 0,
-                'tstamp' => time(),
-                'crdate' => time(),
-                'token' => $this->hashToken($accessToken),
-                'be_user_uid' => $authCode['be_user_uid'],
-                'client_uid' => $clientUid,
-                'client_name' => $authCode['client_name'],
-                'expires' => $expires,
-                'last_used' => time(),
-                'created_ip' => $clientIp,
-                'last_used_ip' => $clientIp,
-                'token_version' => 1,
-            ]
-        );
+        if (!$grant) {
+            $this->handleReplacedRefreshToken($refreshHash, $clientUid, $now);
+            return null;
+        }
+        if (!$this->clientUidIsActive($clientUid) || !$this->isBackendUserActive((int)$grant['be_user_uid'])) {
+            return null;
+        }
 
-        return [
+        $accessToken = $this->generateSecureToken();
+        $newRefreshToken = $this->generateSecureToken();
+        $accessLifetime = $this->getAccessTokenLifetime();
+        $clientIp = $request !== null ? (string)($request->getServerParams()['REMOTE_ADDR'] ?? '') : '';
+
+        // Only the request that still finds the old refresh token rotates it:
+        // two parallel refreshes cannot both get a new pair.
+        $updateBuilder = $connection->createQueryBuilder();
+        $rotated = $updateBuilder
+            ->update('tx_mcpserver_access_tokens')
+            ->set('token', $this->hashToken($accessToken))
+            ->set('token_version', 1)
+            ->set('expires', $now + $accessLifetime)
+            ->set('refresh_token', $this->hashToken($newRefreshToken))
+            ->set('refresh_token_previous', $refreshHash)
+            ->set('refresh_expires', $now + $this->getRefreshTokenLifetime())
+            ->set('tstamp', $now)
+            ->set('last_used', $now)
+            ->set('last_used_ip', $clientIp)
+            ->where(
+                $updateBuilder->expr()->eq('uid', $updateBuilder->createNamedParameter((int)$grant['uid'], Connection::PARAM_INT)),
+                $updateBuilder->expr()->eq('refresh_token', $updateBuilder->createNamedParameter($refreshHash))
+            )
+            ->executeStatement();
+        if ($rotated === 0) {
+            return null;
+        }
+
+        $this->touchClient($clientUid);
+
+        return $this->buildTokenResponse($accessToken, $accessLifetime, $newRefreshToken);
+    }
+
+    /**
+     * A refresh token that is no longer current: within the grace period
+     * after its rotation it is only refused, later the grant is revoked.
+     */
+    private function handleReplacedRefreshToken(string $refreshHash, int $clientUid, int $now): void
+    {
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_access_tokens');
+        $queryBuilder = $connection->createQueryBuilder();
+        $queryBuilder->getRestrictions()->removeAll();
+        $grant = $queryBuilder
+            ->select('uid', 'tstamp')
+            ->from('tx_mcpserver_access_tokens')
+            ->where(
+                $queryBuilder->expr()->eq('refresh_token_previous', $queryBuilder->createNamedParameter($refreshHash)),
+                $queryBuilder->expr()->eq('client_uid', $queryBuilder->createNamedParameter($clientUid, Connection::PARAM_INT)),
+                $queryBuilder->expr()->eq('deleted', $queryBuilder->createNamedParameter(0, Connection::PARAM_INT))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
+
+        if ($grant && $now - (int)$grant['tstamp'] > self::REFRESH_REUSE_GRACE_SECONDS) {
+            $connection->update(
+                'tx_mcpserver_access_tokens',
+                ['deleted' => 1, 'tstamp' => $now],
+                ['uid' => (int)$grant['uid']]
+            );
+        }
+    }
+
+    /**
+     * Token response (RFC 6749 §5.1).
+     */
+    private function buildTokenResponse(string $accessToken, int $lifetime, ?string $refreshToken): array
+    {
+        $response = [
             'access_token' => $accessToken,
             'token_type' => 'Bearer',
-            'expires_in' => self::TOKEN_EXPIRY_SECONDS,
+            'expires_in' => $lifetime,
         ];
+        if ($refreshToken !== null) {
+            $response['refresh_token'] = $refreshToken;
+        }
+        return $response;
+    }
+
+    /**
+     * The backend user behind a grant still exists, is enabled and within its
+     * start and end time. A refresh must not keep a disabled account alive.
+     */
+    private function isBackendUserActive(int $beUserUid): bool
+    {
+        // The default restrictions cover deleted, disable, starttime and endtime
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('be_users');
+        return (bool)$queryBuilder
+            ->count('uid')
+            ->from('be_users')
+            ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($beUserUid, Connection::PARAM_INT)))
+            ->executeQuery()
+            ->fetchOne();
     }
 
     /**
@@ -321,7 +485,11 @@ class OAuthService
             ->from('tx_mcpserver_access_tokens')
             ->where(
                 $queryBuilder->expr()->eq('be_user_uid', $queryBuilder->createNamedParameter($beUserId)),
-                $queryBuilder->expr()->gt('expires', $queryBuilder->createNamedParameter(time())),
+                // A grant whose access token expired lives on while its refresh token does
+                $queryBuilder->expr()->or(
+                    $queryBuilder->expr()->gt('expires', $queryBuilder->createNamedParameter(time())),
+                    $queryBuilder->expr()->gt('refresh_expires', $queryBuilder->createNamedParameter(time()))
+                ),
                 $queryBuilder->expr()->eq('deleted', $queryBuilder->createNamedParameter(0))
             )
             ->orderBy('crdate', 'DESC')
@@ -397,6 +565,10 @@ class OAuthService
                 $tokenQueryBuilder->expr()->lt(
                     'expires',
                     $tokenQueryBuilder->createNamedParameter($currentTime, \Doctrine\DBAL\ParameterType::INTEGER)
+                ),
+                $tokenQueryBuilder->expr()->lt(
+                    'refresh_expires',
+                    $tokenQueryBuilder->createNamedParameter($currentTime, \Doctrine\DBAL\ParameterType::INTEGER)
                 )
             )
             ->executeStatement();
@@ -416,7 +588,11 @@ class OAuthService
      */
     private function cleanupStaleClients(int $currentTime): void
     {
-        $threshold = $currentTime - self::TOKEN_EXPIRY_SECONDS;
+        $threshold = $currentTime - max(
+            $this->getRefreshTokenLifetime(),
+            $this->getTokenLifetimeWithoutRefresh(),
+            $this->getManualTokenLifetime()
+        );
 
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getConnectionForTable(self::CLIENTS_TABLE);
@@ -919,7 +1095,7 @@ class OAuthService
             'token_endpoint' => $baseUrl . '/mcp_oauth/token',
             'registration_endpoint' => $baseUrl . '/mcp_oauth/register',
             'response_types_supported' => ['code'],
-            'grant_types_supported' => ['authorization_code'],
+            'grant_types_supported' => ['authorization_code', 'refresh_token'],
             'code_challenge_methods_supported' => ['S256'],
             'token_endpoint_auth_methods_supported' => ['none', 'client_secret_post', 'client_secret_basic'],
             'registration_endpoint_auth_methods_supported' => ['none'],
@@ -936,7 +1112,7 @@ class OAuthService
     public function createDirectAccessToken(int $beUserId, string $clientName, ?ServerRequestInterface $request = null): string
     {
         $accessToken = $this->generateSecureToken();
-        $expires = time() + self::TOKEN_EXPIRY_SECONDS;
+        $expires = time() + $this->getManualTokenLifetime();
 
         // Get client IP
         $clientIp = '';
@@ -983,7 +1159,7 @@ class OAuthService
     public function createToken(int $beUserUid, string $clientName, ?int $ttlSeconds = null): array
     {
         $accessToken = $this->generateSecureToken();
-        $ttl = $ttlSeconds ?? self::TOKEN_EXPIRY_SECONDS;
+        $ttl = $ttlSeconds ?? $this->getManualTokenLifetime();
         if ($ttl <= 0) {
             throw new \InvalidArgumentException('Token TTL must be greater than zero seconds.');
         }
@@ -1014,6 +1190,61 @@ class OAuthService
             'expires' => $expires,
             'expires_in' => $ttl,
         ];
+    }
+
+    /**
+     * Access token lifetime in seconds for clients with a refresh token.
+     * Extension setting "oauthAccessTokenMinutes".
+     */
+    public function getAccessTokenLifetime(): int
+    {
+        return $this->getLifetimeSetting('oauthAccessTokenMinutes', self::DEFAULT_ACCESS_TOKEN_MINUTES, 60);
+    }
+
+    /**
+     * Access token lifetime in seconds for clients that did not register the
+     * refresh_token grant. Extension setting "oauthTokenHoursWithoutRefresh".
+     */
+    public function getTokenLifetimeWithoutRefresh(): int
+    {
+        return $this->getLifetimeSetting('oauthTokenHoursWithoutRefresh', self::DEFAULT_TOKEN_HOURS_WITHOUT_REFRESH, 3600);
+    }
+
+    /**
+     * How long a refresh token stays valid without being used; each refresh
+     * starts it anew. Extension setting "oauthRefreshTokenDays".
+     */
+    public function getRefreshTokenLifetime(): int
+    {
+        return $this->getLifetimeSetting('oauthRefreshTokenDays', self::DEFAULT_REFRESH_TOKEN_DAYS, 86400);
+    }
+
+    /**
+     * Lifetime of tokens created in the backend module or with mcp:oauth create.
+     * Extension setting "manualTokenDays".
+     */
+    public function getManualTokenLifetime(): int
+    {
+        return $this->getLifetimeSetting('manualTokenDays', self::DEFAULT_MANUAL_TOKEN_DAYS, 86400);
+    }
+
+    /**
+     * A positive whole number from the extension configuration, in seconds.
+     * Anything else (unset, 0, negative, not a number) means the default:
+     * a token must never become unlimited by a typo.
+     */
+    private function getLifetimeSetting(string $name, int $default, int $unitSeconds): int
+    {
+        try {
+            // The whole array, not the path: a missing path makes core sync
+            // all ext_conf_template.txt files on every call
+            $settings = GeneralUtility::makeInstance(ExtensionConfiguration::class)->get('mcp_server');
+        } catch (\Throwable) {
+            $settings = [];
+        }
+        $value = is_array($settings) ? ($settings[$name] ?? null) : null;
+        $value = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        return ($value === false ? $default : $value) * $unitSeconds;
     }
 
     /**

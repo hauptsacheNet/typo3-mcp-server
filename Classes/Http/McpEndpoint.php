@@ -158,7 +158,7 @@ class McpEndpoint
 
             if (!$tokenInfo) {
                 $this->logDebug('MCP: Authentication token validation failed');
-                return $this->createUnauthorizedResponse('Invalid or expired token', $request);
+                return $this->createUnauthorizedResponse('Invalid or expired token', $request, true);
             }
 
             $this->logDebug("MCP: Token validation successful for user: " . $tokenInfo['be_user_uid']);
@@ -169,7 +169,7 @@ class McpEndpoint
             // must not tell whether the account behind it exists.
             if (!$this->setupBackendUserContext($tokenInfo['be_user_uid'])) {
                 $this->logDebug('MCP: Backend user of a valid token is not available');
-                return $this->createUnauthorizedResponse('Invalid or expired token', $request);
+                return $this->createUnauthorizedResponse('Invalid or expired token', $request, true);
             }
 
             // Set current request context in SiteInformationService
@@ -350,7 +350,12 @@ class McpEndpoint
     /**
      * Create unauthorized response
      */
-    private function createUnauthorizedResponse(string $message, ?ServerRequestInterface $request = null): ResponseInterface
+    /**
+     * @param bool $invalidToken A token was sent but is not (or no longer) valid.
+     *        Signalled as error="invalid_token" (RFC 6750 §3.1), which tells
+     *        clients with a refresh token to renew it rather than start over.
+     */
+    private function createUnauthorizedResponse(string $message, ?ServerRequestInterface $request = null, bool $invalidToken = false): ResponseInterface
     {
         $stream = new Stream('php://temp', 'rw');
         $stream->write(json_encode([
@@ -364,6 +369,9 @@ class McpEndpoint
         if ($request !== null) {
             $resourceMetadataUrl = $this->getRequestBaseUrl($request) . '/.well-known/oauth-protected-resource/mcp';
             $wwwAuth = 'Bearer resource_metadata="' . $resourceMetadataUrl . '"';
+        }
+        if ($invalidToken) {
+            $wwwAuth .= ($request !== null ? ', ' : ' ') . 'error="invalid_token"';
         }
 
         $response = new Response(

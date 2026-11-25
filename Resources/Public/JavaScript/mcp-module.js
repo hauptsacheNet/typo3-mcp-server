@@ -524,7 +524,10 @@ class McpModule {
                                     </td>
                                     <td><small class="text-muted">${esc(token.created)}</small></td>
                                     <td><small class="text-muted">${esc(token.last_used)}</small></td>
-                                    <td><small class="text-muted">${esc(token.expires)}</small></td>
+                                    <td>
+                                        <small class="text-muted">${esc(token.expires)}</small>
+                                        ${token.renews ? '<br><small class="text-muted" title="The client renews its access automatically. The date moves forward each time it does.">renews while in use</small>' : ''}
+                                    </td>
                                     <td>
                                         <button class="btn btn-sm btn-danger revoke-token-btn" data-token-id="${esc(token.uid)}" aria-label="Revoke token for ${esc(token.client_name)}">
                                             <span class="t3js-icon icon icon-size-small icon-state-default icon-actions-delete" data-identifier="actions-delete"><span class="icon-markup">🗑️</span></span>

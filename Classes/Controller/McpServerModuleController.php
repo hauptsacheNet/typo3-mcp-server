@@ -248,7 +248,10 @@ class McpServerModuleController
                 'token_label' => $secondary,
                 'created' => date('Y-m-d H:i:s', $token['crdate']),
                 'last_used' => $token['last_used'] > 0 ? date('Y-m-d H:i:s', $token['last_used']) : 'Never',
-                'expires' => date('Y-m-d H:i:s', $token['expires']),
+                // A grant with a refresh token stays connected until the refresh
+                // token expires; its short-lived access token renews on its own.
+                'expires' => date('Y-m-d H:i:s', max((int)$token['expires'], (int)($token['refresh_expires'] ?? 0))),
+                'renews' => (int)($token['refresh_expires'] ?? 0) > time(),
             ];
         }, $tokens);
     }
