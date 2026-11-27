@@ -228,6 +228,37 @@ class DateTimeFieldTest extends FunctionalTestCase
         $this->assertSame('14:30', $record['native_time']);
     }
 
+    public function testEmbeddedChildDatetimeIsConverted(): void
+    {
+        $uid = $this->write(self::TABLE, [
+            'title' => 'Event with slots',
+            'slots' => [
+                ['starts_at' => '2026-11-27 10:00'],
+                ['starts_at' => '2026-07-15T10:00:00Z'],
+            ],
+        ]);
+
+        $record = $this->read(self::TABLE, $uid);
+        $this->assertCount(2, $record['slots'], json_encode($record));
+        $this->assertSame(
+            ['2026-11-27T10:00:00+01:00', '2026-07-15T12:00:00+02:00'],
+            array_column($record['slots'], 'starts_at')
+        );
+    }
+
+    public function testEmbeddedChildRejectsInvalidDatetime(): void
+    {
+        $result = (new WriteTableTool())->execute([
+            'action' => 'create',
+            'table' => self::TABLE,
+            'pid' => 1,
+            'data' => ['title' => 'Event', 'slots' => [['starts_at' => 'soon']]],
+        ]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString("Field 'starts_at' of tx_testdatetime_slot expects", $result->content[0]->text);
+    }
+
     public function testEmptyValuesReadAsNull(): void
     {
         $uid = $this->write(self::TABLE, ['title' => 'Event without dates']);

@@ -69,10 +69,19 @@ return [
                 'dbType' => 'time',
             ],
         ],
+        'slots' => [
+            'label' => 'Slots',
+            'config' => [
+                'type' => 'inline',
+                'foreign_table' => 'tx_testdatetime_slot',
+                'foreign_field' => 'event',
+                'foreign_sortby' => 'sorting',
+            ],
+        ],
     ],
     'types' => [
         0 => [
-            'showitem' => 'title, event_datetime, event_date, event_time, native_datetime, native_date, native_time',
+            'showitem' => 'title, event_datetime, event_date, event_time, native_datetime, native_date, native_time, slots',
         ],
     ],
 ];
