@@ -802,15 +802,25 @@ class TableAccessService implements SingletonInterface
     }
 
     /**
-     * Check if a specific field can be accessed
-     *
-     * @param string $table Table name
-     * @param string $fieldName Field name
-     * @param string $type Record type (optional, for type-specific TSconfig)
-     * @param int|null $pid Page id for TSconfig context (null → first site root)
-     * @return bool
+     * Does the column hold a secret that must not be read back? TCA marks those
+     * as type=password (be_users.password, fe_users.password): the backend never
+     * shows the stored value, only an empty input to set a new one. The read
+     * tools treat it the same way - not returned, not filterable, not searched -
+     * while WriteTable can still set it.
      */
-    public function canAccessField(string $table, string $fieldName, string $type = '', ?int $pid = null): bool
+    public function isSecretField(string $table, string $fieldName): bool
+    {
+        return ($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['type'] ?? '') === 'password';
+    }
+
+    /**
+     * May the current user see this field at all? The part of canAccessField()
+     * that is about the user's rights - exclude fields, admin-only fields,
+     * relations into tables they have no access to - and not about how a form
+     * is arranged (record type, TCEFORM). ReadTable asks this for data it adds
+     * to a record outside the per-record field filter.
+     */
+    public function isFieldPermitted(string $table, string $fieldName): bool
     {
         $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
 
@@ -843,6 +853,26 @@ class TableAccessService implements SingletonInterface
                 return false;
             }
         }
+
+        return true;
+    }
+
+    /**
+     * Check if a specific field can be accessed
+     *
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @param string $type Record type (optional, for type-specific TSconfig)
+     * @param int|null $pid Page id for TSconfig context (null → first site root)
+     * @return bool
+     */
+    public function canAccessField(string $table, string $fieldName, string $type = '', ?int $pid = null): bool
+    {
+        if (!$this->isFieldPermitted($table, $fieldName)) {
+            return false;
+        }
+
+        $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
 
         // Check TSconfig field visibility (applies to all users including admins).
         // Resolve TSconfig at a real page id — page 0 has no rootline so it
