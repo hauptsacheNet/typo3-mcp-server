@@ -255,7 +255,10 @@ final class RecordFilterBuilder
         // label, language, tstamp, crdate, hidden, sorting), derived from the
         // table's ctrl section.
         $fields = array_fill_keys(
-            array_merge(self::ALWAYS_FILTERABLE, $this->tableAccessService->getEssentialFields($table)),
+            array_filter(
+                array_merge(self::ALWAYS_FILTERABLE, $this->tableAccessService->getEssentialFields($table)),
+                fn(string $fieldName): bool => !$this->tableAccessService->isSecretField($table, $fieldName)
+            ),
             true
         );
 
@@ -267,7 +270,9 @@ final class RecordFilterBuilder
         ));
         foreach ($recordTypes as $recordType) {
             foreach (array_keys($this->tableAccessService->getAvailableFields($table, $recordType, $pid)) as $fieldName) {
-                if (isset($columns[$fieldName])) {
+                // A password column is not returned, so it is no filter field
+                // either: LIKE would spell out the stored hash
+                if (isset($columns[$fieldName]) && !$this->tableAccessService->isSecretField($table, $fieldName)) {
                     $fields[$fieldName] = true;
                 }
             }
