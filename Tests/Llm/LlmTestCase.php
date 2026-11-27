@@ -31,7 +31,7 @@ abstract class LlmTestCase extends FunctionalTestCase
         'haiku-5.5' => 'anthropic/claude-haiku-5.5',
         'gpt-6-luna' => 'openai/gpt-6-luna',
         'mistral-large-4' => 'mistralai/mistral-large-4-0',
-        'gemini-3.8-flash' => 'google/gemini-3.8-flash',
+        'gemini-3.5-flash-lite' => 'google/gemini-3.5-flash-lite',
         // Open-weight models, as used for self-hosting
         'glm-5.3-flash' => 'z-ai/glm-5.3-flash',
         'deepseek-v4.1-flash' => 'deepseek/deepseek-v4.1-flash-1017',
