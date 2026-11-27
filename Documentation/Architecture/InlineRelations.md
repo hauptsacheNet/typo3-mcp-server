@@ -22,6 +22,11 @@ children in one of two ways, decided by `TableAccessService::isEmbeddedChildTabl
  'content_elements' => [456, 789]]
 ```
 
+Embedded children are read like top-level records: their own inline, file, select and
+group fields are resolved the same way (a file on a collection item reads as a list of
+references, `[]` when empty), one query batch per field and nesting level
+(`ReadTableTool::resolveRelationFields()`).
+
 ### Standalone `hideTable` tables
 
 Some `hideTable` tables are too complex to edit through their parent, e.g. because

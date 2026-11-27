@@ -285,11 +285,23 @@ class MmRelationWorkspaceTest extends FunctionalTestCase
         ]);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
 
-        // The MM row of the news version points to the version of tag C
         $tagVersion = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, 'tx_news_domain_model_tag', 103, 'uid');
         $newsVersion = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, 'tx_news_domain_model_news', 201, 'uid');
         $this->assertIsArray($tagVersion);
         $this->assertIsArray($newsVersion);
+
+        // Whether DataHandler stores tag C by its version uid depends on the core patch
+        // level: RelationHandler::convertItemArray() of TYPO3 14.3.10 skips workspace-aware
+        // tables by an inverted condition and stores the live uid, 13.4 and 14.3.12 store
+        // the version uid. Point the MM row to the version explicitly, so the read is
+        // tested on the stored state of current cores whichever core runs the test.
+        $connectionPool->getConnectionForTable($mmTable)->update(
+            $mmTable,
+            ['uid_foreign' => (int)$tagVersion['uid']],
+            ['uid_local' => (int)$newsVersion['uid'], 'uid_foreign' => 103]
+        );
+
+        // The MM row of the news version points to the version of tag C
         $storedTags = $connectionPool->getConnectionForTable($mmTable)
             ->select(['uid_foreign'], $mmTable, ['uid_local' => (int)$newsVersion['uid']], [], ['sorting' => 'ASC'])
             ->fetchFirstColumn();
