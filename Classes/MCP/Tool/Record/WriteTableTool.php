@@ -1306,6 +1306,16 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
+        // colPos holds one column. A one-element list is taken as that column, so it
+        // gets the same checks as a plain value (the select validation accepts lists
+        // and the storage below would flatten it to a string anyway).
+        if ($table === 'tt_content' && is_array($data['colPos'] ?? null)) {
+            if (count($data['colPos']) !== 1 || !is_scalar(reset($data['colPos']))) {
+                return "Field 'colPos' takes a single column number, not a list";
+            }
+            $data['colPos'] = reset($data['colPos']);
+        }
+
         // Build merged record context for dynamic select item resolution (itemsProcFunc, TSconfig)
         $currentRecord = null;
         if ($action === 'update' && $uid) {
@@ -1340,7 +1350,10 @@ class WriteTableTool extends AbstractRecordTool
                 }
             }
 
-            $mergedRecord = array_merge($existingRecord, $data);
+            // The workspace version is what this update writes to. Its page and
+            // column may differ from the live row (e.g. moved in the workspace), and
+            // select items and placement have to be checked where it really is.
+            $mergedRecord = array_merge($currentRecord, $data);
         } else {
             $mergedRecord = array_merge($data, ['pid' => $pid]);
         }
@@ -1417,13 +1430,6 @@ class WriteTableTool extends AbstractRecordTool
                 return $validationError;
             }
 
-            if ($table === 'tt_content' && $fieldName === 'colPos') {
-                $columnError = $this->validateColumnRestriction($value, $action, $mergedRecord, $currentRecord, (int)$effectivePid);
-                if ($columnError !== null) {
-                    return $columnError;
-                }
-            }
-            
             // Handle date/time fields - convert ISO 8601 to timestamp for TYPO3
             if (!empty($fieldConfig['config']['eval'])) {
                 $evalRules = GeneralUtility::trimExplode(',', $fieldConfig['config']['eval'], true);
@@ -1473,7 +1479,14 @@ class WriteTableTool extends AbstractRecordTool
                 }
             }
         }
-        
+
+        if ($table === 'tt_content') {
+            $columnError = $this->validateColumnPlacement($data, $action, $mergedRecord, $currentRecord, $newRecordRow, (int)$effectivePid);
+            if ($columnError !== null) {
+                return $columnError;
+            }
+        }
+
         // After validating all field values, check field availability based on record type
         // This ensures type field validation happens first
 
@@ -1611,35 +1624,59 @@ class WriteTableTool extends AbstractRecordTool
     }
 
     /**
-     * The page module only lets a user place content in the columns that
-     * mod.SHARED.colPos_list allows (page TSconfig, or user TSconfig via
-     * page.mod.SHARED.colPos_list); the other columns are shown as restricted.
-     * The colPos items, which validateFieldValue() checks, do not know this
-     * limit, so it is checked here, but only when an element is placed: on
-     * create and when colPos or the page changes. Elements that already sit in
-     * a restricted column stay editable, as in the backend form.
+     * Checks the column a content element ends up in whenever it is placed: on
+     * create, and on update when colPos or the page changes. The column is the
+     * one given in the data, else the one the element already has (its
+     * workspace version), else the default of a new element. Elements that stay
+     * where they are remain editable, even in a column checked out below.
+     *
+     * - A column the page does not have is refused. When colPos was given, the
+     *   field validation already checked it against the colPos items (the
+     *   columns of the page's backend layout); a move to another page without
+     *   colPos is checked here, otherwise the element would vanish into a
+     *   column the target page does not show.
+     * - The page module only lets a user place content in the columns that
+     *   mod.SHARED.colPos_list allows (page TSconfig, or user TSconfig via
+     *   page.mod.SHARED.colPos_list); the other columns are shown as
+     *   restricted. The colPos items do not know this limit.
      *
      * Children of b13/container elements sit in the container's grid columns,
      * which the container's own colPos items and DataHandler hooks check.
      */
-    protected function validateColumnRestriction(
-        mixed $colPos,
+    protected function validateColumnPlacement(
+        array $data,
         string $action,
         array $mergedRecord,
         ?array $currentRecord,
+        ?array $newRecordRow,
         int $pageId
     ): ?string {
-        if ($action === 'translate' || !is_numeric($colPos) || $pageId <= 0) {
+        if ($action === 'translate' || $pageId <= 0) {
             return null;
         }
-        if ((int)($mergedRecord['tx_container_parent'] ?? 0) > 0) {
+        $colPosGiven = array_key_exists('colPos', $data);
+        $record = array_merge($newRecordRow ?? [], $mergedRecord);
+        $colPos = $record['colPos'] ?? $GLOBALS['TCA']['tt_content']['columns']['colPos']['config']['default'] ?? 0;
+        if (!is_numeric($colPos) || (int)($record['tx_container_parent'] ?? 0) > 0) {
             return null;
         }
-        if ($currentRecord !== null
-            && (int)($currentRecord['colPos'] ?? 0) === (int)$colPos
-            && (int)($currentRecord['pid'] ?? 0) === $pageId
-        ) {
+        $colPos = (int)$colPos;
+
+        $pageChanged = $currentRecord !== null && (int)($currentRecord['pid'] ?? 0) !== $pageId;
+        $columnChanged = $currentRecord === null || (int)($currentRecord['colPos'] ?? 0) !== $colPos;
+        if ($action !== 'create' && !$pageChanged && !$columnChanged) {
             return null;
+        }
+
+        if (!$colPosGiven) {
+            $context = array_merge($record, ['pid' => $pageId, 'colPos' => $colPos]);
+            if ($this->tableAccessService->validateFieldValue('tt_content', 'colPos', $colPos, $context) !== null) {
+                return sprintf(
+                    "The element would be in colPos %d, which page %d does not have; set colPos as well",
+                    $colPos,
+                    $pageId
+                ) . $this->describeColumnItems($context, $pageId);
+            }
         }
 
         $colPosList = trim((string)(BackendUtility::getPagesTSconfig($pageId)['mod.']['SHARED.']['colPos_list'] ?? ''));
@@ -1647,7 +1684,7 @@ class WriteTableTool extends AbstractRecordTool
             return null;
         }
         $allowedColumns = array_unique(GeneralUtility::intExplode(',', $colPosList, true));
-        if (in_array((int)$colPos, $allowedColumns, true)) {
+        if (in_array($colPos, $allowedColumns, true)) {
             return null;
         }
 
@@ -1671,7 +1708,7 @@ class WriteTableTool extends AbstractRecordTool
         return sprintf(
             "Field 'colPos' value '%d': this column of page %d is restricted for the backend user "
             . '(mod.SHARED.colPos_list), the page module does not let it place content there. %s',
-            (int)$colPos,
+            $colPos,
             $pageId,
             $placeable === []
                 ? 'No column of this page is open for new content.'

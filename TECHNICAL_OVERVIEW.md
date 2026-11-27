@@ -358,7 +358,8 @@ Positional fields are the exception: the fields in `ctrl.copyAfterDuplFields` (t
 the language field has its own handling) and b13/container's `tx_container_parent`. The page module
 sets them without the edit form (new content element wizard, drag and drop), so sites that hide the
 column select still place content in columns. Their values are checked against the select items
-(the columns of the page's backend layout), and on placement against `mod.SHARED.colPos_list`.
+(the columns of the page's backend layout). Whenever an element is placed (create, new column, move to another
+page, where it keeps its column) that column must exist on the page and pass `mod.SHARED.colPos_list`.
 
 ## What's Not Yet Implemented
 

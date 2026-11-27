@@ -55,6 +55,25 @@ mod.web_layout.BackendLayouts {
             }
         }
     }
+    single {
+        title = One column
+        config {
+            backend_layout {
+                colCount = 1
+                rowCount = 1
+                rows {
+                    1 {
+                        columns {
+                            1 {
+                                name = Main
+                                colPos = 0
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 TSCONFIG;
 
@@ -193,9 +212,84 @@ TSCONFIG;
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
     }
 
-    private function setPageTSconfig(string $tsConfig): void
+    /**
+     * Moving an element to another page without colPos keeps its column. When
+     * the target page has no such column, the move is refused instead of hiding
+     * the element in a column the page does not show.
+     */
+    public function testMoveWithoutColPosIsCheckedAgainstTheColumnsOfTheTargetPage(): void
     {
-        $this->getConnectionForTable('pages')->update('pages', ['TSconfig' => $tsConfig], ['uid' => 1]);
+        $this->getConnectionForTable('pages')->update('pages', ['backend_layout' => 'pagets__single'], ['uid' => 2]);
+        $this->getConnectionForTable('tt_content')->update('tt_content', ['colPos' => 1], ['uid' => 100]);
+
+        $result = $this->write('update', 100, ['pid' => 2]);
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        $this->assertStringContainsString('would be in colPos 1, which page 2 does not have', $text);
+        $this->assertStringContainsString('the backend layout of page 2 has these columns: 0 (Main)', $text);
+
+        $result = $this->write('update', 100, ['pid' => 2, 'colPos' => 0]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testMoveWithoutColPosIsCheckedAgainstTheColPosListOfTheTargetPage(): void
+    {
+        $this->getConnectionForTable('pages')->update('pages', ['backend_layout' => 'pagets__twocol'], ['uid' => 2]);
+        $this->setPageTSconfig("mod.SHARED.colPos_list = 0\n", 2);
+        $this->getConnectionForTable('tt_content')->update('tt_content', ['colPos' => 1], ['uid' => 100]);
+
+        $result = $this->write('update', 100, ['pid' => 2]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('mod.SHARED.colPos_list', $result->content[0]->text);
+    }
+
+    /**
+     * After a move in the workspace, the element lives on the new page. Later
+     * writes are checked there, not on the page of the live record.
+     */
+    public function testWorkspaceVersionIsCheckedOnThePageItWasMovedTo(): void
+    {
+        $this->getConnectionForTable('pages')->update('pages', ['backend_layout' => 'pagets__twocol'], ['uid' => 2]);
+        $this->setPageTSconfig("mod.SHARED.colPos_list = 0\n", 2);
+
+        $result = $this->write('update', 100, ['pid' => 2]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $result = $this->write('update', 100, ['colPos' => 1]);
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('this column of page 2 is restricted', $result->content[0]->text);
+    }
+
+    public function testSingleColumnInAListIsCheckedLikeAPlainValue(): void
+    {
+        $result = $this->write('update', 100, ['colPos' => [1]]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertSame(1, $this->readColPos(100));
+
+    }
+
+    public function testSingleColumnInAListIsCheckedAgainstTheColPosList(): void
+    {
+        $this->setPageTSconfig(self::TSCONFIG . "\nmod.SHARED.colPos_list = 0\n");
+
+        $result = $this->write('update', 100, ['colPos' => [1]]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('mod.SHARED.colPos_list', $result->content[0]->text);
+    }
+
+    public function testListOfColumnsIsRefused(): void
+    {
+        $result = $this->write('update', 100, ['colPos' => [0, 1]]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString("Field 'colPos' takes a single column number, not a list", $result->content[0]->text);
+    }
+
+    private function setPageTSconfig(string $tsConfig, int $pageUid = 1): void
+    {
+        $this->getConnectionForTable('pages')->update('pages', ['TSconfig' => $tsConfig], ['uid' => $pageUid]);
     }
 
     private function write(string $action, ?int $uid, array $data): CallToolResult
