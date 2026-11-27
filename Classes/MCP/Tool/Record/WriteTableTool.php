@@ -1438,7 +1438,12 @@ class WriteTableTool extends AbstractRecordTool
                 // of their own before anything is written.
                 $foreignTable = (string)($fieldConfig['config']['foreign_table'] ?? '');
                 if ($this->tableAccessService->isEmbeddedChildTable($foreignTable)) {
-                    $validationError = $this->validateEmbeddedChildRequiredFields($foreignTable, $data[$fieldName], $effectivePid);
+                    $validationError = $this->validateEmbeddedChildRequiredFields(
+                        $foreignTable,
+                        $data[$fieldName],
+                        $effectivePid,
+                        $this->getInlineOwnershipFields($fieldConfig['config'], $table)
+                    );
                     if ($validationError !== null) {
                         return "Field '{$fieldName}', " . $validationError;
                     }
@@ -1665,9 +1670,11 @@ class WriteTableTool extends AbstractRecordTool
      *
      * @param array $children The child records as sent for the inline field
      * @param int $pid Page the children live on
+     * @param array<string, mixed> $relationValues Values the relation itself writes into a new
+     *        child (foreign_match_fields, foreign_table_field); they count as filled
      * @return string|null Error message naming the item, null if all children are valid
      */
-    protected function validateEmbeddedChildRequiredFields(string $childTable, array &$children, int $pid): ?string
+    protected function validateEmbeddedChildRequiredFields(string $childTable, array &$children, int $pid, array $relationValues = []): ?string
     {
         foreach ($children as $index => &$childData) {
             if (!is_array($childData)) {
@@ -1679,6 +1686,10 @@ class WriteTableTool extends AbstractRecordTool
                 : null;
             $fields = $childData;
             unset($fields['uid']);
+            // A new child gets the relation's own values on insert, overriding what was sent.
+            if ($childUid === null) {
+                $fields = array_replace($fields, $relationValues);
+            }
 
             $currentRecord = null;
             $newRecordRow = null;
@@ -1717,6 +1728,11 @@ class WriteTableTool extends AbstractRecordTool
                 return "{$item}: {$error}";
             }
 
+            // The writer adds the relation's values itself; hand back only what was sent.
+            if ($childUid === null) {
+                $fields = array_diff_key($fields, $relationValues);
+            }
+
             // Children of the child, e.g. the items of a Collection inside a Collection.
             foreach ($fields as $nestedField => &$nestedValue) {
                 $nestedConfig = $this->tableAccessService->getFieldConfig($childTable, (string)$nestedField)['config'] ?? [];
@@ -1727,7 +1743,9 @@ class WriteTableTool extends AbstractRecordTool
                 ) {
                     continue;
                 }
-                $nestedError = $this->validateEmbeddedChildRequiredFields($nestedTable, $nestedValue, $pid);
+                // Nested children only get foreign_match_fields (see resolveNestedEmbeddedRelations()).
+                $nestedMatchFields = is_array($nestedConfig['foreign_match_fields'] ?? null) ? $nestedConfig['foreign_match_fields'] : [];
+                $nestedError = $this->validateEmbeddedChildRequiredFields($nestedTable, $nestedValue, $pid, $nestedMatchFields);
                 if ($nestedError !== null) {
                     return "{$item}, field '{$nestedField}', {$nestedError}";
                 }

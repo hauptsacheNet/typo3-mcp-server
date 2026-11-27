@@ -563,6 +563,26 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         );
     }
 
+    public function testRequiredFieldOfEmbeddedChildFilledByTheRelationIsAccepted(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => 'testrequired_slides',
+                'header' => 'Slider',
+                'tx_testrequiredfields_house_slides' => [
+                    ['bodytext' => '<p>Quote by the house</p>'],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $parentUid = (int)json_decode($result->content[0]->text, true)['uid'];
+        $this->assertSame(['House author'], $this->getSlideAuthors($parentUid));
+    }
+
     /**
      * @return array{0: int, 1: list<int>} parent live uid, slide live uids
      */
