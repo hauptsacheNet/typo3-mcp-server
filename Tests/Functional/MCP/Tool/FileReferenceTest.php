@@ -8,6 +8,7 @@ use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Service\SiteInformationService;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
@@ -95,7 +96,20 @@ class FileReferenceTest extends FunctionalTestCase
         $this->assertArrayHasKey('assets', $record);
         $this->assertCount(2, $record['assets'], 'assets field should have 2 references');
 
-        // media field should have exactly 1 reference
+        // textmedia has no media field, so its reference is not shown at all
+        $this->assertArrayNotHasKey('media', $record);
+
+        // As "File links" element the same record shows media, with its one reference only
+        GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable('tt_content')
+            ->update('tt_content', ['CType' => 'uploads'], ['uid' => 100]);
+        $result = $readTool->execute([
+            'table' => 'tt_content',
+            'uid' => 100,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $record = json_decode($result->content[0]->text, true)['records'][0];
+
+        $this->assertArrayNotHasKey('assets', $record);
         $this->assertArrayHasKey('media', $record);
         $this->assertCount(1, $record['media'], 'media field should have 1 reference');
 

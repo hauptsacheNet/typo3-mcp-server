@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
+use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -332,6 +333,102 @@ class NestedFileRelationTest extends FunctionalTestCase
         $this->assertFileReference($byTitle['Item A']['uid'], 1);
         $this->assertFileReference($byTitle['Item B']['uid'], 2);
         $this->assertNotSame($byTitle['Item A']['tt_content_items'], $byTitle['Item B']['tt_content_items']);
+    }
+
+    /**
+     * The file field of an embedded child reads like one of a top-level record: a list of
+     * references, empty when there is none, instead of the counter column.
+     */
+    public function testReadEmbedsFileReferencesOfEmbeddedChild(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $pageUid = $this->createPage($writeTool);
+
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'data' => [
+                'pid' => $pageUid,
+                'CType' => 'textmedia',
+                'header' => 'Element with and without files',
+                'tx_testnestedfiles_items' => [
+                    ['title' => 'With file', 'file' => [['uid_local' => 2, 'alternative' => 'Nested alt']]],
+                    ['title' => 'Without file'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $contentUid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        $items = $this->readEmbeddedItems($contentUid);
+        $this->assertSame(['With file', 'Without file'], array_column($items, 'title'));
+
+        $this->assertIsArray($items[0]['file']);
+        $this->assertCount(1, $items[0]['file']);
+        $this->assertSame(2, $items[0]['file'][0]['uid_local'], 'uid_local stays a single uid');
+        $this->assertSame('Nested alt', $items[0]['file'][0]['alternative']);
+        $this->assertArrayNotHasKey('uid_foreign', $items[0]['file'][0], 'The parent pointer is dropped as on the top level');
+
+        $this->assertSame([], $items[1]['file']);
+    }
+
+    /**
+     * Same for records that are live and were never touched by a workspace.
+     */
+    public function testReadEmbedsFileReferencesOfLiveEmbeddedChild(): void
+    {
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $connectionPool->getConnectionForTable('pages')
+            ->insert('pages', ['uid' => 10, 'pid' => 0, 'title' => 'Live page', 'doktype' => 1]);
+        $connectionPool->getConnectionForTable('tt_content')->insert('tt_content', [
+            'uid' => 20,
+            'pid' => 10,
+            'CType' => 'textmedia',
+            'header' => 'Live element',
+            'tx_testnestedfiles_items' => 2,
+        ]);
+        foreach ([[30, 'Live with file', 256, 1], [31, 'Live without file', 512, 0]] as [$uid, $title, $sorting, $fileCount]) {
+            $connectionPool->getConnectionForTable('tx_testnestedfiles_item')->insert('tx_testnestedfiles_item', [
+                'uid' => $uid,
+                'pid' => 10,
+                'title' => $title,
+                'sorting' => $sorting,
+                'file' => $fileCount,
+                'tt_content_items' => 20,
+            ]);
+        }
+        $connectionPool->getConnectionForTable('sys_file_reference')->insert('sys_file_reference', [
+            'uid' => 40,
+            'pid' => 10,
+            'uid_local' => 1,
+            'uid_foreign' => 30,
+            'tablenames' => 'tx_testnestedfiles_item',
+            'fieldname' => 'file',
+            'sorting_foreign' => 1,
+        ]);
+
+        $this->assertSame(0, (int)$GLOBALS['BE_USER']->workspace);
+        $items = $this->readEmbeddedItems(20);
+        $this->assertSame([30, 31], array_map('intval', array_column($items, 'uid')));
+        $this->assertSame([40], array_map('intval', array_column($items[0]['file'], 'uid')));
+        $this->assertSame(1, (int)$items[0]['file'][0]['uid_local']);
+        $this->assertSame([], $items[1]['file']);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    protected function readEmbeddedItems(int $contentUid): array
+    {
+        $result = GeneralUtility::makeInstance(ReadTableTool::class)->execute([
+            'table' => 'tt_content',
+            'uid' => $contentUid,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $records = json_decode($result->content[0]->text, true)['records'];
+        $this->assertCount(1, $records);
+
+        return $records[0]['tx_testnestedfiles_items'];
     }
 
     protected function createElementWithFile(
