@@ -580,6 +580,11 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
 
+            // A stored password (hash) is never read back, whoever asks
+            if ($this->tableAccessService->isSecretField($table, $field)) {
+                continue;
+            }
+
             // Skip fields not in the requested field list
             if (!empty($requestedFields) && !in_array($field, $requestedFields)) {
                 continue;
@@ -788,6 +793,13 @@ class ReadTableTool extends AbstractRecordTool
         foreach ($tca['columns'] as $fieldName => $fieldConfig) {
             // Skip relations for fields not in the requested field list
             if (!empty($requestedFields) && !in_array($fieldName, $requestedFields)) {
+                continue;
+            }
+
+            // Relation data is added to the records after they went through the
+            // field filter, so the filter's question has to be asked again here:
+            // a field the user may not read has no relations to show either
+            if (!$this->tableAccessService->isFieldPermitted($table, $fieldName)) {
                 continue;
             }
 
