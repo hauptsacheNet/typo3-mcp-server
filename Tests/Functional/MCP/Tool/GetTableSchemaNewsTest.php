@@ -65,4 +65,41 @@ class GetTableSchemaNewsTest extends FunctionalTestCase
         $this->assertStringContainsString('https://example.com', $content);
         $this->assertStringContainsString('mailto:email@example.com', $content);
     }
+
+    public function testTypeZeroIsSelectedWhenItIsNotTheFirstType(): void
+    {
+        // Move type "0" to the end, so a fallback to the first type would pick another one
+        $items = $GLOBALS['TCA']['tx_news_domain_model_news']['columns']['type']['config']['items'];
+        $zero = array_values(array_filter($items, static fn(array $item): bool => (string)($item['value'] ?? '') === '0'));
+        $this->assertNotEmpty($zero, 'news must have a type "0"');
+        $GLOBALS['TCA']['tx_news_domain_model_news']['columns']['type']['config']['items'] = array_merge(
+            array_values(array_filter($items, static fn(array $item): bool => (string)($item['value'] ?? '') !== '0')),
+            $zero
+        );
+
+        $result = (new GetTableSchemaTool())->execute([
+            'table' => 'tx_news_domain_model_news',
+            'type' => '0',
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        $this->assertMatchesRegularExpression('/^Type: 0 \(/m', $content);
+        $this->assertMatchesRegularExpression('/datetime \(.*\[Required\]/', $content);
+        $this->assertDoesNotMatchRegularExpression('/^\s*(?:-|├─|└─) internalurl /mu', $content);
+    }
+
+    public function testNewsTypeZeroListsOnlyItsOwnFields(): void
+    {
+        $result = (new GetTableSchemaTool())->execute([
+            'table' => 'tx_news_domain_model_news',
+            'type' => '0',
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $content = $result->content[0]->text;
+
+        $this->assertMatchesRegularExpression('/datetime \(.*\[Required\]/', $content);
+        $this->assertDoesNotMatchRegularExpression('/^\s*(?:-|├─|└─) internalurl /mu', $content);
+        $this->assertDoesNotMatchRegularExpression('/^\s*(?:-|├─|└─) externalurl /mu', $content);
+    }
 }

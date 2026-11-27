@@ -148,7 +148,7 @@ jobs:
         continue-on-error: true
 
       - name: Check majority pass rule
-        run: php Build/check-llm-results.php --min-pass=3
+        run: php Build/check-llm-results.php --min-pass=4
 
       - name: Publish LLM stats to Google Sheet
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

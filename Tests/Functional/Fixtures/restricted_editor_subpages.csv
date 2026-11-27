@@ -1,0 +1,7 @@
+"pages"
+,"uid","pid","title","doktype","hidden","deleted","sorting","slug","perms_userid","perms_groupid","perms_user","perms_group","perms_everybody","tstamp","crdate"
+,22,20,"Secret Subpage",1,0,0,256,"/restricted/secret",1,0,31,0,0,1734875000,1734875000
+,23,20,"Shared Subpage",1,0,0,512,"/restricted/shared",1,10,31,31,0,1734875000,1734875000
+"tt_content"
+,"uid","pid","header","bodytext","CType","colPos","sorting","frame_class","layout","sys_language_uid","hidden","deleted","t3ver_wsid","t3ver_oid","tstamp","crdate"
+,203,22,"Secret block","<p>Secret markup</p>","html",0,256,"default",0,0,0,0,0,0,1734875000,1734875000

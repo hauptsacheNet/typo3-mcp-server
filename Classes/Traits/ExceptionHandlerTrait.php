@@ -73,8 +73,10 @@ trait ExceptionHandlerTrait
             $context = array_merge($context, $e->getContext());
         }
         
+        // Expected exceptions are client errors (invalid input, access denied):
+        // the server answered correctly, so they must not trigger alerting on "error".
         if ($this->isExpectedException($e)) {
-            $this->getLogger()->error($e->getMessage(), $context);
+            $this->getLogger()->warning($e->getMessage(), $context);
         } else {
             $this->getLogger()->critical($e->getMessage(), $context);
         }
