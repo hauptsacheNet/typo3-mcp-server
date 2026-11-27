@@ -802,31 +802,34 @@ class TableAccessService implements SingletonInterface
     }
 
     /**
-     * Check if a specific field can be accessed
-     *
-     * @param string $table Table name
-     * @param string $fieldName Field name
-     * @param string $type Record type (optional, for type-specific TSconfig)
-     * @param int|null $pid Page id for TSconfig context (null → first site root)
-     * @return bool
+     * Does the column hold a secret that must not be read back? TCA marks those
+     * as type=password (be_users.password, fe_users.password): the backend never
+     * shows the stored value, only an empty input to set a new one. The read
+     * tools treat it the same way - not returned, not filterable, not searched -
+     * while WriteTable can still set it.
      */
-    public function canAccessField(string $table, string $fieldName, string $type = '', ?int $pid = null): bool
+    public function isSecretField(string $table, string $fieldName): bool
     {
-        return $this->getFieldAccessDenialReason($table, $fieldName, $type, $pid) === null;
+        return ($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['type'] ?? '') === 'password';
     }
 
     /**
-     * Why a field is not accessible, or null when it is. The reason completes the
-     * sentence "Field 'x' is not accessible: ..." and names where the restriction
-     * comes from (permissions, admin-only, page TSconfig), so the reader does not
-     * go looking in the wrong place.
-     *
-     * @param string $table Table name
-     * @param string $fieldName Field name
-     * @param string $type Record type (optional, for type-specific TSconfig)
-     * @param int|null $pid Page id for TSconfig context (null → first site root)
+     * May the current user see this field at all? The part of canAccessField()
+     * that is about the user's rights - exclude fields, admin-only fields,
+     * relations into tables they have no access to - and not about how a form
+     * is arranged (record type, TCEFORM). ReadTable asks this for data it adds
+     * to a record outside the per-record field filter.
      */
-    public function getFieldAccessDenialReason(string $table, string $fieldName, string $type = '', ?int $pid = null): ?string
+    public function isFieldPermitted(string $table, string $fieldName): bool
+    {
+        return $this->getFieldPermissionDenialReason($table, $fieldName) === null;
+    }
+
+    /**
+     * Why the user's rights do not cover a field (see isFieldPermitted()), or null
+     * when they do. Phrased to complete "Field 'x' is not accessible: ...".
+     */
+    public function getFieldPermissionDenialReason(string $table, string $fieldName): ?string
     {
         $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
 
@@ -860,8 +863,43 @@ class TableAccessService implements SingletonInterface
             }
         }
 
+        return null;
+    }
+
+    /**
+     * Check if a specific field can be accessed
+     *
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @param string $type Record type (optional, for type-specific TSconfig)
+     * @param int|null $pid Page id for TSconfig context (null → first site root)
+     * @return bool
+     */
+    public function canAccessField(string $table, string $fieldName, string $type = '', ?int $pid = null): bool
+    {
+        return $this->getFieldAccessDenialReason($table, $fieldName, $type, $pid) === null;
+    }
+
+    /**
+     * Why a field is not accessible, or null when it is: the user's rights
+     * (getFieldPermissionDenialReason()) first, then TCEFORM. The reason completes
+     * the sentence "Field 'x' is not accessible: ..." and names where the
+     * restriction comes from, so the reader does not go looking in the wrong place.
+     *
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @param string $type Record type (optional, for type-specific TSconfig)
+     * @param int|null $pid Page id for TSconfig context (null → first site root)
+     */
+    public function getFieldAccessDenialReason(string $table, string $fieldName, string $type = '', ?int $pid = null): ?string
+    {
+        $permissionDenialReason = $this->getFieldPermissionDenialReason($table, $fieldName);
+        if ($permissionDenialReason !== null) {
+            return $permissionDenialReason;
+        }
+
         // Positional fields are set by the page module, which ignores TCEFORM.
-        // Permissions above still apply. See isPositionalField().
+        // The user's rights above still apply. See isPositionalField().
         if ($this->isPositionalField($table, $fieldName)) {
             return null;
         }
