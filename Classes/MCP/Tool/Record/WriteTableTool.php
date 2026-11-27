@@ -595,7 +595,7 @@ class WriteTableTool extends AbstractRecordTool
 
         // For translation records, add l10n_state overrides so DataHandler treats
         // explicitly updated fields as "custom" (not synced from parent)
-        $data = $this->ensureL10nStateForTranslation($table, $uid, $data);
+        $data = $this->ensureL10nStateForTranslation($table, $uid, $data, array_keys($inlineRelations));
 
         // Resolve the live UID to workspace UID (once, used throughout)
         $workspaceUid = $this->resolveToWorkspaceUid($table, $uid);
@@ -3087,15 +3087,22 @@ class WriteTableTool extends AbstractRecordTool
      * array in the dataMap. DataMapProcessor's DataMapItem::buildState() reads the
      * persisted l10n_state JSON from the database first, then merges incoming array
      * values on top (see DataMapItem::buildState step 4).
+     *
+     * Inline and file fields have already been taken out of $data at this point
+     * (they are written through a separate datamap), so the caller passes their
+     * names in $inlineFieldNames. Their override has to travel with the parent's
+     * field datamap, which runs before the children are processed.
+     *
+     * @param list<string> $inlineFieldNames
      */
-    protected function ensureL10nStateForTranslation(string $table, int $uid, array $data): array
+    protected function ensureL10nStateForTranslation(string $table, int $uid, array $data, array $inlineFieldNames): array
     {
         $translationParentField = $this->tableAccessService->getTranslationParentFieldName($table);
         if (!$translationParentField) {
             return $data;
         }
 
-        // $uid is already the workspace UID (resolved by the caller)
+        // $uid is the live UID; the translation parent is the same in the workspace version
         $record = BackendUtility::getRecord($table, $uid, $translationParentField);
         if (!$record || empty($record[$translationParentField])) {
             // Not a translation — nothing to do
@@ -3105,7 +3112,7 @@ class WriteTableTool extends AbstractRecordTool
         $columns = $GLOBALS['TCA'][$table]['columns'] ?? [];
         $l10nStateOverrides = [];
 
-        foreach ($data as $fieldName => $_value) {
+        foreach ([...array_keys($data), ...$inlineFieldNames] as $fieldName) {
             $behaviour = $columns[$fieldName]['config']['behaviour'] ?? [];
             if (!empty($behaviour['allowLanguageSynchronization'])) {
                 $l10nStateOverrides[$fieldName] = 'custom';

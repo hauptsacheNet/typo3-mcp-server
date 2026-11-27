@@ -7,6 +7,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Service\WorkspaceContextService;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\Yaml\Yaml;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -532,6 +533,106 @@ class MmRelationWorkspaceTest extends FunctionalTestCase
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
         $translation = json_decode($result->content[0]->text)->records[0];
         $this->assertEquals([3, 4, 5], $translation->categories, 'Translation should have independent categories');
+    }
+
+    public static function synchronizedRelationFieldProvider(): array
+    {
+        return [
+            'inline field' => [
+                'related_links',
+                [['uri' => 'https://example.com', 'title' => 'English Link']],
+                [['uri' => 'https://example.de', 'title' => 'German Link']],
+                'title',
+                'German Link',
+            ],
+            'file field' => [
+                'fal_media',
+                [['uid_local' => 1, 'title' => 'English Image']],
+                [['uid_local' => 3, 'title' => 'German Image']],
+                'title',
+                'German Image',
+            ],
+        ];
+    }
+
+    /**
+     * Inline and file fields are taken out of the data before the l10n_state
+     * overrides are computed, so they need the same "custom" override as plain
+     * fields. Without it the field stays on "parent" and DataHandler keeps showing
+     * the children of the default language.
+     */
+    #[DataProvider('synchronizedRelationFieldProvider')]
+    public function testTranslationCanOverrideSynchronizedRelationField(
+        string $field,
+        array $sourceChildren,
+        array $translatedChildren,
+        string $childProperty,
+        string $expectedChildValue,
+    ): void {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_file.csv');
+
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => [
+                'title' => 'English News',
+                'datetime' => time(),
+                $field => $sourceChildren,
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $newsUid = json_decode($result->content[0]->text)->uid;
+
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'translate',
+            'uid' => $newsUid,
+            'data' => ['sys_language_uid' => 'de'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $translationUid = json_decode($result->content[0]->text)->translationUid;
+
+        $this->assertSame(
+            'parent',
+            $this->readL10nState($translationUid)[$field] ?? null,
+            'Precondition: a fresh translation keeps the field synchronized with the default language',
+        );
+
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => $translationUid,
+            'data' => [$field => $translatedChildren],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $this->assertSame('custom', $this->readL10nState($translationUid)[$field] ?? null);
+
+        $result = $this->readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => $translationUid,
+            'fields' => [$field],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $translation = json_decode($result->content[0]->text, true)['records'][0];
+        $this->assertSame(
+            [$expectedChildValue],
+            array_column($translation[$field], $childProperty),
+            'Translation should show its own children',
+        );
+    }
+
+    /**
+     * Reads l10n_state of the record as the current workspace sees it.
+     */
+    private function readL10nState(int $uid): array
+    {
+        $record = BackendUtility::getRecord('tx_news_domain_model_news', $uid);
+        BackendUtility::workspaceOL('tx_news_domain_model_news', $record);
+        $this->assertIsArray($record);
+
+        return json_decode((string)$record['l10n_state'], true) ?? [];
     }
 
     /**
