@@ -26,6 +26,9 @@ use Hn\McpServer\Service\LanguageService;
  */
 class SearchTool extends AbstractRecordTool
 {
+    private const DEFAULT_LIMIT = 50;
+    private const MAX_LIMIT = 200;
+
     protected LanguageService $languageService;
 
     public function __construct()
@@ -67,7 +70,9 @@ class SearchTool extends AbstractRecordTool
                     ],
                     'limit' => [
                         'type' => 'integer',
-                        'description' => 'Maximum number of records to return per table (default: 50)',
+                        'description' => 'Maximum number of records to return per table (default: ' . self::DEFAULT_LIMIT . ', max: ' . self::MAX_LIMIT . '). Tables with more matches report how many were cut.',
+                        'minimum' => 1,
+                        'maximum' => self::MAX_LIMIT,
                     ],
                 ],
                 'required' => ['terms'],
@@ -205,7 +210,7 @@ class SearchTool extends AbstractRecordTool
         $termLogic = strtoupper($params['termLogic'] ?? 'OR');
         $table = trim($params['table'] ?? '');
         $pageId = isset($params['pageId']) ? (int)$params['pageId'] : null;
-        $limit = 50;
+        $limit = min(self::MAX_LIMIT, (int)($params['limit'] ?? self::DEFAULT_LIMIT));
         
         // Handle language parameter
         $languageId = null;
@@ -223,7 +228,7 @@ class SearchTool extends AbstractRecordTool
         $searchResults = $this->performSearch($searchTerms, $termLogic, $table, $pageId, $limit, $languageId);
         
         // Format results
-        $formattedResults = $this->formatSearchResults($searchResults, $searchTerms, $termLogic, $languageId);
+        $formattedResults = $this->formatSearchResults($searchResults, $searchTerms, $termLogic, $languageId, $limit);
         
         return $this->createSuccessResult($formattedResults);
     }
@@ -247,6 +252,14 @@ class SearchTool extends AbstractRecordTool
             $termLogic = strtoupper($params['termLogic']);
             if (!in_array($termLogic, ['AND', 'OR'])) {
                 $errors[] = 'termLogic must be either "AND" or "OR"';
+            }
+        }
+
+        // Validate limit (numeric strings are accepted, some clients send them)
+        if (isset($params['limit'])) {
+            $limit = $params['limit'];
+            if (!(is_int($limit) || (is_string($limit) && ctype_digit($limit))) || (int)$limit < 1) {
+                $errors[] = 'limit must be a positive integer';
             }
         }
         
@@ -339,7 +352,7 @@ class SearchTool extends AbstractRecordTool
         }
         
         // Attribute inline results to parent records
-        $attributedResults = $this->attributeInlineResultsToParents($searchResults, $inlineTableMetadata);
+        $attributedResults = $this->attributeInlineResultsToParents($searchResults, $inlineTableMetadata, $limit);
         
         return $attributedResults;
     }
@@ -347,11 +360,13 @@ class SearchTool extends AbstractRecordTool
     /**
      * Attribute inline table results to their parent records
      */
-    protected function attributeInlineResultsToParents(array $searchResults, array $inlineTableMetadata): array
+    protected function attributeInlineResultsToParents(array $searchResults, array $inlineTableMetadata, int $limit): array
     {
         $attributedResults = [];
         // Parent records with inline matches, indexed by parent table and uid
         $parentRecordsByTable = [];
+        // Parent tables whose inline matches were cut by the limit
+        $parentTablesWithCutInlineMatches = [];
 
         foreach ($searchResults as $tableName => $tableResults) {
             // Check if this is an inline table result
@@ -365,6 +380,9 @@ class SearchTool extends AbstractRecordTool
                 // Process each inline record and find its parent(s)
                 // Note: tableResults is the structure returned by searchInTable which includes metadata
                 $inlineRecords = $tableResults['records'] ?? [];
+                if (($tableResults['total'] ?? 0) > count($inlineRecords)) {
+                    $parentTablesWithCutInlineMatches[$parentTable] = true;
+                }
                 foreach ($inlineRecords as $inlineRecord) {
 
                     $parentRecords = $this->findParentRecordsForInlineRecord(
@@ -373,8 +391,13 @@ class SearchTool extends AbstractRecordTool
                         $parentTable,
                         $foreignField,
                         $parentField,
-                        $relationType
+                        $relationType,
+                        $limit
                     );
+                    if (count($parentRecords) >= $limit) {
+                        // A single related record (e.g. a category) may be referenced by more parents
+                        $parentTablesWithCutInlineMatches[$parentTable] = true;
+                    }
 
                     // Add the inline match info to each parent record
                     foreach ($parentRecords as $parentRecord) {
@@ -407,6 +430,8 @@ class SearchTool extends AbstractRecordTool
         // matched directly stays a single entry that carries the inline matches.
         foreach ($parentRecordsByTable as $parentTable => $parentRecords) {
             $records = $attributedResults[$parentTable]['records'] ?? [];
+            $directTotal = (int)($attributedResults[$parentTable]['total'] ?? 0);
+            $directMatchesCut = $directTotal > count($records);
             foreach ($records as &$record) {
                 $uid = (int)($record['uid'] ?? 0);
                 if (isset($parentRecords[$uid])) {
@@ -416,9 +441,17 @@ class SearchTool extends AbstractRecordTool
             }
             unset($record);
 
+            // Parents found only through inline matches are appended after the
+            // direct matches, and the table as a whole still respects the limit.
             $records = array_merge($records, array_values($parentRecords));
-            $attributedResults[$parentTable]['records'] = $records;
-            $attributedResults[$parentTable]['total'] = count($records);
+            $attributedResults[$parentTable]['records'] = array_slice($records, 0, $limit);
+            $attributedResults[$parentTable]['total'] = max($directTotal, count($records));
+            // The exact number is unknown when some matches never reached this
+            // point (cut inline matches) or when parents found through inline
+            // matches may also be among the direct matches that were cut.
+            if (isset($parentTablesWithCutInlineMatches[$parentTable]) || ($directMatchesCut && $parentRecords !== [])) {
+                $attributedResults[$parentTable]['total_is_minimum'] = true;
+            }
         }
 
         return $attributedResults;
@@ -433,7 +466,8 @@ class SearchTool extends AbstractRecordTool
         string $parentTable, 
         string $foreignField, 
         string $parentField,
-        string $relationType = 'inline'
+        string $relationType = 'inline',
+        int $limit = self::DEFAULT_LIMIT
     ): array {
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($parentTable);
@@ -493,6 +527,9 @@ class SearchTool extends AbstractRecordTool
         // Allow listeners to add restrictions to the parent-lookup query as well
         $eventDispatcher = GeneralUtility::makeInstance(EventDispatcherInterface::class);
         $eventDispatcher->dispatch(new BeforeRecordReadEvent($parentTable, $queryBuilder, 'select', BeforeRecordReadEvent::SOURCE_SEARCH_PARENT));
+
+        RecordFormattingUtility::applyDefaultSorting($queryBuilder, $parentTable);
+        $queryBuilder->setMaxResults($limit);
 
         try {
             $parentRecords = $queryBuilder->executeQuery()->fetchAllAssociative();
@@ -748,14 +785,25 @@ class SearchTool extends AbstractRecordTool
         // Execute query with error handling
         try {
             $records = $queryBuilder->executeQuery()->fetchAllAssociative();
+            $total = count($records);
+            if ($total >= $limit) {
+                // The limit may have cut matches: count all of them so the
+                // output can tell the client how many records were left out
+                $countQueryBuilder = clone $queryBuilder;
+                $countQueryBuilder->count('*')->resetOrderBy()->setFirstResult(0)->setMaxResults(null);
+                $total = (int)$countQueryBuilder->executeQuery()->fetchOne();
+            }
         } catch (\Doctrine\DBAL\Exception $e) {
             throw new DatabaseException('search', $table, $e);
         }
 
-        // Return records in expected structure format
+        $records = $this->enhanceRecordsWithPageInfo($records, $table, $languageId);
+
+        // Return records in expected structure format. "total" counts all
+        // matching rows, "records" holds at most $limit of them.
         return [
-            'records' => $this->enhanceRecordsWithPageInfo($records, $table, $languageId),
-            'total' => count($records),
+            'records' => $records,
+            'total' => max($total, count($records)),
             'search_terms' => $searchTerms,
             'term_logic' => $termLogic,
         ];
@@ -872,7 +920,7 @@ class SearchTool extends AbstractRecordTool
     /**
      * Format search results
      */
-    protected function formatSearchResults(array $searchResults, array $searchTerms, string $termLogic, ?int $languageId = null): string
+    protected function formatSearchResults(array $searchResults, array $searchTerms, string $termLogic, ?int $languageId = null, int $limit = self::DEFAULT_LIMIT): string
     {
 
         $result = "SEARCH RESULTS\n";
@@ -895,15 +943,23 @@ class SearchTool extends AbstractRecordTool
         $result .= "\n";
 
         $totalResults = 0;
-        foreach ($searchResults as $tableResults) {
+        $tablesWithCutResults = [];
+        foreach ($searchResults as $table => $tableResults) {
             if (is_array($tableResults) && isset($tableResults['records'])) {
                 $totalResults += count($tableResults['records']);
+                if (($tableResults['total'] ?? 0) > count($tableResults['records'])) {
+                    $tablesWithCutResults[] = $table;
+                }
             } else {
                 $totalResults += count($tableResults);
             }
         }
 
         $result .= "Total Results: $totalResults\n";
+        if ($tablesWithCutResults !== []) {
+            $result .= "Limit: $limit per table. More records match in: " . implode(', ', $tablesWithCutResults)
+                . ". Narrow the search (more specific terms, termLogic AND, table or pageId) or raise limit to see them.\n";
+        }
         $result .= "Tables Searched: " . count($searchResults) . "\n\n";
 
         // If no results, show no results message
@@ -939,7 +995,14 @@ class SearchTool extends AbstractRecordTool
             $records = $tableData;
         }
         
-        $result .= "Found " . count($records) . " record(s)\n\n";
+        $shown = count($records);
+        $total = (int)($tableData['total'] ?? $shown);
+        if ($total > $shown) {
+            $totalDisplay = !empty($tableData['total_is_minimum']) ? 'at least ' . $total : (string)$total;
+            $result .= "Found $totalDisplay record(s), showing $shown of $totalDisplay\n\n";
+        } else {
+            $result .= "Found $shown record(s)\n\n";
+        }
 
         foreach ($records as $record) {
             $result .= $this->formatRecord($table, $record, $searchTerms, $languageId);
