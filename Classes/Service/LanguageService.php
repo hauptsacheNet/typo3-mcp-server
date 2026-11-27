@@ -17,11 +17,13 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  * numeric language IDs.
  *
  * Each language of a site gets its two-letter code ("de", "en") as long as
- * that code is unique within the site. When several languages of one site
- * share a code (de_DE, de_AT, de_CH), each of them gets its full tag from
- * hreflang or locale instead ("de-DE", "de-AT", "de-CH"), so every language
- * stays addressable. Identifiers are resolved per site: the same identifier
- * may stand for different language IDs on different sites.
+ * that code is unique within the site. The code comes from the locale, as in
+ * the TYPO3 core. When several languages of one site share a code, each of
+ * them gets the hreflang the site publishes for it, with or without a region
+ * ("de", "de-CH"), as long as that is unique within the site, and otherwise
+ * the tag of its locale ("de-AT"), so every language stays addressable.
+ * Identifiers are resolved per site: the same identifier may stand for
+ * different language IDs on different sites.
  */
 class LanguageService implements SingletonInterface
 {
@@ -84,18 +86,41 @@ class LanguageService implements SingletonInterface
         ksort($candidates);
 
         $codeCount = array_count_values(array_map(static fn(array $candidate): string => $candidate[1], $candidates));
-        $languages = [];
-        $used = [];
+        $hreflangCount = array_count_values(array_filter(array_map(
+            fn(array $candidate): string => strtolower((string)$this->normalizeLanguageTag($candidate[0]->getHreflang(), 1)),
+            $candidates
+        )));
+
+        $proposals = [];
         foreach ($candidates as $uid => [$language, $isoCode]) {
-            $identifier = $codeCount[$isoCode] === 1 ? $isoCode : $this->extractLanguageTag($language, $isoCode);
-            if (isset($used[strtolower($identifier)])) {
-                // Two languages with the same full tag: keep both addressable
-                $identifier .= '-' . $uid;
+            $proposals[$uid] = $codeCount[$isoCode] === 1
+                ? [$isoCode, true]
+                : $this->extractLanguageTag($language, $isoCode, $hreflangCount);
+        }
+
+        // Identifiers the site defines itself (a unique code or hreflang) are taken
+        // first, so a tag derived from a locale cannot take one of them away
+        $identifiers = [];
+        $used = [];
+        foreach ([true, false] as $definedBySite) {
+            foreach ($proposals as $uid => [$identifier, $isDefinedBySite]) {
+                if ($isDefinedBySite !== $definedBySite) {
+                    continue;
+                }
+                if (isset($used[strtolower($identifier)])) {
+                    // Two languages with the same tag: keep both addressable
+                    $identifier .= '-' . $uid;
+                }
+                $used[strtolower($identifier)] = true;
+                $identifiers[$uid] = $identifier;
             }
-            $used[strtolower($identifier)] = true;
+        }
+
+        $languages = [];
+        foreach ($candidates as $uid => [$language, $isoCode]) {
             $languages[$uid] = [
                 'uid' => $uid,
-                'identifier' => $identifier,
+                'identifier' => $identifiers[$uid],
                 'isoCode' => $isoCode,
                 'title' => $language->getTitle(),
                 'locale' => $language->getLocale(),
@@ -106,20 +131,19 @@ class LanguageService implements SingletonInterface
     }
 
     /**
-     * Extract ISO code from SiteLanguage
-     * Tries multiple sources in order of preference
+     * Two-letter language code of a SiteLanguage.
+     *
+     * The locale decides, as it does in the TYPO3 core since v12. iso-639-1 is
+     * an older setting and only used when the locale gives no two-letter code:
+     * a value that disagrees with the locale (e.g. the country code "us" next to
+     * en_US) would otherwise split the language off from its group.
      */
     protected function extractIsoCode(SiteLanguage $language): ?string
     {
         // Get the language configuration array
         $languageConfig = $language->toArray();
 
-        // 1. Try iso-639-1 configuration (two-letter code like 'en', 'de')
-        if (isset($languageConfig['iso-639-1']) && strlen($languageConfig['iso-639-1']) === 2) {
-            return strtolower($languageConfig['iso-639-1']);
-        }
-
-        // 2. Try to get language code from Locale object
+        // 1. Try to get language code from Locale object
         try {
             $locale = $language->getLocale();
             if ($locale !== null) {
@@ -130,6 +154,11 @@ class LanguageService implements SingletonInterface
             }
         } catch (\Throwable $e) {
             // Locale might not be properly configured
+        }
+
+        // 2. Try iso-639-1 configuration (two-letter code like 'en', 'de')
+        if (isset($languageConfig['iso-639-1']) && strlen($languageConfig['iso-639-1']) === 2) {
+            return strtolower($languageConfig['iso-639-1']);
         }
 
         // 3. Try hreflang (might be like 'en-us', we take the first part)
@@ -153,32 +182,52 @@ class LanguageService implements SingletonInterface
     }
 
     /**
-     * Full language tag ("de-AT") for a language whose two-letter code is not
-     * unique within its site: from hreflang, else from the locale, else the
-     * code plus the language ID.
+     * Identifier of a language whose two-letter code is not unique within its
+     * site: its hreflang as the site publishes it ("de", "de-CH"), if that is
+     * unique within the site and names the same language; else the tag of its
+     * locale ("de-AT" from de_AT.UTF-8); else the code plus the language ID.
+     *
+     * @param array<string, int> $hreflangCount Lower-cased hreflang tags of the site and how often each occurs
+     * @return array{0: string, 1: bool} The identifier, and whether the site defines it itself (hreflang)
      */
-    protected function extractLanguageTag(SiteLanguage $language, string $isoCode): string
+    protected function extractLanguageTag(SiteLanguage $language, string $isoCode, array $hreflangCount): array
     {
-        $languageConfig = $language->toArray();
-        $sources = [$language->getHreflang(), (string)($languageConfig['locale'] ?? '')];
-        foreach ($sources as $source) {
-            // Drop encoding and modifier: de_AT.UTF-8, de_AT@euro
-            $source = preg_replace('/[.@].*$/', '', trim((string)$source));
-            $parts = preg_split('/[_\-]/', (string)$source) ?: [];
-            if (count($parts) < 2 || strlen($parts[0]) !== 2) {
-                continue;
-            }
-            $tag = [strtolower($parts[0])];
-            foreach (array_slice($parts, 1) as $part) {
-                $tag[] = match (strlen($part)) {
-                    2 => strtoupper($part),
-                    4 => ucfirst(strtolower($part)),
-                    default => $part,
-                };
-            }
-            return implode('-', $tag);
+        $hreflang = $this->normalizeLanguageTag($language->getHreflang(), 1);
+        if ($hreflang !== null
+            && ($hreflangCount[strtolower($hreflang)] ?? 0) === 1
+            && explode('-', $hreflang)[0] === $isoCode
+        ) {
+            return [$hreflang, true];
         }
-        return $isoCode . '-' . $language->getLanguageId();
+        $localeTag = $this->normalizeLanguageTag((string)($language->toArray()['locale'] ?? ''), 2);
+        if ($localeTag !== null) {
+            return [$localeTag, false];
+        }
+        return [$isoCode . '-' . $language->getLanguageId(), false];
+    }
+
+    /**
+     * Language tag in its usual casing: "de_AT.UTF-8" becomes "de-AT", "en-gb"
+     * becomes "en-GB". Null when the value has fewer than $minParts parts or
+     * does not start with a two-letter language code.
+     */
+    protected function normalizeLanguageTag(string $value, int $minParts): ?string
+    {
+        // Drop encoding and modifier: de_AT.UTF-8, de_AT@euro
+        $value = (string)preg_replace('/[.@].*$/', '', trim($value));
+        $parts = preg_split('/[_\-]/', $value) ?: [];
+        if ($value === '' || count($parts) < $minParts || strlen($parts[0]) !== 2) {
+            return null;
+        }
+        $tag = [strtolower($parts[0])];
+        foreach (array_slice($parts, 1) as $part) {
+            $tag[] = match (strlen($part)) {
+                2 => strtoupper($part),
+                4 => ucfirst(strtolower($part)),
+                default => $part,
+            };
+        }
+        return implode('-', $tag);
     }
 
     /**
