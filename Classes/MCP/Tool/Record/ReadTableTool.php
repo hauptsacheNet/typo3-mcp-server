@@ -797,6 +797,13 @@ class ReadTableTool extends AbstractRecordTool
                 continue;
             }
 
+            // Relation data is added to the records after they went through the
+            // field filter, so the filter's question has to be asked again here:
+            // a field the user may not read has no relations to show either
+            if (!$this->tableAccessService->isFieldPermitted($table, $fieldName)) {
+                continue;
+            }
+
             $fieldType = $fieldConfig['config']['type'] ?? '';
 
             match ($fieldType) {
