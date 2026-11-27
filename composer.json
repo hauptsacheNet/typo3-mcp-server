@@ -22,7 +22,8 @@
         "typo3/cms-install": "^13.4 || ^14.3",
         "georgringer/news": "^14.0",
         "b13/container": "^4.0",
-        "brianium/paratest": "^7.4"
+        "brianium/paratest": "^7.4",
+        "friendsoftypo3/headless": "^4.8 || ^5.0@rc"
     },
     "autoload": {
         "psr-4": {
@@ -32,7 +33,8 @@
     "autoload-dev": {
         "psr-4": {
             "Hn\\McpServer\\Tests\\": "Tests/",
-            "Hn\\TestRequestContext\\": "Tests/Functional/Fixtures/Extensions/test_request_context/Classes/"
+            "Hn\\TestRequestContext\\": "Tests/Functional/Fixtures/Extensions/test_request_context/Classes/",
+            "Hn\\TestHeadlessBridge\\": "Tests/Functional/Fixtures/Extensions/test_headless_bridge/Classes/"
         }
     },
     "extra": {
