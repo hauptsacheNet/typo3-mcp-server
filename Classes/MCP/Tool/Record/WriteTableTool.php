@@ -9,6 +9,7 @@ use Hn\McpServer\Event\AfterRecordWriteEvent;
 use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
+use Hn\McpServer\Service\DisplayConditionService;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\NewRecordInitializer;
@@ -1550,6 +1551,11 @@ class WriteTableTool extends AbstractRecordTool
      *   record is the one that was checked. Fields that stay empty are refused.
      * - update/translate: given fields must not be empty. Other fields are only
      *   checked when the record type changes, against the stored values.
+     * - A field with a displayCond is only required when the backend form shows it.
+     *   Conditions DisplayConditionService can evaluate are evaluated on the record
+     *   after the write; a field it shows only now (e.g. after switching a variant
+     *   field) is checked against its stored value. A condition it cannot evaluate
+     *   (USER, VERSION, relation fields) only checks values the caller sends.
      *
      * @param array $data Record data; on create, filled defaults are added
      * @param array|null $newRecordRow Row of a new record as the backend form initializes it
@@ -1582,6 +1588,11 @@ class WriteTableTool extends AbstractRecordTool
             && array_key_exists($typeField, $data)
             && (string)$data[$typeField] !== (string)($currentRecord[$typeField] ?? '');
 
+        // The record as it is after this write, and before it, for display conditions
+        $isNew = $action === 'create';
+        $recordAfter = array_merge($isNew ? ($newRecordRow ?? []) : ($currentRecord ?? []), $data);
+        $displayConditionService = GeneralUtility::makeInstance(DisplayConditionService::class);
+
         $violations = [];
         foreach ($availableFields as $fieldName => $fieldConfig) {
             if ($fieldName === $typeField || $fieldName === $languageField || !empty($fieldConfig['mcp']['computed'])) {
@@ -1589,14 +1600,26 @@ class WriteTableTool extends AbstractRecordTool
             }
             $config = is_array($fieldConfig['config'] ?? null) ? $fieldConfig['config'] : $fieldConfig;
             $requiredItems = $this->getRequiredItemCount($config);
-            // A field with a displayCond may be hidden for this record, so an omitted
-            // value is not checked. A value the caller sends explicitly always is.
             if ($requiredItems === 0
-                || (!empty($fieldConfig['displayCond']) && !array_key_exists($fieldName, $data))
                 || !empty($config['readOnly'])
                 || in_array($config['type'] ?? '', ['slug', 'uuid', 'passthrough', 'none', 'user', 'flex'], true)
             ) {
                 continue;
+            }
+
+            // A field with a displayCond is only required while the form shows it
+            $shownOnlyNow = false;
+            if (!empty($fieldConfig['displayCond'])) {
+                $shown = $displayConditionService->evaluate($table, $fieldConfig['displayCond'], $recordAfter, $isNew);
+                if ($shown === false) {
+                    continue;
+                }
+                if ($shown === null && !array_key_exists($fieldName, $data)) {
+                    // Cannot tell whether it is shown: only check values the caller sends
+                    continue;
+                }
+                $shownOnlyNow = $shown === true && !$isNew && $currentRecord !== null
+                    && $displayConditionService->evaluate($table, $fieldConfig['displayCond'], $currentRecord, false) === false;
             }
 
             if ($action === 'create') {
@@ -1610,7 +1633,7 @@ class WriteTableTool extends AbstractRecordTool
                 }
             } elseif (array_key_exists($fieldName, $data)) {
                 $itemCount = $this->countFieldItems($config, $data[$fieldName]);
-            } elseif ($typeChanged && $uid !== null) {
+            } elseif (($typeChanged || $shownOnlyNow) && $uid !== null) {
                 $itemCount = $this->countStoredFieldItems($table, $fieldName, $config, $currentRecord, $uid);
             } else {
                 continue;
@@ -1640,7 +1663,7 @@ class WriteTableTool extends AbstractRecordTool
         return sprintf(
             'Required fields are missing or empty for %s: %s. '
             . 'Provide them with real content (ask the user if it is not known)%s. '
-            . 'GetTableSchema marks these fields as [Required].',
+            . 'GetTableSchema marks these fields as [Required] or [Required when <condition>].',
             $recordType !== '' ? "record type '{$recordType}' of table '{$table}'" : "table '{$table}'",
             implode('; ', $violations),
             $typeField ? ' or choose another record type' : ''

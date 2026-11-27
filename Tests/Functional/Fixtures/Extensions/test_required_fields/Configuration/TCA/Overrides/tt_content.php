@@ -71,3 +71,43 @@ $GLOBALS['TCA']['tt_content']['types']['testrequired_conditional'] = [
         ],
     ],
 ];
+
+ExtensionManagementUtility::addTcaSelectItem('tt_content', 'CType', [
+    'label' => 'Element with fields required only for some header layouts',
+    'value' => 'testrequired_stage',
+]);
+
+// Mirrors a "stage" element whose fields depend on a selected variant: the
+// fields are required, but the backend form only shows them for that variant.
+$GLOBALS['TCA']['tt_content']['types']['testrequired_stage'] = [
+    'showitem' => '--palette--;;general, header, header_layout, header_position, subheader, header_link, bodytext, --div--;Language, --palette--;;language',
+    'columnsOverrides' => [
+        'subheader' => [
+            'displayCond' => 'FIELD:header_layout:=:2',
+            'config' => [
+                'required' => true,
+            ],
+        ],
+        'header_link' => [
+            'displayCond' => [
+                'AND' => [
+                    'FIELD:header_layout:IN:3,4',
+                    'OR' => [
+                        'FIELD:header_position:=:center',
+                        'FIELD:header_position:=:left',
+                    ],
+                ],
+            ],
+            'config' => [
+                'required' => true,
+            ],
+        ],
+        'bodytext' => [
+            // Cannot be evaluated on the record alone
+            'displayCond' => 'VERSION:IS:false',
+            'config' => [
+                'required' => true,
+            ],
+        ],
+    ],
+];
