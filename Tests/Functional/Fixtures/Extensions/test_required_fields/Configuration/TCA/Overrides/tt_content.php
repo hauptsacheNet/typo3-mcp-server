@@ -144,3 +144,42 @@ ExtensionManagementUtility::addTcaSelectItem('tt_content', 'CType', [
 $GLOBALS['TCA']['tt_content']['types']['testrequired_slides'] = [
     'showitem' => '--palette--;;general, header, tx_testrequiredfields_slides, tx_testrequiredfields_house_slides, --div--;Language, --palette--;;language',
 ];
+
+$GLOBALS['TCA']['tt_content']['columns']['tx_testrequiredfields_event_date'] = [
+    'label' => 'Event date',
+    'config' => [
+        'type' => 'datetime',
+        'nullable' => true,
+    ],
+];
+
+ExtensionManagementUtility::addTcaSelectItem('tt_content', 'CType', [
+    'label' => 'Element whose conditions depend on defaults, language and a date',
+    'value' => 'testrequired_dependent',
+]);
+
+$GLOBALS['TCA']['tt_content']['types']['testrequired_dependent'] = [
+    'showitem' => '--palette--;;general, header, subheader, header_link, tx_testrequiredfields_event_date, --div--;Language, --palette--;;language',
+    'columnsOverrides' => [
+        'header' => [
+            'config' => [
+                'required' => true,
+                'default' => 'Default header',
+            ],
+        ],
+        // Shown once the header has a value, also the default filled in for an empty one
+        'subheader' => [
+            'displayCond' => 'FIELD:header:REQ:true',
+            'config' => [
+                'required' => true,
+            ],
+        ],
+        // Only translations have to fill it
+        'header_link' => [
+            'displayCond' => 'FIELD:sys_language_uid:>:0',
+            'config' => [
+                'required' => true,
+            ],
+        ],
+    ],
+];

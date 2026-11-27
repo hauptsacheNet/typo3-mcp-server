@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Service;
 
+use TYPO3\CMS\Backend\Form\FormDataProvider\DatabaseRowDateTimeFields;
 use TYPO3\CMS\Backend\Form\FormDataProvider\EvaluateDisplayConditions;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -67,6 +68,7 @@ class DisplayConditionService
                     if ($formValue === false) {
                         return null;
                     }
+                    $formValue = $formValue['value'];
                     $row[$fieldName] = $formValue;
                     break;
                 case 'REC':
@@ -245,12 +247,14 @@ class DisplayConditionService
     }
 
     /**
-     * The value a FIELD condition sees for a field: the raw value, select values as
-     * the list of selected items (like the backend form has them).
+     * The value a FIELD condition sees for a field, the way the backend form has it:
+     * the raw value, select values as the list of selected items, datetime values as
+     * TYPO3's DatabaseRowDateTimeFields provider prepares them (on TYPO3 14 a
+     * DateTimeImmutable or null, depending on the field's nullable/dbType settings).
      *
-     * @return mixed false if the value cannot be judged on the raw record
+     * @return array{value: mixed}|false false if the value cannot be judged on the raw record
      */
-    private function getFormValue(string $table, string $fieldName, array $row): mixed
+    private function getFormValue(string $table, string $fieldName, array $row): array|false
     {
         // Sheet references only exist within flex forms
         if ($fieldName === '' || str_contains($fieldName, '.')) {
@@ -260,7 +264,7 @@ class DisplayConditionService
         $config = $GLOBALS['TCA'][$table]['columns'][$fieldName]['config'] ?? null;
         if (!is_array($config)) {
             // Control columns like pid or uid are compared as they are
-            return $value;
+            return ['value' => $value];
         }
 
         $type = (string)($config['type'] ?? '');
@@ -269,13 +273,36 @@ class DisplayConditionService
         }
         if (in_array($type, ['select', 'category'], true)) {
             if ($value === null || $value === '') {
-                return [];
+                return ['value' => []];
             }
-            return is_array($value) ? array_values($value) : GeneralUtility::trimExplode(',', (string)$value, true);
+            return ['value' => is_array($value) ? array_values($value) : GeneralUtility::trimExplode(',', (string)$value, true)];
         }
         if (is_bool($value)) {
-            return (int)$value;
+            $value = (int)$value;
         }
-        return $value;
+        if ($type === 'datetime') {
+            return $this->getDateTimeFormValue($table, $fieldName, $config, $value);
+        }
+        return ['value' => $value];
+    }
+
+    /**
+     * @return array{value: mixed}|false
+     */
+    private function getDateTimeFormValue(string $table, string $fieldName, array $config, mixed $value): array|false
+    {
+        if ($value !== null && !is_int($value) && !is_string($value)) {
+            return false;
+        }
+        try {
+            $formData = GeneralUtility::makeInstance(DatabaseRowDateTimeFields::class)->addData([
+                'tableName' => $table,
+                'databaseRow' => [$fieldName => $value],
+                'processedTca' => ['columns' => [$fieldName => ['config' => $config]]],
+            ]);
+        } catch (\Throwable) {
+            return false;
+        }
+        return ['value' => $formData['databaseRow'][$fieldName] ?? null];
     }
 }

@@ -6,9 +6,11 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\Service\DisplayConditionService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Core\Environment;
+use TYPO3\CMS\Core\Information\Typo3Version;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 class RequiredFieldsTest extends AbstractFunctionalTest
@@ -17,6 +19,7 @@ class RequiredFieldsTest extends AbstractFunctionalTest
     private const CATEGORIES_TYPE = 'testrequired_categories';
     private const CONDITIONAL_TYPE = 'testrequired_conditional';
     private const STAGE_TYPE = 'testrequired_stage';
+    private const DEPENDENT_TYPE = 'testrequired_dependent';
 
     protected array $testExtensionsToLoad = [
         __DIR__ . '/../../Fixtures/Extensions/test_required_fields',
@@ -780,6 +783,78 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         ]);
 
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testConditionSeesTheDefaultFilledInForAnEmptyRequiredField(): void
+    {
+        // The empty header gets its default, which shows the required subheader
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::DEPENDENT_TYPE,
+                'header' => '',
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'subheader is shown for the default header and must be filled');
+        $this->assertStringContainsString('subheader', $result->content[0]->text);
+    }
+
+    public function testTranslationIsValidatedInItsTargetLanguageBeforeItIsCreated(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::DEPENDENT_TYPE,
+                'header' => 'Original',
+                'subheader' => 'Subheader',
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        // header_link is only shown in translations (FIELD:sys_language_uid:>:0)
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Übersetzt', 'header_link' => ''],
+        ]);
+        $this->assertTrue($result->isError, 'The empty header_link of the translation must be refused');
+        $this->assertStringContainsString('header_link', $result->content[0]->text);
+        $this->assertStringNotContainsString('Translation record was created', $result->content[0]->text);
+        $this->assertSame(
+            0,
+            (int)$this->getConnectionForTable('tt_content')->count('uid', 'tt_content', ['l18n_parent' => $uid]),
+            'A refused translation must not leave a translation record behind'
+        );
+
+        // The corrected retry succeeds
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Übersetzt', 'header_link' => 'https://example.com'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testDateConditionSeesTheValueTheBackendFormHas(): void
+    {
+        $service = GeneralUtility::makeInstance(DisplayConditionService::class);
+        $condition = 'FIELD:tx_testrequiredfields_event_date:REQ:false';
+
+        $this->assertTrue($service->evaluate('tt_content', $condition, ['tx_testrequiredfields_event_date' => null], true));
+        $this->assertFalse($service->evaluate('tt_content', $condition, ['tx_testrequiredfields_event_date' => 1767225600], true));
+        // TYPO3 14 turns 0 of a nullable datetime field into a date (1970-01-01), TYPO3 13 keeps 0
+        $this->assertSame(
+            (new Typo3Version())->getMajorVersion() < 14,
+            $service->evaluate('tt_content', $condition, ['tx_testrequiredfields_event_date' => 0], true)
+        );
     }
 
     private function createValidElement(): int

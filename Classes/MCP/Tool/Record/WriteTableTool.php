@@ -1132,7 +1132,13 @@ class WriteTableTool extends AbstractRecordTool
             // and those normalized values are what gets persisted and reported
             // in the event below. The normalizations are guarded by type checks,
             // so updateRecord() re-validating them is a no-op.
-            $validationResult = $this->validateRecordData($table, $fieldValues, 'update', $uid);
+            // Validate against the record as the translation will be (its language and
+            // parent), so display conditions like FIELD:sys_language_uid:>:0 judge the
+            // fields the way updateRecord() does once the translation exists.
+            $validationResult = $this->validateRecordData($table, $fieldValues, 'update', $uid, 0, [
+                $languageField => $targetLanguageUid,
+                $translationParentField => $uid,
+            ]);
             if ($validationResult !== true) {
                 return $this->createErrorResult('Validation error: ' . $validationResult);
             }
@@ -1276,9 +1282,11 @@ class WriteTableTool extends AbstractRecordTool
      * Validate record data against TCA
      * 
      * @param int|null $uid Record UID (required for update actions)
+     * @param array $recordOverrides Values the record will have that differ from the stored
+     *        record $uid, e.g. the language fields of a translation that is not created yet
      * @return true|string True if valid, error message if invalid
      */
-    protected function validateRecordData(string $table, array &$data, string $action, ?int $uid = null, int $pid = 0)
+    protected function validateRecordData(string $table, array &$data, string $action, ?int $uid = null, int $pid = 0, array $recordOverrides = [])
     {
         // Table access has already been validated by ensureTableAccess() before this method is called
         // No need to re-check table existence here
@@ -1323,6 +1331,10 @@ class WriteTableTool extends AbstractRecordTool
                 if (!is_array($currentRecord)) {
                     $currentRecord = $existingRecord;
                 }
+            }
+            if ($recordOverrides !== []) {
+                $existingRecord = array_replace($existingRecord, $recordOverrides);
+                $currentRecord = array_replace($currentRecord, $recordOverrides);
             }
             $languageControlFields = array_filter([
                 $this->tableAccessService->getLanguageFieldName($table),
@@ -1603,12 +1615,8 @@ class WriteTableTool extends AbstractRecordTool
             && array_key_exists($typeField, $data)
             && (string)$data[$typeField] !== (string)($currentRecord[$typeField] ?? '');
 
-        // The record as it is after this write, and before it, for display conditions
-        $isNew = $action === 'create';
-        $recordAfter = array_merge($isNew ? ($newRecordRow ?? []) : ($currentRecord ?? []), $data);
-        $displayConditionService = GeneralUtility::makeInstance(DisplayConditionService::class);
-
-        $violations = [];
+        // Fields that have to be filled (when shown)
+        $requiredFields = [];
         foreach ($availableFields as $fieldName => $fieldConfig) {
             if ($fieldName === $typeField || $fieldName === $languageField || !empty($fieldConfig['mcp']['computed'])) {
                 continue;
@@ -1621,7 +1629,26 @@ class WriteTableTool extends AbstractRecordTool
             ) {
                 continue;
             }
+            $requiredFields[$fieldName] = [$fieldConfig, $config, $requiredItems];
+        }
 
+        $isNew = $action === 'create';
+        if ($isNew) {
+            // Fill the defaults of unconditionally required fields first: display
+            // conditions of other fields have to see the values that get stored.
+            foreach ($requiredFields as $fieldName => [$fieldConfig, $config, $requiredItems]) {
+                if (empty($fieldConfig['displayCond'])) {
+                    $this->fillDefaultOfEmptyRequiredField($data, $fieldName, $config, $requiredItems, $newRecordRow);
+                }
+            }
+        }
+
+        // The record as it is after this write, for display conditions
+        $recordAfter = array_merge($isNew ? ($newRecordRow ?? []) : ($currentRecord ?? []), $data);
+        $displayConditionService = GeneralUtility::makeInstance(DisplayConditionService::class);
+
+        $violations = [];
+        foreach ($requiredFields as $fieldName => [$fieldConfig, $config, $requiredItems]) {
             // A field with a displayCond is only required while the form shows it
             $shownOnlyNow = false;
             if (!empty($fieldConfig['displayCond'])) {
@@ -1637,15 +1664,11 @@ class WriteTableTool extends AbstractRecordTool
                     && $displayConditionService->evaluate($table, $fieldConfig['displayCond'], $currentRecord, false) === false;
             }
 
-            if ($action === 'create') {
-                $itemCount = array_key_exists($fieldName, $data) ? $this->countFieldItems($config, $data[$fieldName]) : 0;
-                if ($itemCount < $requiredItems) {
-                    $default = $this->getDefaultValueForNewRecord($fieldName, $config, $newRecordRow);
-                    if ($default !== null && $this->countFieldItems($config, $default) >= $requiredItems) {
-                        $data[$fieldName] = $default;
-                        continue;
-                    }
+            if ($isNew) {
+                if ($this->fillDefaultOfEmptyRequiredField($data, $fieldName, $config, $requiredItems, $newRecordRow)) {
+                    continue;
                 }
+                $itemCount = array_key_exists($fieldName, $data) ? $this->countFieldItems($config, $data[$fieldName]) : 0;
             } elseif (array_key_exists($fieldName, $data)) {
                 $itemCount = $this->countFieldItems($config, $data[$fieldName]);
             } elseif (($typeChanged || $shownOnlyNow) && $uid !== null) {
@@ -1785,6 +1808,26 @@ class WriteTableTool extends AbstractRecordTool
         unset($childData);
 
         return null;
+    }
+
+    /**
+     * On create: give a required field the data leaves empty the value of the new
+     * record row or the TCA default.
+     *
+     * @return bool Whether the field is filled now
+     */
+    protected function fillDefaultOfEmptyRequiredField(array &$data, string $fieldName, array $config, int $requiredItems, ?array $newRecordRow): bool
+    {
+        $itemCount = array_key_exists($fieldName, $data) ? $this->countFieldItems($config, $data[$fieldName]) : 0;
+        if ($itemCount >= $requiredItems) {
+            return true;
+        }
+        $default = $this->getDefaultValueForNewRecord($fieldName, $config, $newRecordRow);
+        if ($default !== null && $this->countFieldItems($config, $default) >= $requiredItems) {
+            $data[$fieldName] = $default;
+            return true;
+        }
+        return false;
     }
 
     protected function getRequiredItemCount(array $config): int
