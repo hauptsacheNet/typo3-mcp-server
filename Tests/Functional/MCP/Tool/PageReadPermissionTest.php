@@ -10,6 +10,7 @@ use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\MCP\Tool\SearchTool;
 use Hn\McpServer\Service\BackendUserContextService;
+use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Cache\CacheManager;
@@ -209,7 +210,7 @@ class PageReadPermissionTest extends AbstractFunctionalTest
             'action' => 'update',
             'table' => 'tt_content',
             'uid' => 100,
-            'search_replace' => ['header' => [['search' => $search, 'replace' => 'x']]],
+            'data' => ['header' => [['search' => $search, 'replace' => 'x']]],
         ]));
 
         $this->assertSame($attempt('Welcome'), $attempt('certainly not in there'));
@@ -251,6 +252,29 @@ class PageReadPermissionTest extends AbstractFunctionalTest
 
         $this->assertStringNotContainsString('Team Introduction', $this->textOf($result));
         $this->assertStringNotContainsString('confidential-subheader-value', $this->textOf($result));
+    }
+
+    /**
+     * TCEFORM.disabled arranges the edit form, it grants no rights: a field hidden
+     * by TSconfig in one place may be shown on other pages or for other record
+     * types, so Search keeps matching in it.
+     */
+    public function testSearchStillMatchesInAFieldHiddenByTsconfig(): void
+    {
+        $this->connectionPool->getConnectionForTable('be_groups')
+            ->update('be_groups', ['TSconfig' => 'page.TCEFORM.tt_content.bodytext.disabled = 1'], ['uid' => 70]);
+        $this->connectionPool->getConnectionForTable('tt_content')
+            ->update('tt_content', ['bodytext' => 'tceform-hidden-term'], ['uid' => 102]);
+        $this->actAsEditor();
+        $this->assertFalse(
+            GeneralUtility::makeInstance(TableAccessService::class)->canAccessField('tt_content', 'bodytext'),
+            'precondition: TCEFORM hides bodytext'
+        );
+
+        $result = GeneralUtility::makeInstance(SearchTool::class)->execute(['terms' => ['tceform-hidden-term']]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('Team Introduction', $this->textOf($result));
     }
 
     /**
