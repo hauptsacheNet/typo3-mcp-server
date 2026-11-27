@@ -62,10 +62,10 @@ class SearchLimitTest extends FunctionalTestCase
 
         $this->assertSame(5, $this->countRecordsInSection($text, 'tt_content'), $text);
         $this->assertStringContainsString('Found 12 record(s), showing 5 of 12', $text);
-        $this->assertStringContainsString('More records match in: tt_content.', $text);
+        $this->assertStringContainsString('More records (may) match in: tt_content.', $text);
         // A table below the limit is listed in full and not reported as cut
         $this->assertSame(1, $this->countRecordsInSection($text, 'pages'), $text);
-        $this->assertStringNotContainsString('More records match in: pages', $text);
+        $this->assertStringNotContainsString('More records (may) match in: pages', $text);
         $this->assertStringContainsString('Total Results: 6', $text);
     }
 
@@ -127,7 +127,61 @@ class SearchLimitTest extends FunctionalTestCase
         $this->assertStringContainsString('[UID: 601]', $text);
         $this->assertStringContainsString('[UID: 603]', $text);
         $this->assertStringContainsString('Found 7 record(s), showing 5 of 7', $text);
-        $this->assertStringContainsString('More records match in: tt_content.', $text);
+        $this->assertStringContainsString('More records (may) match in: tt_content.', $text);
+    }
+
+    public function testParentsOfCutInlineMatchesAreReportedAsPossiblyMore(): void
+    {
+        // Six elements match only through their item: the limit cuts the items to
+        // five, so five parents are found and the sixth one is unknown
+        for ($i = 1; $i <= 6; $i++) {
+            $this->insertRecord('tt_content', [
+                'uid' => 700 + $i,
+                'pid' => 1,
+                'CType' => 'textmedia',
+                'header' => 'Element ' . $i,
+                'tx_testnestedfiles_items' => 1,
+                'sorting' => $i * 256,
+            ]);
+            $this->insertRecord('tx_testnestedfiles_item', [
+                'uid' => 10 + $i,
+                'pid' => 1,
+                'title' => 'Needle item ' . $i,
+                'tt_content_items' => 700 + $i,
+            ]);
+        }
+
+        $result = (new SearchTool())->execute(['terms' => ['needle'], 'limit' => 5]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+
+        $this->assertSame(5, $this->countRecordsInSection($text, 'tt_content'), $text);
+        $this->assertStringContainsString('Found 5 record(s), more may match', $text);
+        $this->assertStringContainsString('More records (may) match in: tt_content.', $text);
+    }
+
+    public function testMovedParentDoesNotUseUpTheParentLimitTwice(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
+        $GLOBALS['BE_USER']->workspace = 1;
+
+        // Two live elements reference record 7 in a comma-separated select field;
+        // the first one is moved in the workspace (move pointer).
+        $this->insertRecord('tt_content', ['uid' => 801, 'pid' => 1, 'CType' => 'text', 'header' => 'Moved', 'subheader' => '7', 'sorting' => 256]);
+        $this->insertRecord('tt_content', [
+            'uid' => 802, 'pid' => 2, 'CType' => 'text', 'header' => 'Moved', 'subheader' => '7', 'sorting' => 512,
+            't3ver_oid' => 801, 't3ver_wsid' => 1, 't3ver_state' => 4,
+        ]);
+        $this->insertRecord('tt_content', ['uid' => 803, 'pid' => 1, 'CType' => 'text', 'header' => 'Other', 'subheader' => '7,8', 'sorting' => 768]);
+
+        $tool = new SearchTool();
+        $method = new \ReflectionMethod($tool, 'findParentRecordsForInlineRecord');
+        $parents = $method->invoke($tool, ['uid' => 7], 'tx_testnestedfiles_item', 'tt_content', '', 'subheader', 'select', 2);
+
+        $uids = array_map(static fn(array $record): int => (int)$record['uid'], $parents);
+        sort($uids);
+        $this->assertSame([801, 803], $uids, 'The moved element counts once and the other one still fits the limit');
     }
 
     public function testInvalidLimitIsRejected(): void

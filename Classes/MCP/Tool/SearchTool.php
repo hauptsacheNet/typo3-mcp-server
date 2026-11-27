@@ -472,10 +472,13 @@ class SearchTool extends AbstractRecordTool
         $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
         $queryBuilder = $connectionPool->getQueryBuilderForTable($parentTable);
         
+        // Like searchInTable(): live rows that are moved or deleted in the workspace
+        // are left out, so their workspace version does not use up the limit twice.
         $queryBuilder->getRestrictions()
             ->removeAll()
             ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
-            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
+            ->add(GeneralUtility::makeInstance(WorkspaceRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0))
+            ->add(GeneralUtility::makeInstance(WorkspaceDeletePlaceholderRestriction::class, $GLOBALS['BE_USER']->workspace ?? 0));
         
         $queryBuilder->select('*')->from($parentTable);
         
@@ -947,7 +950,7 @@ class SearchTool extends AbstractRecordTool
         foreach ($searchResults as $table => $tableResults) {
             if (is_array($tableResults) && isset($tableResults['records'])) {
                 $totalResults += count($tableResults['records']);
-                if (($tableResults['total'] ?? 0) > count($tableResults['records'])) {
+                if (($tableResults['total'] ?? 0) > count($tableResults['records']) || !empty($tableResults['total_is_minimum'])) {
                     $tablesWithCutResults[] = $table;
                 }
             } else {
@@ -957,7 +960,7 @@ class SearchTool extends AbstractRecordTool
 
         $result .= "Total Results: $totalResults\n";
         if ($tablesWithCutResults !== []) {
-            $result .= "Limit: $limit per table. More records match in: " . implode(', ', $tablesWithCutResults)
+            $result .= "Limit: $limit per table. More records (may) match in: " . implode(', ', $tablesWithCutResults)
                 . ". Narrow the search (more specific terms, termLogic AND, table or pageId) or raise limit to see them.\n";
         }
         $result .= "Tables Searched: " . count($searchResults) . "\n\n";
@@ -997,9 +1000,13 @@ class SearchTool extends AbstractRecordTool
         
         $shown = count($records);
         $total = (int)($tableData['total'] ?? $shown);
-        if ($total > $shown) {
-            $totalDisplay = !empty($tableData['total_is_minimum']) ? 'at least ' . $total : (string)$total;
-            $result .= "Found $totalDisplay record(s), showing $shown of $totalDisplay\n\n";
+        if (!empty($tableData['total_is_minimum'])) {
+            // Matches were cut before their records were known, so more may exist
+            $result .= $total > $shown
+                ? "Found at least $total record(s), showing $shown\n\n"
+                : "Found $shown record(s), more may match\n\n";
+        } elseif ($total > $shown) {
+            $result .= "Found $total record(s), showing $shown of $total\n\n";
         } else {
             $result .= "Found $shown record(s)\n\n";
         }
