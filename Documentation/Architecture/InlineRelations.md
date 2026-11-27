@@ -54,6 +54,10 @@ The value is the complete list of children; the array order is the display order
 - Children can have embedded children themselves (a file inside a collection item).
   Nested relations to independent tables are rejected: those records need their own
   write so the client gets their uids back.
+- Required fields of each child are checked like those of a record of its own
+  (`validateEmbeddedChildRequiredFields()`): a new child like a create, an existing
+  one like an update of the fields it sends. DataHandler would drop an empty required
+  value of a child without an error, and the write would report success.
 
 ### Why it takes several steps
 
