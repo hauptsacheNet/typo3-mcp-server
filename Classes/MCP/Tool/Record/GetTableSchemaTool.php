@@ -7,6 +7,7 @@ namespace Hn\McpServer\MCP\Tool\Record;
 use Mcp\Types\CallToolResult;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use Hn\McpServer\Utility\TcaFormattingUtility;
+use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\TableAccessService;
 
 /**
@@ -44,7 +45,8 @@ class GetTableSchemaTool extends AbstractRecordTool
                         'type' => 'integer',
                         'description' => 'Page ID to resolve TSconfig context against. Different pages may allow different record types ' .
                             'or hide different fields based on page TSconfig. Pass the page where the record will live to get an accurate schema. ' .
-                            'If omitted, the first configured site\'s root page is used so project-wide TSconfig is still applied.',
+                            'If omitted, the first configured site\'s root page is used so project-wide TSconfig is still applied ' .
+                            '(for users restricted to page mounts: their first mount).',
                     ],
                 ],
                 'required' => ['table'],
@@ -70,8 +72,24 @@ class GetTableSchemaTool extends AbstractRecordTool
         // Validate table access using TableAccessService
         $this->ensureTableAccess($table, 'read');
 
-        $filterType = $params['type'] ?? '';
+        $filterType = (string)($params['type'] ?? '');
         $pid = isset($params['pid']) ? (int)$params['pid'] : null;
+
+        $pageAccess = GeneralUtility::makeInstance(PageAccessService::class);
+        if ($pageAccess->isRestricted()) {
+            if ($pid !== null && $pid > 0 && !$pageAccess->isPageReadable($pid)) {
+                throw new \InvalidArgumentException('Page not found or outside your page mounts: ' . $pid);
+            }
+            if ($pid === null || $pid <= 0) {
+                $pid = $pageAccess->getReadableMountRoots()[0] ?? null;
+                if ($pid === null) {
+                    throw new \InvalidArgumentException(
+                        'You have no access to any page, so no table schema can be provided. '
+                        . 'An administrator has to grant you a page mount with read access first.'
+                    );
+                }
+            }
+        }
 
         $result = $this->generateTableSchema($table, $filterType, $pid);
         return $this->createSuccessResult($result);
@@ -143,7 +161,7 @@ class GetTableSchemaTool extends AbstractRecordTool
         }
         
         // If a specific type is requested, check if it exists
-        if (!empty($filterType) && !isset($types[$filterType])) {
+        if ($filterType !== '' && !isset($types[$filterType])) {
             return "ERROR: The requested type '$filterType' does not exist or has been excluded. Available types are: " . implode(', ', array_keys($types));
         }
         
@@ -151,7 +169,7 @@ class GetTableSchemaTool extends AbstractRecordTool
         // showitem layout. Some tables (e.g. sys_file) only define a layout for one
         // type value while listing several in the type field's items list — picking
         // the first item alphabetically would land on a type without a form.
-        if (empty($filterType)) {
+        if ($filterType === '') {
             $tcaTypes = $GLOBALS['TCA'][$table]['types'] ?? [];
             foreach ($types as $typeValue => $typeLabel) {
                 if ($typeValue === '--div--') {
@@ -162,7 +180,7 @@ class GetTableSchemaTool extends AbstractRecordTool
                     break;
                 }
             }
-            if (empty($filterType)) {
+            if ($filterType === '') {
                 foreach ($types as $typeValue => $typeLabel) {
                     if ($typeValue !== '--div--') {
                         $filterType = (string)$typeValue;
@@ -418,7 +436,7 @@ class GetTableSchemaTool extends AbstractRecordTool
             // When resolved from a sub-schema's columnsOverrides, the DS
             // applies to that record type. Use the filter type (the CType)
             // as identifier so it can be fed into GetFlexFormSchema.
-            if (!empty($filterType)) {
+            if ($filterType !== '') {
                 $result .= " [Identifiers: " . $filterType . "]";
                 $result .= " (Use GetFlexFormSchema tool with these identifiers for details)";
             } else {

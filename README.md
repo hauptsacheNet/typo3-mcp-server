@@ -104,6 +104,11 @@ The defaults work out of the box. All settings live in the extension configurati
 | `excludedTables`             | *(empty)*           | Tables the MCP never exposes, whatever the backend user may access (admins included). A trailing `*` matches a prefix. For tables with personal data that editors still need in the backend, e.g. `tx_powermail_domain_model_mail,tx_powermail_domain_model_answer` |
 | `allowedTables`              | *(empty)*           | If set, the MCP only exposes these tables (prefix `*` allowed), so tables of extensions added later stay hidden until listed. `excludedTables` wins. Empty means every table the user may access |
 | `workspacePreviewLinks`      | `1`                 | Adds login-free workspace preview links to pages and records with unpublished changes, so the AI can show the result of its edits. Anyone with such a link sees all unpublished changes of the workspace until it expires |
+| `oauthAccessTokenMinutes`    | `60`                | Access token lifetime for MCP clients that support refresh tokens (e.g. Claude). They renew it automatically |
+| `oauthTokenHoursWithoutRefresh` | `12`             | Access token lifetime for MCP clients without refresh tokens: the user authorizes them again once per working day |
+| `oauthRefreshTokenDays`      | `30`                | How long a client may stay unused before the user has to authorize it again; every refresh starts this period anew |
+| `oauthMaxSessionHours`       | `0`                 | Upper limit from the authorization on, however actively a client is used; after it the user authorizes again (e.g. to pass SSO group checks). `0` = no limit |
+| `manualTokenDays`            | `30`                | Lifetime of tokens created in the backend module or with `mcp:oauth create`, for tools that cannot do OAuth (e.g. n8n) |
 
 Records other than pages and content elements (news, events, ...) get a frontend URL once
 `TCEMAIN.preview.<table>` is configured in Page TSconfig — the same setting that powers the
@@ -127,6 +132,15 @@ For secure remote access with proper authentication:
 
 The HTTP endpoint runs with the permissions of the logged-in backend user: DB mounts, table and field permissions, and workspaces apply as in the TYPO3 backend.
 
+MCP clients register themselves through OAuth dynamic client registration (`/mcp_oauth/register`), which needs no login. It accepts 20 registrations per IP address within 15 minutes; a client registers once or twice when a connection is set up. To change the limit, override it in `config/system/additional.php`:
+
+```php
+$GLOBALS['TYPO3_CONF_VARS']['SYS']['rateLimiter']['mcp-oauth-register'] = [
+    'limit' => 50,
+    'interval' => '15 minutes',
+];
+```
+
 #### Option 2: Local Command Line Connection (Deprecated)
 
 > [!WARNING]
@@ -146,6 +160,14 @@ The stdio command always runs with admin privileges. This is intended: running i
    }
 }
 ```
+
+The client keeps this process running for the whole session, while TYPO3 takes
+its request time (`$GLOBALS['EXEC_TIME']`, `ACCESS_TIME`, `SIM_EXEC_TIME`,
+`SIM_ACCESS_TIME` and the Context's `date` aspect) once when a process starts.
+The server therefore resets the request time to the current time before every
+tool call. Each call gets its own `tstamp`/`crdate`, `sys_log` and
+`sys_history` time, and `starttime`/`endtime` checks use the time of the call,
+as they would in a separate web request.
 
 ## Development
 

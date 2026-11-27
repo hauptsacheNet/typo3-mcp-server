@@ -501,17 +501,9 @@ class WriteTableToolErrorTest extends FunctionalTestCase
             ]
         ]);
 
-        // TYPO3 DataHandler might handle this differently
-        // The tool itself doesn't enforce required fields, DataHandler does
-        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
-
-        // But the page shouldn't be properly created without title
-        $data = json_decode($result->content[0]->text, true);
-        if (isset($data['uid']) && $data['uid'] > 0) {
-            $record = BackendUtility::getRecord('pages', $data['uid']);
-            // Record might be created but with empty title
-            $this->assertIsArray($record);
-        }
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('Required fields are missing or empty', $result->content[0]->text);
+        $this->assertStringContainsString('title', $result->content[0]->text);
     }
 
     // ========================================================================

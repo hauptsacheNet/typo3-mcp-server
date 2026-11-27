@@ -8,6 +8,7 @@ use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Symfony\Component\Yaml\Yaml;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -209,6 +210,223 @@ class MmRelationWorkspaceTest extends FunctionalTestCase
         $this->assertEquals($newsUid, $news->uid);
         $this->assertCount(2, $news->tags);
         $this->assertEquals([$tagUids[2], $tagUids[3]], $news->tags);
+    }
+
+    /**
+     * Read back MM relations of a record that is really live after changing them in a workspace.
+     *
+     * The tests above create their "live" record through WriteTableTool, which always
+     * writes into the workspace: such a record is new in the workspace and keeps a single
+     * uid. A record that already exists live gets a workspace version with a uid of its
+     * own, and DataHandler attaches the changed MM relations to that version uid.
+     */
+    public function testReadMmOfLiveRecordAfterWorkspaceUpdate(): void
+    {
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $mmTable = $this->insertLiveNewsWithTags();
+
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+        $this->assertGreaterThan(0, $GLOBALS['BE_USER']->workspace);
+
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => 201,
+            'data' => ['tags' => [103, 104]],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $result = $this->readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => 201,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $news = json_decode($result->content[0]->text)->records[0];
+
+        $this->assertEquals(201, $news->uid, 'Client should see the live uid');
+        $this->assertEquals([103, 104], $news->tags, 'Should see the workspace tags, not the live ones');
+
+        // Live keeps its tags until the workspace is published
+        $liveTags = $connectionPool->getConnectionForTable($mmTable)
+            ->select(['uid_foreign'], $mmTable, ['uid_local' => 201], [], ['sorting' => 'ASC'])
+            ->fetchFirstColumn();
+        $this->assertEquals([101, 102], array_map('intval', $liveTags));
+    }
+
+    /**
+     * A related record with a workspace version must still be returned by its live uid.
+     *
+     * In a workspace DataHandler stores the related side of an MM relation by the uid of
+     * the related record's workspace version (RelationHandler::convertItemArray()).
+     */
+    public function testReadMmReturnsLiveUidsOfRelatedWorkspaceVersions(): void
+    {
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $mmTable = $this->insertLiveNewsWithTags();
+
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+        $workspaceId = (int)$GLOBALS['BE_USER']->workspace;
+        $this->assertGreaterThan(0, $workspaceId);
+
+        // Tag C gets a workspace version of its own
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_tag',
+            'action' => 'update',
+            'uid' => 103,
+            'data' => ['title' => 'Tag C (workspace)'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $result = $this->writeTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'update',
+            'uid' => 201,
+            'data' => ['tags' => [103, 104]],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // The MM row of the news version points to the version of tag C
+        $tagVersion = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, 'tx_news_domain_model_tag', 103, 'uid');
+        $newsVersion = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, 'tx_news_domain_model_news', 201, 'uid');
+        $this->assertIsArray($tagVersion);
+        $this->assertIsArray($newsVersion);
+        $storedTags = $connectionPool->getConnectionForTable($mmTable)
+            ->select(['uid_foreign'], $mmTable, ['uid_local' => (int)$newsVersion['uid']], [], ['sorting' => 'ASC'])
+            ->fetchFirstColumn();
+        $this->assertEquals([(int)$tagVersion['uid'], 104], array_map('intval', $storedTags));
+
+        $result = $this->readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => 201,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $news = json_decode($result->content[0]->text)->records[0];
+
+        $this->assertEquals([103, 104], $news->tags, 'Related records must be returned by their live uid');
+    }
+
+    /**
+     * Editing a category in the workspace copies its MM rows to the category's version.
+     * Reading a news record that is not versioned itself must still list each category once.
+     */
+    public function testReadMmIgnoresCopiedRelationsOfVersionedRelatedRecord(): void
+    {
+        $this->insertLiveNewsWithTags();
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        $result = $this->writeTool->execute([
+            'table' => 'sys_category',
+            'action' => 'update',
+            'uid' => 1,
+            'data' => ['title' => 'Technology (workspace)'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $news = $this->readNews201();
+        $this->assertEquals([1, 2], $news->categories);
+        $this->assertEquals([101, 102], $news->tags);
+    }
+
+    /**
+     * Versions of related records in another workspace must not show up.
+     */
+    public function testReadMmIgnoresRelatedVersionsOfOtherWorkspace(): void
+    {
+        $this->insertLiveNewsWithTags();
+        $workspaceId = $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable('sys_workspace')
+            ->insert('sys_workspace', ['uid' => 77, 'pid' => 0, 'title' => 'Other workspace']);
+        $GLOBALS['BE_USER']->setWorkspace(77);
+        foreach ([['sys_category', 1], ['tx_news_domain_model_tag', 101]] as [$relatedTable, $relatedUid]) {
+            $result = $this->writeTool->execute([
+                'table' => $relatedTable,
+                'action' => 'update',
+                'uid' => $relatedUid,
+                'data' => ['title' => 'Changed in workspace 77'],
+            ]);
+            $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        }
+        $this->assertSame(77, (int)$GLOBALS['BE_USER']->workspace, 'The writes must go to the other workspace');
+
+        $GLOBALS['BE_USER']->setWorkspace($workspaceId);
+        $news = $this->readNews201();
+        $this->assertEquals([1, 2], $news->categories);
+        $this->assertEquals([101, 102], $news->tags);
+    }
+
+    /**
+     * Related records deleted in the workspace are no longer related.
+     */
+    public function testReadMmDropsRelatedRecordsDeletedInWorkspace(): void
+    {
+        $this->insertLiveNewsWithTags();
+        $this->workspaceService->switchToOptimalWorkspace($GLOBALS['BE_USER']);
+
+        foreach ([['tx_news_domain_model_tag', 102], ['sys_category', 2]] as [$relatedTable, $relatedUid]) {
+            $result = $this->writeTool->execute([
+                'table' => $relatedTable,
+                'action' => 'delete',
+                'uid' => $relatedUid,
+            ]);
+            $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        }
+
+        $news = $this->readNews201();
+        $this->assertEquals([101], $news->tags);
+        $this->assertEquals([1], $news->categories);
+    }
+
+    private function readNews201(): object
+    {
+        $result = $this->readTool->execute([
+            'table' => 'tx_news_domain_model_news',
+            'uid' => 201,
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        return json_decode($result->content[0]->text)->records[0];
+    }
+
+    /**
+     * A live news record with tags A (101), B (102) and categories 1, 2, plus two more live
+     * tags C (103), D (104), written directly to the database so they never touch a workspace.
+     *
+     * @return string The MM table of the news tags
+     */
+    private function insertLiveNewsWithTags(): string
+    {
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $mmTable = $GLOBALS['TCA']['tx_news_domain_model_news']['columns']['tags']['config']['MM'];
+
+        foreach ([101 => 'Tag A', 102 => 'Tag B', 103 => 'Tag C', 104 => 'Tag D'] as $uid => $title) {
+            $connectionPool->getConnectionForTable('tx_news_domain_model_tag')
+                ->insert('tx_news_domain_model_tag', ['uid' => $uid, 'pid' => 1, 'title' => $title]);
+        }
+        $connectionPool->getConnectionForTable('tx_news_domain_model_news')->insert('tx_news_domain_model_news', [
+            'uid' => 201,
+            'pid' => 1,
+            'title' => 'Really live news',
+            'datetime' => time(),
+            'tags' => 2,
+            'categories' => 2,
+        ]);
+        foreach ([101, 102] as $sorting => $tagUid) {
+            $connectionPool->getConnectionForTable($mmTable)
+                ->insert($mmTable, ['uid_local' => 201, 'uid_foreign' => $tagUid, 'sorting' => $sorting + 1]);
+        }
+        foreach ([1, 2] as $sorting => $categoryUid) {
+            $connectionPool->getConnectionForTable('sys_category_record_mm')->insert('sys_category_record_mm', [
+                'uid_local' => $categoryUid,
+                'uid_foreign' => 201,
+                'tablenames' => 'tx_news_domain_model_news',
+                'fieldname' => 'categories',
+                'sorting_foreign' => $sorting + 1,
+            ]);
+            $connectionPool->getConnectionForTable('sys_category')->update('sys_category', ['items' => 1], ['uid' => $categoryUid]);
+        }
+
+        return $mmTable;
     }
 
     /**
