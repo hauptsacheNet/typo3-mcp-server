@@ -623,7 +623,7 @@ class McpModule {
         })
             .then(response => {
                 return response.json().then(data => {
-                    if (data.headers_received && data.headers_received.authorization) {
+                    if (data.auth_header_detected === true) {
                         this.setEndpointStatus(element, 'success', 'MCP endpoint is accessible and can receive Authorization headers');
                         const warningDiv = document.getElementById('auth-header-warning');
                         if (warningDiv) warningDiv.style.display = 'none';
