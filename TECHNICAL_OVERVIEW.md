@@ -352,6 +352,14 @@ The MCP Server respects all TYPO3 permissions:
 - **Record permissions**: Custom access checks
 - **Workspace permissions**: Automatic workspace selection
 
+Fields hidden by `TCEFORM.<table>.<field>.disabled` are hidden from the tools as well, and a write
+names the reason ("Field 'layout' is not accessible: page TSconfig hides it from editors (...)").
+Positional fields are the exception: the fields in `ctrl.copyAfterDuplFields` (tt_content `colPos`;
+the language field has its own handling) and b13/container's `tx_container_parent`. The page module
+sets them without the edit form (new content element wizard, drag and drop), so sites that hide the
+column select still place content in columns. Their values are checked against the select items
+(the columns of the page's backend layout), and on placement against `mod.SHARED.colPos_list`.
+
 ## What's Not Yet Implemented
 
 While the MCP Server is powerful, some features are still in development:

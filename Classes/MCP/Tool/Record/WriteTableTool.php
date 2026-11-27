@@ -14,10 +14,12 @@ use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\NewRecordInitializer;
 use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\RecordUrlService;
+use Hn\McpServer\Service\SelectItemResolver;
 use Hn\McpServer\Service\TableAccessService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Backend\View\BackendLayoutView;
 use TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -1399,15 +1401,27 @@ class WriteTableTool extends AbstractRecordTool
             }
 
             // Check if field is accessible (exclude fields, inaccessible inline
-            // relations, TCEFORM disabled for this page and record type)
-            if (!$this->tableAccessService->canAccessField($table, $fieldName, $recordType, $tsConfigPid)) {
-                return "Field '{$fieldName}' is not accessible";
+            // relations, TCEFORM disabled for this page and record type). Positional
+            // fields like colPos pass the TCEFORM part, see isPositionalField().
+            $denialReason = $this->tableAccessService->getFieldAccessDenialReason($table, $fieldName, $recordType, $tsConfigPid);
+            if ($denialReason !== null) {
+                return $this->formatFieldNotAccessible($fieldName, $denialReason);
             }
 
             // Validate field value (with record context for dynamic select item resolution)
             $validationError = $this->tableAccessService->validateFieldValue($table, $fieldName, $value, $mergedRecord);
             if ($validationError !== null) {
+                if ($table === 'tt_content' && $fieldName === 'colPos') {
+                    $validationError .= $this->describeColumnItems($mergedRecord, (int)$effectivePid);
+                }
                 return $validationError;
+            }
+
+            if ($table === 'tt_content' && $fieldName === 'colPos') {
+                $columnError = $this->validateColumnRestriction($value, $action, $mergedRecord, $currentRecord, (int)$effectivePid);
+                if ($columnError !== null) {
+                    return $columnError;
+                }
             }
             
             // Handle date/time fields - convert ISO 8601 to timestamp for TYPO3
@@ -1539,6 +1553,115 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         return true;
+    }
+
+    /**
+     * "Field 'x' is not accessible: <reason>." plus what to do about it.
+     */
+    protected function formatFieldNotAccessible(string $fieldName, string $reason): string
+    {
+        return sprintf(
+            "Field '%s' is not accessible: %s. Leave the field out of the data.",
+            $fieldName,
+            $reason
+        );
+    }
+
+    /**
+     * Names the columns behind the colPos values, so a refused colPos tells the
+     * reader which column to pick instead of a bare list of numbers. The items are
+     * the ones the value was checked against: the columns of the page's backend
+     * layout, or the grid columns of a b13/container parent.
+     */
+    protected function describeColumnItems(array $mergedRecord, int $pageId): string
+    {
+        $resolved = GeneralUtility::makeInstance(SelectItemResolver::class)
+            ->resolveSelectItems('tt_content', 'colPos', $mergedRecord);
+        if ($resolved === null || $resolved['values'] === []) {
+            return '';
+        }
+        $columns = array_map(
+            static function (string $value) use ($resolved): string {
+                $label = TableAccessService::translateLabel((string)($resolved['labels'][$value] ?? ''));
+                return $label !== '' ? sprintf('%s (%s)', $value, $label) : $value;
+            },
+            $resolved['values']
+        );
+        $containerUid = (int)($mergedRecord['tx_container_parent'] ?? 0);
+        return sprintf(
+            '. colPos is the column the element is placed in; %s has these columns: %s',
+            $containerUid > 0 ? sprintf('its container (tx_container_parent %d)', $containerUid) : sprintf('the backend layout of page %d', $pageId),
+            implode(', ', $columns)
+        );
+    }
+
+    /**
+     * The page module only lets a user place content in the columns that
+     * mod.SHARED.colPos_list allows (page TSconfig, or user TSconfig via
+     * page.mod.SHARED.colPos_list); the other columns are shown as restricted.
+     * The colPos items, which validateFieldValue() checks, do not know this
+     * limit, so it is checked here, but only when an element is placed: on
+     * create and when colPos or the page changes. Elements that already sit in
+     * a restricted column stay editable, as in the backend form.
+     *
+     * Children of b13/container elements sit in the container's grid columns,
+     * which the container's own colPos items and DataHandler hooks check.
+     */
+    protected function validateColumnRestriction(
+        mixed $colPos,
+        string $action,
+        array $mergedRecord,
+        ?array $currentRecord,
+        int $pageId
+    ): ?string {
+        if ($action === 'translate' || !is_numeric($colPos) || $pageId <= 0) {
+            return null;
+        }
+        if ((int)($mergedRecord['tx_container_parent'] ?? 0) > 0) {
+            return null;
+        }
+        if ($currentRecord !== null
+            && (int)($currentRecord['colPos'] ?? 0) === (int)$colPos
+            && (int)($currentRecord['pid'] ?? 0) === $pageId
+        ) {
+            return null;
+        }
+
+        $colPosList = trim((string)(BackendUtility::getPagesTSconfig($pageId)['mod.']['SHARED.']['colPos_list'] ?? ''));
+        if ($colPosList === '') {
+            return null;
+        }
+        $allowedColumns = array_unique(GeneralUtility::intExplode(',', $colPosList, true));
+        if (in_array((int)$colPos, $allowedColumns, true)) {
+            return null;
+        }
+
+        $columnNames = [];
+        try {
+            $columnNames = GeneralUtility::makeInstance(BackendLayoutView::class)
+                ->getBackendLayoutForPage($pageId)
+                ->getUsedColumns();
+        } catch (\Throwable) {
+            // Names are only decoration for the message.
+        }
+        $describe = static function (int $column) use ($columnNames): string {
+            $name = (string)($columnNames[$column] ?? '');
+            return $name !== '' ? sprintf('%d (%s)', $column, TableAccessService::translateLabel($name)) : (string)$column;
+        };
+        $placeable = array_values(array_filter(
+            $allowedColumns,
+            static fn(int $column): bool => $columnNames === [] || isset($columnNames[$column])
+        ));
+
+        return sprintf(
+            "Field 'colPos' value '%d': this column of page %d is restricted for the backend user "
+            . '(mod.SHARED.colPos_list), the page module does not let it place content there. %s',
+            (int)$colPos,
+            $pageId,
+            $placeable === []
+                ? 'No column of this page is open for new content.'
+                : 'Use one of these columns: ' . implode(', ', array_map($describe, $placeable)) . '.'
+        );
     }
 
     /**
@@ -2695,8 +2818,9 @@ class WriteTableTool extends AbstractRecordTool
             if (!$fieldConfig) {
                 throw new ValidationException(["search_replace field '{$fieldName}' does not exist in table '{$table}'"]);
             }
-            if (!$this->tableAccessService->canAccessField($table, $fieldName, $recordType, $tsConfigPid)) {
-                throw new ValidationException(["Field '{$fieldName}' is not accessible"]);
+            $denialReason = $this->tableAccessService->getFieldAccessDenialReason($table, $fieldName, $recordType, $tsConfigPid);
+            if ($denialReason !== null) {
+                throw new ValidationException([$this->formatFieldNotAccessible($fieldName, $denialReason)]);
             }
             $fieldType = $fieldConfig['config']['type'] ?? '';
             if (!in_array($fieldType, $stringFieldTypes, true)) {
