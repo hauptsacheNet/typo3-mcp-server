@@ -26,6 +26,7 @@ use Psr\Http\Message\UriInterface;
 use TYPO3\CMS\Core\Exception\Page\PageNotFoundException;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
+use Hn\McpServer\Service\ContentColumnService;
 use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
@@ -709,6 +710,8 @@ class GetPageTool extends AbstractRecordTool
         }
         
         $result .= "\n";
+
+        $result .= $this->formatContentColumns((int)$pageData['uid']);
         
         // Records on the page
         $result .= "RECORDS ON THIS PAGE\n";
@@ -751,6 +754,27 @@ class GetPageTool extends AbstractRecordTool
         return $result;
     }
     
+    protected function formatContentColumns(int $pageUid): string
+    {
+        if (!$this->tableAccessService->canAccessTable('tt_content')) {
+            return '';
+        }
+        $contentColumnService = GeneralUtility::makeInstance(ContentColumnService::class);
+        $columns = $contentColumnService->getColumns($pageUid);
+        if ($columns === []) {
+            return '';
+        }
+
+        $result = "CONTENT COLUMNS (backend layout)\n";
+        $result .= "================================\n";
+        foreach ($columns as $column) {
+            $result .= "- " . $contentColumnService->formatColumn($column) . "\n";
+        }
+        $result .= "Content elements (tt_content) go into one of these columns (colPos), with a type the column accepts.\n\n";
+
+        return $result;
+    }
+
     /**
      * Language of the default view and where its translations are, so a client asked
      * for "the English page" finds the record to edit. Empty on single-language sites.
