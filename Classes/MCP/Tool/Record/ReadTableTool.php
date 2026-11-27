@@ -1207,8 +1207,14 @@ class ReadTableTool extends AbstractRecordTool
         // Embedded children carry relation fields of their own (a file on a collection
         // item, a nested collection). Resolve them for all children of this field at
         // once, otherwise they show the raw counter column.
+        // The parent pointer is kept as stored: it is needed for grouping below and must
+        // not be turned into a relation value if its TCA type happens to be one.
         if ($isHiddenTable && $relatedRecords !== [] && $depth < self::MAX_EMBEDDING_DEPTH) {
+            $parentPointers = array_map(static fn(array $child): mixed => $child[$foreignField] ?? null, $relatedRecords);
             $this->resolveRelationFields($relatedRecords, $foreignTable, [], $depth + 1);
+            foreach ($parentPointers as $index => $parentPointer) {
+                $relatedRecords[$index][$foreignField] = $parentPointer;
+            }
         }
 
         // Group related records by parent record

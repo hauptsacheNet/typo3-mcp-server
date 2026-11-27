@@ -416,6 +416,27 @@ class NestedFileRelationTest extends FunctionalTestCase
     }
 
     /**
+     * The parent pointer of an embedded child is kept as stored while the child's own
+     * relation fields are resolved, even when its TCA type is a relation type itself.
+     */
+    public function testChildrenStayWithTheirParentWhenPointerIsRelationField(): void
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $pageUid = $this->createPage($writeTool);
+        $contentUid = $this->createElementWithFile($writeTool, $pageUid, 'Element', 'Item', 1);
+
+        $GLOBALS['TCA']['tx_testnestedfiles_item']['columns']['tt_content_items']['config'] = [
+            'type' => 'group',
+            'allowed' => 'tt_content,pages',
+            'maxitems' => 1,
+        ];
+
+        $items = $this->readEmbeddedItems($contentUid);
+        $this->assertSame(['Item'], array_column($items, 'title'));
+        $this->assertSame(1, $items[0]['file'][0]['uid_local']);
+    }
+
+    /**
      * @return array<int, array<string, mixed>>
      */
     protected function readEmbeddedItems(int $contentUid): array
