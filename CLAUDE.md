@@ -12,3 +12,5 @@
 - Language overlays use TYPO3's PageRepository API while workspace overlays use custom implementation for transparency (see Documentation/Architecture/LanguageOverlays.md)
 - Tool output must be valid UTF-8 (cut strings with `mb_*`): the SDK's HTTP transport encodes with `JSON_THROW_ON_ERROR` and silently drops a response it cannot encode, so the client just times out.
 - Date/time fields (TCA type=datetime, incl. dbType native columns): `DateTimeFieldService` converts ISO 8601 to the raw stored value before DataHandler, because TYPO3 13 shifts ISO strings by the server UTC offset ("fake UTC" from the date picker).
+- Decoupled frontends (EXT:headless, require-dev only): no headless code in Classes/; URLs are moved by router/`AfterRecordUrlGeneratedEvent` listeners and mapped back for GetPage by `RecordUrlService::mapPublicUrlToSiteUrl()` (see Documentation/Architecture/RecordUrls.md).
+- MM rows written in a workspace reference related records by version uid on TYPO3 13.4/14.3.12, but by live uid on 14.3.10 (inverted check in `RelationHandler::convertItemArray()`); reads map both to live uids, tests must not depend on which one core stores.

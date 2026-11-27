@@ -32,6 +32,12 @@ use TYPO3\CMS\Core\Versioning\VersionState;
  */
 class ReadTableTool extends AbstractRecordTool
 {
+    /**
+     * Levels of embedded children whose relation fields are resolved. Guards against
+     * runaway recursion through self-referencing child tables.
+     */
+    protected const MAX_EMBEDDING_DEPTH = 10;
+
     protected LanguageService $languageService;
 
     public function __construct()
@@ -777,48 +783,86 @@ class ReadTableTool extends AbstractRecordTool
      */
     protected function includeRelations(array $result, string $table, array $requestedFields = []): array
     {
-        if (empty($result['records'])) {
-            return $result;
-        }
-
-        $tca = $GLOBALS['TCA'][$table] ?? [];
-        if (empty($tca['columns'])) {
-            return $result;
-        }
-
-        // Get all record UIDs
-        $recordUids = array_column($result['records'], 'uid');
-
-        // Process each field that might contain relations
-        foreach ($tca['columns'] as $fieldName => $fieldConfig) {
-            // Skip relations for fields not in the requested field list
-            if (!empty($requestedFields) && !in_array($fieldName, $requestedFields)) {
-                continue;
-            }
-
-            // Relation data is added to the records after they went through the
-            // field filter, so the filter's question has to be asked again here:
-            // a field the user may not read has no relations to show either
-            if (!$this->tableAccessService->isFieldPermitted($table, $fieldName)) {
-                continue;
-            }
-
-            $fieldType = $fieldConfig['config']['type'] ?? '';
-
-            match ($fieldType) {
-                'select', 'category' => $this->includeSelectRelations($result['records'], $fieldName, $fieldConfig, $table),
-                'inline', 'file' => $this->includeInlineRelations($result['records'], $fieldName, $fieldConfig, $recordUids),
-                default => null,
-            };
+        if (!empty($result['records'])) {
+            $this->resolveRelationFields($result['records'], $table, $requestedFields);
         }
 
         return $result;
     }
 
     /**
+     * Replace the raw column value of every relation field by its related records: uid
+     * lists for select, category and group fields and for independent inline children,
+     * full records for embedded inline children. Embedded children get the same
+     * treatment one level down, so a file or relation field of a child reads like one of
+     * a top-level record. Each level is read in batches per field, not per record.
+     *
+     * Relation data is only added for fields the user may read (isFieldPermitted()),
+     * never for password columns. On the top level, select/category and inline/file
+     * relations are added regardless of the record type, as before. Group fields and
+     * the fields of embedded children are only filled in where the record carries the
+     * field: embedded children are trimmed to a curated field list
+     * (TableAccessService::getEmbeddedRecordFields()) that must not grow back.
+     */
+    protected function resolveRelationFields(array &$records, string $table, array $requestedFields = [], int $depth = 0): void
+    {
+        if ($records === []) {
+            return;
+        }
+
+        $tca = $GLOBALS['TCA'][$table] ?? [];
+        if (empty($tca['columns'])) {
+            return;
+        }
+
+        $recordUids = array_column($records, 'uid');
+
+        foreach ($tca['columns'] as $fieldName => $fieldConfig) {
+            // Skip relations for fields not in the requested field list
+            if (!empty($requestedFields) && !in_array($fieldName, $requestedFields)) {
+                continue;
+            }
+            $onlyPresentFields = $depth > 0 || ($fieldConfig['config']['type'] ?? '') === 'group';
+            if ($onlyPresentFields && !$this->anyRecordHasField($records, $fieldName)) {
+                continue;
+            }
+
+            // Relation data is added to the records after they went through the
+            // field filter, so the filter's question has to be asked again here:
+            // a field the user may not read has no relations to show either.
+            // This runs on every nesting level, embedded children included.
+            if (!$this->tableAccessService->isFieldPermitted($table, $fieldName)
+                || $this->tableAccessService->isSecretField($table, $fieldName)
+            ) {
+                continue;
+            }
+
+            $fieldType = $fieldConfig['config']['type'] ?? '';
+
+            match ($fieldType) {
+                'select', 'category' => $this->includeSelectRelations($records, $fieldName, $fieldConfig, $table, $onlyPresentFields),
+                'group' => $this->includeGroupRelations($records, $fieldName, $fieldConfig, $table),
+                'inline', 'file' => $this->includeInlineRelations($records, $fieldName, $fieldConfig, $recordUids, $depth),
+                default => null,
+            };
+        }
+    }
+
+    protected function anyRecordHasField(array $records, string $fieldName): bool
+    {
+        foreach ($records as $record) {
+            if (array_key_exists($fieldName, $record)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Include select and category field relations
      */
-    protected function includeSelectRelations(array &$records, string $fieldName, array $fieldConfig, string $table): void
+    protected function includeSelectRelations(array &$records, string $fieldName, array $fieldConfig, string $table, bool $onlyPresentFields = false): void
     {
         // Check if this is a foreign table relation
         if (!empty($fieldConfig['config']['foreign_table'])) {
@@ -831,7 +875,7 @@ class ReadTableTool extends AbstractRecordTool
 
             // Check if this uses MM relations
             if (!empty($fieldConfig['config']['MM'])) {
-                $this->includeMmRelations($records, $fieldName, $fieldConfig, $table);
+                $this->includeMmRelations($records, $fieldName, $fieldConfig, $table, $onlyPresentFields);
                 return;
             }
 
@@ -847,7 +891,56 @@ class ReadTableTool extends AbstractRecordTool
     }
 
     /**
-     * Include MM relations for a field
+     * Include the MM relations of a select or category field as a list of live uids.
+     */
+    protected function includeMmRelations(array &$records, string $fieldName, array $fieldConfig, string $table, bool $onlyPresentFields = false): void
+    {
+        $relatedItems = $this->readRelatedItems($records, $fieldName, $fieldConfig['config'], $table, $onlyPresentFields);
+
+        foreach ($records as $index => &$record) {
+            if (!isset($relatedItems[$index])) {
+                continue;
+            }
+            $record[$fieldName] = array_map(static fn(array $item): int => $item['id'], $relatedItems[$index]);
+        }
+    }
+
+    /**
+     * Include the relations of a group field.
+     *
+     * The column holds a count for MM relations and a comma separated list otherwise,
+     * neither of which a client can use. A group allowing a single table reads as a
+     * list of uids, like a select field; one allowing several tables as "<table>_<uid>"
+     * values, the notation DataHandler takes on write. A group holding at most one item
+     * (maxitems 1, e.g. sys_file_reference.uid_local) reads as that single value, or
+     * null when empty, like a single select field.
+     */
+    protected function includeGroupRelations(array &$records, string $fieldName, array $fieldConfig, string $table): void
+    {
+        $config = $fieldConfig['config'];
+        $allowedTables = GeneralUtility::trimExplode(',', (string)($config['allowed'] ?? ''), true);
+        if ($allowedTables === []) {
+            return;
+        }
+        $singleTable = count($allowedTables) === 1 && $allowedTables[0] !== '*';
+        $singleValue = (int)($config['maxitems'] ?? 0) === 1;
+
+        $relatedItems = $this->readRelatedItems($records, $fieldName, $config, $table);
+
+        foreach ($records as $index => &$record) {
+            if (!isset($relatedItems[$index])) {
+                continue;
+            }
+            $values = array_map(
+                static fn(array $item): int|string => $singleTable ? $item['id'] : $item['table'] . '_' . $item['id'],
+                $relatedItems[$index]
+            );
+            $record[$fieldName] = $singleValue ? ($values[0] ?? null) : $values;
+        }
+    }
+
+    /**
+     * Read the related records of a select, category or group field, by live uid.
      *
      * The records carry the live uid. A live record edited in the workspace has a
      * version with its own uid, and its workspace MM relations point to that version
@@ -856,60 +949,166 @@ class ReadTableTool extends AbstractRecordTool
      * the related side is stored by the uid of its workspace version, if it has one
      * (RelationHandler::convertItemArray()), so those uids are mapped back to live
      * uids for the client.
+     *
+     * The workspace versions of the records and of the related records are each looked
+     * up in one query for the whole batch.
+     *
+     * @return array<int|string, list<array{table: string, id: int}>> Related items by record
+     *         index, only for records that carry the field
      */
-    protected function includeMmRelations(array &$records, string $fieldName, array $fieldConfig, string $table): void
+    protected function readRelatedItems(array $records, string $fieldName, array $config, string $table, bool $onlyPresentFields = true): array
     {
-        $config = $fieldConfig['config'];
         $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
-        $isVersionedInWorkspace = $workspaceId > 0 && !empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS']);
+        $hasMm = !empty($config['MM']);
 
-        foreach ($records as &$record) {
-            if (!isset($record['uid'])) {
+        $liveUids = [];
+        foreach ($records as $record) {
+            if (isset($record['uid']) && (!$onlyPresentFields || array_key_exists($fieldName, $record))) {
+                $liveUids[] = (int)$record['uid'];
+            }
+        }
+        $versionUids = $hasMm ? $this->getWorkspaceVersionUids($table, $liveUids) : [];
+
+        $itemsByRecord = [];
+        $uidsByTable = [];
+        foreach ($records as $index => $record) {
+            if (!isset($record['uid']) || ($onlyPresentFields && !array_key_exists($fieldName, $record))) {
                 continue;
             }
             $liveUid = (int)$record['uid'];
-            $baseRecord = ['uid' => $liveUid, 't3ver_oid' => 0];
-            if ($isVersionedInWorkspace) {
-                $version = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, $table, $liveUid, 'uid');
-                if (is_array($version) && (int)$version['uid'] !== $liveUid) {
-                    $baseRecord = ['uid' => (int)$version['uid'], 't3ver_oid' => $liveUid];
-                }
-            }
+            $baseRecord = isset($versionUids[$liveUid])
+                ? ['uid' => $versionUids[$liveUid], 't3ver_oid' => $liveUid]
+                : ['uid' => $liveUid, 't3ver_oid' => 0];
+
+            // Without MM the column holds the relations itself, already overlaid with
+            // the record's workspace version.
+            $currentValue = $hasMm ? null : $this->stringifyRelationValue($record[$fieldName] ?? null);
 
             $relationHandler = GeneralUtility::makeInstance(RelationHandler::class);
             $relationHandler->setWorkspaceId($workspaceId);
-            $relationHandler->initializeForField($table, $config, $baseRecord);
+            $relationHandler->initializeForField($table, $config, $baseRecord, $currentValue);
             $relationHandler->processDeletePlaceholder();
 
-            $uids = array_map(static fn(array $item): int => (int)$item['id'], $relationHandler->itemArray);
-            $uids = $this->resolveRelatedVersionUids($config['foreign_table'] ?? '', $uids);
-            $record[$fieldName] = array_values(array_unique($uids));
+            $items = [];
+            foreach ($relationHandler->itemArray as $item) {
+                $relatedTable = (string)($item['table'] ?? '');
+                $relatedUid = (int)($item['id'] ?? 0);
+                if ($relatedTable === '' || $relatedUid <= 0) {
+                    continue;
+                }
+                $items[] = ['table' => $relatedTable, 'id' => $relatedUid];
+                $uidsByTable[$relatedTable][$relatedUid] = $relatedUid;
+            }
+            $itemsByRecord[$index] = $items;
         }
+
+        $liveUidsOfVersions = [];
+        foreach ($uidsByTable as $relatedTable => $uids) {
+            $liveUidsOfVersions[$relatedTable] = $this->getLiveUidsOfVersions($relatedTable, array_values($uids));
+        }
+
+        // Fields with "multiple" may list the same record more than once on purpose
+        $allowDuplicates = !empty($config['multiple']);
+
+        foreach ($itemsByRecord as $index => $items) {
+            $resolved = [];
+            foreach ($items as $item) {
+                $versionMap = $liveUidsOfVersions[$item['table']] ?? [];
+                if (array_key_exists($item['id'], $versionMap)) {
+                    if ($versionMap[$item['id']] === null) {
+                        // Deleted in the workspace
+                        continue;
+                    }
+                    $item['id'] = $versionMap[$item['id']];
+                }
+                if ($allowDuplicates) {
+                    $resolved[] = $item;
+                    continue;
+                }
+                // A record related by its live and its version uid is one relation
+                $resolved[$item['table'] . '_' . $item['id']] = $item;
+            }
+            $itemsByRecord[$index] = array_values($resolved);
+        }
+
+        return $itemsByRecord;
+    }
+
+    protected function stringifyRelationValue(mixed $value): string
+    {
+        if (is_array($value)) {
+            return implode(',', array_map('strval', $value));
+        }
+
+        return (string)($value ?? '');
     }
 
     /**
-     * Replace uids of workspace versions by the uid of their live record and drop
-     * related records deleted in the workspace (delete placeholders). Records that are
-     * new in the workspace keep their uid, the order is kept.
+     * Uids of the workspace versions of live records in the current workspace.
+     *
+     * Batch form of BackendUtility::getWorkspaceVersionOfRecord(). Records new in the
+     * workspace have no live counterpart, they are their own version and not listed.
+     *
+     * @param int[] $liveUids
+     * @return array<int, int> Version uid by live uid
+     */
+    protected function getWorkspaceVersionUids(string $table, array $liveUids): array
+    {
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        if ($workspaceId <= 0 || $liveUids === [] || empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS'])) {
+            return [];
+        }
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
+        $queryBuilder->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+        $rows = $queryBuilder
+            ->select('uid', 't3ver_oid')
+            ->from($table)
+            ->where(
+                $queryBuilder->expr()->eq(
+                    't3ver_wsid',
+                    $queryBuilder->createNamedParameter($workspaceId, Connection::PARAM_INT)
+                ),
+                $queryBuilder->expr()->in(
+                    't3ver_oid',
+                    $queryBuilder->createNamedParameter(array_values(array_unique($liveUids)), Connection::PARAM_INT_ARRAY)
+                )
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        $versionUids = [];
+        foreach ($rows as $row) {
+            $versionUids[(int)$row['t3ver_oid']] = (int)$row['uid'];
+        }
+
+        return $versionUids;
+    }
+
+    /**
+     * Map uids of workspace versions to the uid of their live record.
      *
      * Needed where the related side owns the stored version uid, e.g. a category edited
      * or deleted in the workspace: RelationHandler::processDeletePlaceholder() only
-     * recognises live uids.
+     * recognises live uids. Uids that are no version (live records, records new in the
+     * workspace) are not listed.
      *
      * @param int[] $uids
-     * @return int[]
+     * @return array<int, int|null> Live uid by version uid, null for delete placeholders
      */
-    protected function resolveRelatedVersionUids(string $foreignTable, array $uids): array
+    protected function getLiveUidsOfVersions(string $table, array $uids): array
     {
-        if ($uids === [] || empty($GLOBALS['TCA'][$foreignTable]['ctrl']['versioningWS'])) {
-            return $uids;
+        if ($uids === [] || empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS'])) {
+            return [];
         }
 
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($foreignTable);
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
         $queryBuilder->getRestrictions()->removeAll();
         $rows = $queryBuilder
             ->select('uid', 't3ver_oid', 't3ver_state')
-            ->from($foreignTable)
+            ->from($table)
             ->where(
                 $queryBuilder->expr()->in('uid', $queryBuilder->createNamedParameter($uids, Connection::PARAM_INT_ARRAY)),
                 $queryBuilder->expr()->gt('t3ver_oid', 0)
@@ -917,24 +1116,14 @@ class ReadTableTool extends AbstractRecordTool
             ->executeQuery()
             ->fetchAllAssociative();
 
-        $versions = [];
+        $liveUids = [];
         foreach ($rows as $row) {
-            $versions[(int)$row['uid']] = $row;
+            $liveUids[(int)$row['uid']] = (int)$row['t3ver_state'] === VersionState::DELETE_PLACEHOLDER->value
+                ? null
+                : (int)$row['t3ver_oid'];
         }
 
-        $resolved = [];
-        foreach ($uids as $uid) {
-            if (!isset($versions[$uid])) {
-                $resolved[] = $uid;
-                continue;
-            }
-            if ((int)$versions[$uid]['t3ver_state'] === VersionState::DELETE_PLACEHOLDER->value) {
-                continue;
-            }
-            $resolved[] = (int)$versions[$uid]['t3ver_oid'];
-        }
-
-        return $resolved;
+        return $liveUids;
     }
 
     /**
@@ -1002,7 +1191,7 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Include inline field relations
      */
-    protected function includeInlineRelations(array &$records, string $fieldName, array $fieldConfig, array $recordUids): void
+    protected function includeInlineRelations(array &$records, string $fieldName, array $fieldConfig, array $recordUids, int $depth = 0): void
     {
         if (empty($fieldConfig['config']['foreign_table'])) {
             return;
@@ -1034,6 +1223,19 @@ class ReadTableTool extends AbstractRecordTool
             $relatedRecords = $afterEvent->getRecords();
         }
 
+        // Embedded children carry relation fields of their own (a file on a collection
+        // item, a nested collection). Resolve them for all children of this field at
+        // once, otherwise they show the raw counter column.
+        // The parent pointer is kept as stored: it is needed for grouping below and must
+        // not be turned into a relation value if its TCA type happens to be one.
+        if ($isHiddenTable && $relatedRecords !== [] && $depth < self::MAX_EMBEDDING_DEPTH) {
+            $parentPointers = array_map(static fn(array $child): mixed => $child[$foreignField] ?? null, $relatedRecords);
+            $this->resolveRelationFields($relatedRecords, $foreignTable, [], $depth + 1);
+            foreach ($parentPointers as $index => $parentPointer) {
+                $relatedRecords[$index][$foreignField] = $parentPointer;
+            }
+        }
+
         // Group related records by parent record
         $groupedRecords = [];
         foreach ($relatedRecords as $relatedRecord) {
@@ -1049,7 +1251,8 @@ class ReadTableTool extends AbstractRecordTool
         // Add related records to each record
         foreach ($records as &$record) {
             $uid = $record['uid'] ?? null;
-            if ($uid !== null) {
+            // Embedded children only get the fields they carry, see resolveRelationFields()
+            if ($uid !== null && ($depth === 0 || array_key_exists($fieldName, $record))) {
                 if (isset($groupedRecords[$uid]) && !empty($groupedRecords[$uid])) {
                     if ($isHiddenTable) {
                         // Embed full records for hidden tables (like sys_file_reference).
@@ -1066,11 +1269,8 @@ class ReadTableTool extends AbstractRecordTool
                         // Return only UIDs for independent tables (like tt_content)
                         $record[$fieldName] = array_column($groupedRecords[$uid], 'uid');
                     }
-                } else {
-                    // Initialize as empty array if field exists in record but no relations found
-                    if (array_key_exists($fieldName, $record)) {
-                        $record[$fieldName] = [];
-                    }
+                } elseif (array_key_exists($fieldName, $record)) {
+                    $record[$fieldName] = [];
                 }
             }
         }

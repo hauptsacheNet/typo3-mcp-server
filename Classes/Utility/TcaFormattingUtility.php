@@ -191,6 +191,14 @@ class TcaFormattingUtility
                 // Add allowed table if available
                 if (isset($config['allowed'])) {
                     $result .= " [allowed: " . $config['allowed'] . "]";
+                    // ReadTable returns the same notation, so a value read can be written back
+                    $allowedTables = GeneralUtility::trimExplode(',', (string)$config['allowed'], true);
+                    $singleTable = count($allowedTables) === 1 && $allowedTables[0] !== '*';
+                    if ((int)($config['maxitems'] ?? 0) === 1) {
+                        $result .= $singleTable ? " (a uid)" : " (a \"<table>_<uid>\" value, e.g. \"pages_12\")";
+                    } else {
+                        $result .= $singleTable ? " (list of uids)" : " (list of \"<table>_<uid>\" values, e.g. \"pages_12\")";
+                    }
                 }
                 break;
                 

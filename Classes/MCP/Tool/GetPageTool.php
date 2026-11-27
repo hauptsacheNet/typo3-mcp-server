@@ -922,13 +922,21 @@ class GetPageTool extends AbstractRecordTool
         // prepend https:// so parse_url extracts the host correctly.
         // This handles cases like "www.example.com" or "www.example.com/about".
         if (!str_contains($url, '://') && !str_starts_with($url, '/')) {
-            foreach ($bases as $base) {
-                if ($base->getHost() !== '' && str_starts_with(strtolower($url), strtolower($base->getHost()))) {
+            $knownHosts = [
+                ...array_map(static fn(UriInterface $base): string => $base->getHost(), $bases),
+                ...$this->recordUrlService->getPublicHosts(),
+            ];
+            foreach ($knownHosts as $knownHost) {
+                if ($knownHost !== '' && str_starts_with(strtolower($url), strtolower($knownHost))) {
                     $url = 'https://' . $url;
                     break;
                 }
             }
         }
+
+        // URLs this server hands out may point where visitors see the site, e.g. the
+        // frontendBase of a decoupled frontend; resolve them on the TYPO3 site base
+        $url = $this->recordUrlService->mapPublicUrlToSiteUrl($url);
 
         $parsedUrl = parse_url($url);
         $host = isset($parsedUrl['host']) ? strtolower($parsedUrl['host']) : null;
