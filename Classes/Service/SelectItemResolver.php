@@ -92,7 +92,8 @@ class SelectItemResolver
      * only the static TCA items would remain for validation. The submitted values
      * are laid over the database row, so itemsProcFunc callbacks see the record as
      * it will be written, except for the fields FormEngine's access check reads
-     * (see getAccessCheckedFields()).
+     * (see getAccessCheckedFields()). Like the edit form, it uses the record's
+     * version in the current workspace when there is one (see getRecordForEdit()).
      *
      * @param string $table Table name
      * @param array $record Record context for databaseRow and pid resolution
@@ -104,7 +105,7 @@ class SelectItemResolver
         $rowValues = $this->extractRowValues($table, $record);
 
         $uid = (int)($record['uid'] ?? 0);
-        $existingRow = $uid > 0 ? BackendUtility::getRecord($table, $uid) : null;
+        $existingRow = $uid > 0 ? $this->getRecordForEdit($table, $uid) : null;
         $command = is_array($existingRow) ? 'edit' : 'new';
 
         // The cache must key on the full record context, not just table:pid:
@@ -127,7 +128,7 @@ class SelectItemResolver
                     $table === 'pages' ? $uid : (int)($existingRow['pid'] ?? 0)
                 ),
                 'tableName' => $table,
-                'vanillaUid' => $uid,
+                'vanillaUid' => (int)$existingRow['uid'],
                 'command' => 'edit',
                 // A given databaseRow replaces the database lookup of the edit form
                 // (DatabaseEditRow). It keeps the control fields of the stored row
@@ -166,6 +167,27 @@ class SelectItemResolver
         $this->cache[$cacheKey] = $result;
 
         return $result;
+    }
+
+    /**
+     * The row the backend edit form opens for a record: its version in the current
+     * workspace when there is one (EditDocumentController::getRecordForEdit()),
+     * otherwise the stored row. The access check and the itemsProcFunc callbacks
+     * then see the record as it is in the workspace, for example with a CType or
+     * doktype that was changed there, which is also the row DataHandler updates.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function getRecordForEdit(string $table, int $uid): ?array
+    {
+        $row = BackendUtility::getRecord($table, $uid);
+        if (!is_array($row)) {
+            return null;
+        }
+        $workspace = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        $version = BackendUtility::getWorkspaceVersionOfRecord($workspace, $table, $uid);
+
+        return is_array($version) ? $version : $row;
     }
 
     /**

@@ -175,6 +175,44 @@ class NonAdminPageSelectItemsTest extends AbstractFunctionalTest
         $this->assertSame('pagets__example', $page['backend_layout']);
     }
 
+    /**
+     * The items are compiled from the record's version in the current workspace,
+     * like the edit form does. The live page is a folder (doktype 254), which the
+     * editor's page types don't include, so FormEngine refuses the live row and
+     * only the static items would remain. In the workspace the page is a standard
+     * page, and compiled from that version the itemsProcFunc items are offered.
+     */
+    public function testAllowedValuesFollowTheWorkspaceVersionOfTheRecord(): void
+    {
+        $this->createPageVersionWithStandardDoktypeOverLiveFolder();
+
+        $record = BackendUtility::getRecord('pages', self::PAGE_UID);
+        $this->assertSame(254, (int)$record['doktype'], 'Precondition: the live page is a folder');
+        $allowedValues = $this->tableAccessService->getSelectFieldAllowedValues('pages', 'backend_layout', $record);
+
+        $this->assertIsArray($allowedValues);
+        $this->assertContains('pagets__example', $allowedValues, 'Allowed: ' . json_encode($allowedValues));
+    }
+
+    public function testEditorCanSetBackendLayoutOnWorkspaceVersionOfThePage(): void
+    {
+        $versionUid = $this->createPageVersionWithStandardDoktypeOverLiveFolder();
+
+        $result = $this->writeTool->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => self::PAGE_UID,
+            'data' => [
+                'backend_layout' => 'pagets__example',
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $version = BackendUtility::getRecord('pages', $versionUid);
+        $this->assertSame('pagets__example', $version['backend_layout']);
+        $this->assertSame(254, (int)BackendUtility::getRecord('pages', self::PAGE_UID)['doktype'], 'Live stays untouched');
+    }
+
     public function testUnknownBackendLayoutIsStillRejected(): void
     {
         $result = $this->writeTool->execute([
@@ -226,5 +264,28 @@ class NonAdminPageSelectItemsTest extends AbstractFunctionalTest
 
         $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
         $this->assertStringContainsString("Field 'doktype' value '254' must be one of", $result->content[0]->text);
+    }
+
+    /**
+     * Turns the live page into a folder and adds its version in the editor's
+     * workspace as a standard page, as if an admin had changed the type there.
+     *
+     * @return int uid of the workspace version
+     */
+    private function createPageVersionWithStandardDoktypeOverLiveFolder(): int
+    {
+        $connection = $this->connectionPool->getConnectionForTable('pages');
+        $connection->update('pages', ['doktype' => 254], ['uid' => self::PAGE_UID]);
+
+        $version = BackendUtility::getRecord('pages', self::PAGE_UID);
+        unset($version['uid']);
+        $version['doktype'] = 1;
+        $version['t3ver_oid'] = self::PAGE_UID;
+        $version['t3ver_wsid'] = self::WORKSPACE_UID;
+        $version['t3ver_state'] = 0;
+        $version['t3ver_stage'] = 0;
+        $connection->insert('pages', $version);
+
+        return (int)$connection->lastInsertId();
     }
 }
