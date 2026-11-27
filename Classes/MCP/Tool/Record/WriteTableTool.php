@@ -1434,6 +1434,21 @@ class WriteTableTool extends AbstractRecordTool
                 if ($validationError !== null) {
                     return "Field '{$fieldName}': " . $validationError;
                 }
+                // Embedded children are written by DataHandler, which silently skips an
+                // empty required field instead of reporting it. Check them like a record
+                // of their own before anything is written.
+                $foreignTable = (string)($fieldConfig['config']['foreign_table'] ?? '');
+                if ($this->tableAccessService->isEmbeddedChildTable($foreignTable)) {
+                    $validationError = $this->validateEmbeddedChildRequiredFields(
+                        $foreignTable,
+                        $data[$fieldName],
+                        $effectivePid,
+                        $this->getInlineOwnershipFields($fieldConfig['config'], $table)
+                    );
+                    if ($validationError !== null) {
+                        return "Field '{$fieldName}', " . $validationError;
+                    }
+                }
                 continue;
             }
             // Convert arrays to comma-separated strings for multi-value fields
@@ -1668,6 +1683,108 @@ class WriteTableTool extends AbstractRecordTool
             implode('; ', $violations),
             $typeField ? ' or choose another record type' : ''
         );
+    }
+
+    /**
+     * Check the required fields of embedded inline children (and their own embedded
+     * children) the way validateRequiredFields() checks a top-level record: a new child
+     * like a create, an existing child ({"uid": N, ...}) like an update of the fields it
+     * sends. Defaults filled for a new child are written back into $children.
+     *
+     * @param array $children The child records as sent for the inline field
+     * @param int $pid Page the children live on
+     * @param array<string, mixed> $relationValues Values the relation itself writes into a new
+     *        child (foreign_match_fields, foreign_table_field); they count as filled
+     * @return string|null Error message naming the item, null if all children are valid
+     */
+    protected function validateEmbeddedChildRequiredFields(string $childTable, array &$children, int $pid, array $relationValues = []): ?string
+    {
+        foreach ($children as $index => &$childData) {
+            if (!is_array($childData)) {
+                continue;
+            }
+
+            $childUid = (isset($childData['uid']) && is_numeric($childData['uid']) && (int)$childData['uid'] > 0)
+                ? (int)$childData['uid']
+                : null;
+            $fields = $childData;
+            unset($fields['uid']);
+            // A new child gets the relation's own values on insert, overriding what was sent.
+            if ($childUid === null) {
+                $fields = array_replace($fields, $relationValues);
+            }
+
+            $currentRecord = null;
+            $newRecordRow = null;
+            if ($childUid !== null) {
+                // The version the write goes to; ownership is checked when the children are processed.
+                $currentRecord = BackendUtility::getRecord($childTable, $childUid);
+                if ($currentRecord === null) {
+                    continue;
+                }
+                BackendUtility::workspaceOL($childTable, $currentRecord);
+                if (!is_array($currentRecord)) {
+                    continue;
+                }
+            } else {
+                $newRecordRow = GeneralUtility::makeInstance(NewRecordInitializer::class)->initialize($childTable, $pid, $fields);
+            }
+
+            $recordType = $this->resolveRecordType($childTable, $fields, $currentRecord, $newRecordRow);
+            $availableFields = $this->tableAccessService->getAvailableFields($childTable, $recordType, $pid ?: null);
+            $action = $childUid === null ? 'create' : 'update';
+
+            $error = $this->validateRequiredFields(
+                $childTable,
+                $fields,
+                $action,
+                $availableFields,
+                $recordType,
+                $currentRecord,
+                $childUid,
+                $newRecordRow,
+                $pid
+            );
+            // Name the item the way the caller sent it: its array index and live uid.
+            $item = sprintf('item at index %d (%s)', $index, $childUid !== null ? "uid {$childUid}" : 'new record');
+            if ($error !== null) {
+                return "{$item}: {$error}";
+            }
+
+            // The writer adds the relation's values itself; hand back only what was sent.
+            if ($childUid === null) {
+                $fields = array_diff_key($fields, $relationValues);
+            }
+
+            // Children of the child, e.g. the items of a Collection inside a Collection.
+            foreach ($fields as $nestedField => &$nestedValue) {
+                $nestedConfig = $this->tableAccessService->getFieldConfig($childTable, (string)$nestedField)['config'] ?? [];
+                $nestedTable = (string)($nestedConfig['foreign_table'] ?? '');
+                if (!in_array($nestedConfig['type'] ?? '', ['inline', 'file'], true)
+                    || !is_array($nestedValue)
+                    || !$this->tableAccessService->isEmbeddedChildTable($nestedTable)
+                ) {
+                    continue;
+                }
+                // Nested children only get foreign_match_fields (see resolveNestedEmbeddedRelations()).
+                $nestedMatchFields = is_array($nestedConfig['foreign_match_fields'] ?? null) ? $nestedConfig['foreign_match_fields'] : [];
+                $nestedError = $this->validateEmbeddedChildRequiredFields($nestedTable, $nestedValue, $pid, $nestedMatchFields);
+                if ($nestedError !== null) {
+                    return "{$item}, field '{$nestedField}', {$nestedError}";
+                }
+            }
+            unset($nestedValue);
+
+            if ($childUid === null) {
+                // Keep the defaults filled for the new child, so the stored record is the one checked.
+                $childData = $fields;
+            } else {
+                $childData = ['uid' => $childData['uid']] + $fields;
+            }
+        }
+        unset($childData);
+
+        return null;
     }
 
     protected function getRequiredItemCount(array $config): int

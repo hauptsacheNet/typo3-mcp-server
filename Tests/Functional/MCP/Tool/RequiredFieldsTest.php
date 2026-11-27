@@ -470,6 +470,183 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         $this->assertSame(2, $this->countItems(['type' => 'file', 'minitems' => 2], [['uid_local' => 1], ['uid_local' => 1]]));
     }
 
+    public function testNewEmbeddedChildWithoutRequiredFieldIsRefused(): void
+    {
+        [$parentUid, $slideUids] = $this->createSlider();
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $parentUid,
+            'data' => [
+                'tx_testrequiredfields_slides' => [
+                    ['uid' => $slideUids[0]],
+                    ['uid' => $slideUids[1]],
+                    ['bodytext' => '<p>Quote without author</p>'],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('author', $result->content[0]->text);
+        $this->assertStringContainsString(
+            "Field 'tx_testrequiredfields_slides', item at index 2 (new record)",
+            $result->content[0]->text
+        );
+        $this->assertStringContainsString("table 'tx_testrequiredfields_slide': author", $result->content[0]->text);
+        $this->assertSame(['Author 1', 'Author 2'], $this->getSlideAuthors($parentUid));
+    }
+
+    public function testEmptyingRequiredFieldOfEmbeddedChildIsRefused(): void
+    {
+        [$parentUid, $slideUids] = $this->createSlider();
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $parentUid,
+            'data' => [
+                'tx_testrequiredfields_slides' => [
+                    ['uid' => $slideUids[0], 'author' => ''],
+                    ['uid' => $slideUids[1]],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString(
+            "Field 'tx_testrequiredfields_slides', item at index 0 (uid {$slideUids[0]})",
+            $result->content[0]->text
+        );
+        $this->assertStringContainsString("table 'tx_testrequiredfields_slide': author", $result->content[0]->text);
+        $this->assertSame(['Author 1', 'Author 2'], $this->getSlideAuthors($parentUid));
+    }
+
+    public function testEmbeddedChildrenWithRequiredFieldsFilledAreWritten(): void
+    {
+        [$parentUid, $slideUids] = $this->createSlider();
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $parentUid,
+            'data' => [
+                'tx_testrequiredfields_slides' => [
+                    ['uid' => $slideUids[0], 'author' => 'Renamed'],
+                    ['uid' => $slideUids[1]],
+                    ['bodytext' => '<p>Third</p>', 'author' => 'Author 3'],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertSame(['Renamed', 'Author 2', 'Author 3'], $this->getSlideAuthors($parentUid));
+    }
+
+    public function testCreateWithEmbeddedChildWithoutRequiredFieldIsRefused(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => 'testrequired_slides',
+                'header' => 'Slider',
+                'tx_testrequiredfields_slides' => [
+                    ['bodytext' => '<p>Quote without author</p>'],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('author', $result->content[0]->text);
+        $this->assertSame(
+            0,
+            (int)$this->getConnectionForTable('tt_content')->count('uid', 'tt_content', ['CType' => 'testrequired_slides'])
+        );
+    }
+
+    public function testRequiredFieldOfEmbeddedChildFilledByTheRelationIsAccepted(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => 'testrequired_slides',
+                'header' => 'Slider',
+                'tx_testrequiredfields_house_slides' => [
+                    ['bodytext' => '<p>Quote by the house</p>'],
+                ],
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $parentUid = (int)json_decode($result->content[0]->text, true)['uid'];
+        $this->assertSame(['House author'], $this->getSlideAuthors($parentUid));
+    }
+
+    /**
+     * @return array{0: int, 1: list<int>} parent live uid, slide live uids
+     */
+    private function createSlider(): array
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => 'testrequired_slides',
+                'header' => 'Slider',
+                'tx_testrequiredfields_slides' => [
+                    ['bodytext' => '<p>First</p>', 'author' => 'Author 1'],
+                    ['bodytext' => '<p>Second</p>', 'author' => 'Author 2'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $parentUid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        $slideUids = array_map(
+            static fn(array $row): int => (int)$row['uid'],
+            $this->getSlideRows($parentUid)
+        );
+        $this->assertCount(2, $slideUids);
+
+        return [$parentUid, $slideUids];
+    }
+
+    /**
+     * Slides of a parent as the workspace sees them, in display order.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function getSlideRows(int $parentUid): array
+    {
+        $rows = $this->getConnectionForTable('tx_testrequiredfields_slide')
+            ->select(['*'], 'tx_testrequiredfields_slide', ['parent_uid' => $parentUid, 'deleted' => 0, 't3ver_oid' => 0], [], ['sorting' => 'ASC'])
+            ->fetchAllAssociative();
+
+        $slides = [];
+        foreach ($rows as $row) {
+            BackendUtility::workspaceOL('tx_testrequiredfields_slide', $row);
+            if (is_array($row) && (int)($row['t3ver_state'] ?? 0) !== 2) {
+                $slides[] = $row;
+            }
+        }
+        usort($slides, static fn(array $a, array $b): int => (int)$a['sorting'] <=> (int)$b['sorting']);
+
+        return $slides;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function getSlideAuthors(int $parentUid): array
+    {
+        return array_map(static fn(array $row): string => (string)$row['author'], $this->getSlideRows($parentUid));
+    }
+
     public function testSchemaNamesTheConditionOfConditionallyRequiredFields(): void
     {
         $schema = $this->getSchema('tt_content', self::STAGE_TYPE);
