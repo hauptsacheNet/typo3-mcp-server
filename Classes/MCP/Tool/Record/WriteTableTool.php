@@ -1636,6 +1636,8 @@ class WriteTableTool extends AbstractRecordTool
         if ($isNew) {
             // Fill the defaults of unconditionally required fields first: display
             // conditions of other fields have to see the values that get stored.
+            // Conditional fields get their default in the loop below, so a condition
+            // on another conditional field's default still depends on field order.
             foreach ($requiredFields as $fieldName => [$fieldConfig, $config, $requiredItems]) {
                 if (empty($fieldConfig['displayCond'])) {
                     $this->fillDefaultOfEmptyRequiredField($data, $fieldName, $config, $requiredItems, $newRecordRow);
