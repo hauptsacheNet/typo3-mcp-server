@@ -11,3 +11,4 @@
 - If the TYPO3 instance has no language support, then hide all aspects of translation like parameters or even database fields. Check the LanguageService.php to check support.
 - Language overlays use TYPO3's PageRepository API while workspace overlays use custom implementation for transparency (see Documentation/Architecture/LanguageOverlays.md)
 - Tool output must be valid UTF-8 (cut strings with `mb_*`): the SDK's HTTP transport encodes with `JSON_THROW_ON_ERROR` and silently drops a response it cannot encode, so the client just times out.
+- Date/time fields (TCA type=datetime, incl. dbType native columns): `DateTimeFieldService` converts ISO 8601 to the raw stored value before DataHandler, because TYPO3 13 shifts ISO strings by the server UTC offset ("fake UTC" from the date picker).

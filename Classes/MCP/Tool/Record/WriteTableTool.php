@@ -9,6 +9,7 @@ use Hn\McpServer\Event\AfterRecordWriteEvent;
 use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
+use Hn\McpServer\Service\DateTimeFieldService;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\NewRecordInitializer;
@@ -102,6 +103,7 @@ class WriteTableTool extends AbstractRecordTool
                             'on "update" setting "pid" moves the record to that page (combine with "position" to control where on the new page it lands; e.g. data: {"pid": 1} moves the record to page 1). ' .
                             ($hasMultipleLanguages ? 'Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' .
                                 '"update" never changes the language of a record; to translate a record use "translate", which creates a linked translation. ' : '') .
+                            'Date and time fields take ISO 8601 values like ReadTable returns them, e.g. "2026-11-27T14:30:00+01:00", "2026-11-27 14:30" (without an offset the time is local time in the server timezone ' . date_default_timezone_get() . ', as entered in the backend form), "2026-11-27" for date fields and "14:30" for time fields. ' .
                             'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
                             'For embedded tables (e.g. file references), the array fully replaces the existing list: ' .
                             'children present in the previous record but missing from the new array are deleted. ' .
@@ -1392,6 +1394,7 @@ class WriteTableTool extends AbstractRecordTool
         $recordType = $this->resolveRecordType($table, $data, $currentRecord, $newRecordRow);
 
         // Validate and convert field values
+        $dateTimeService = GeneralUtility::makeInstance(DateTimeFieldService::class);
         foreach ($data as $fieldName => $value) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
             if (!$fieldConfig) {
@@ -1410,20 +1413,17 @@ class WriteTableTool extends AbstractRecordTool
                 return $validationError;
             }
             
-            // Handle date/time fields - convert ISO 8601 to timestamp for TYPO3
-            if (!empty($fieldConfig['config']['eval'])) {
-                $evalRules = GeneralUtility::trimExplode(',', $fieldConfig['config']['eval'], true);
-                if (array_intersect(['date', 'datetime', 'time'], $evalRules)) {
-                    if (is_string($value) && preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $value)) {
-                        try {
-                            $dateTime = new \DateTime($value);
-                            $data[$fieldName] = $dateTime->getTimestamp();
-                        } catch (\Exception $e) {
-                            // Log the error but let DataHandler handle the invalid date
-                            $this->logException($e, 'parsing date value');
-                        }
-                    }
+            // Date/time fields: hand DataHandler the value it stores as is (timestamp,
+            // seconds since midnight or native local DB string). An ISO string would be
+            // shifted by the server's UTC offset in TYPO3 13 (see DateTimeFieldService).
+            $dateTimeSettings = $dateTimeService->getSettingsFromConfig($fieldConfig['config'] ?? []);
+            if ($dateTimeSettings !== null) {
+                try {
+                    $data[$fieldName] = $dateTimeService->convertForStorage($value, $dateTimeSettings);
+                } catch (\InvalidArgumentException $e) {
+                    return "Field '{$fieldName}' expects " . $e->getMessage() . ', got ' . json_encode($value);
                 }
+                continue;
             }
             
             // Validate inline/file field type
@@ -2771,6 +2771,23 @@ class WriteTableTool extends AbstractRecordTool
             // gets cast to the literal string "Array" on the way to the DB. Encode
             // here so the round trip with ReadTableTool (which json_decodes the value
             // back into an array) is symmetric.
+            // Date/time fields of embedded children, which skip validateRecordData().
+            // For top-level records this is a no-op: the values are already converted.
+            $dateTimeSettings = $fieldConfig
+                ? GeneralUtility::makeInstance(DateTimeFieldService::class)->getSettingsFromConfig($fieldConfig['config'] ?? [])
+                : null;
+            if ($dateTimeSettings !== null) {
+                try {
+                    $data[$fieldName] = GeneralUtility::makeInstance(DateTimeFieldService::class)
+                        ->convertForStorage($value, $dateTimeSettings);
+                } catch (\InvalidArgumentException $e) {
+                    throw new ValidationException([
+                        "Field '{$fieldName}' of {$table} expects " . $e->getMessage() . ', got ' . json_encode($value),
+                    ]);
+                }
+                continue;
+            }
+
             $fieldType = $fieldConfig['config']['type'] ?? '';
             if ($fieldType === 'imageManipulation' && is_array($value)) {
                 $data[$fieldName] = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);

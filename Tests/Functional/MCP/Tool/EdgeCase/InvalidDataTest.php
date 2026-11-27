@@ -82,7 +82,7 @@ class InvalidDataTest extends AbstractFunctionalTest
                     'uid' => 1,
                     'data' => ['starttime' => 'not-a-date']
                 ],
-                'success', // TYPO3 converts invalid dates to 0
+                'expects an ISO 8601 date', // rejected instead of silently stored as 0
                 'write'
             ],
         ];

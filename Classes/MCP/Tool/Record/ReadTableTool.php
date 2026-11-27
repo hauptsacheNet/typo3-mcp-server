@@ -20,6 +20,7 @@ use TYPO3\CMS\Core\Database\RelationHandler;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
+use Hn\McpServer\Service\DateTimeFieldService;
 use Hn\McpServer\Service\LanguageService;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Service\FlexFormService;
@@ -82,7 +83,8 @@ class ReadTableTool extends AbstractRecordTool
                     . '"isNotNull" take no value. Values are typed: a field holding numbers needs numbers. '
                     . 'Any field ReadTable returns can be filtered on: the fields GetTableSchema lists for any '
                     . 'record type, plus uid, pid and control fields such as tstamp, crdate and sorting. '
-                    . 'Date fields are compared as Unix timestamps in seconds, even though results show them as ISO dates. '
+                    . 'Date and time fields take values in the format results show them, e.g. "2026-11-27T14:30:00+01:00" or "2026-11-27" '
+                    . '(without an offset the time is local time in the server timezone ' . date_default_timezone_get() . '). '
                     . 'This is not SQL: a condition string is rejected.',
                 'items' => [
                     'type' => 'object',
@@ -600,6 +602,13 @@ class ReadTableTool extends AbstractRecordTool
             return null;
         }
 
+        // Date and time fields (timestamps or native DB values) as ISO 8601
+        $dateTimeService = GeneralUtility::makeInstance(DateTimeFieldService::class);
+        $dateTimeSettings = $dateTimeService->getFieldSettings($table, $field);
+        if ($dateTimeSettings !== null) {
+            return $dateTimeService->formatForOutput($value, $dateTimeSettings);
+        }
+
         // Check if this is an integer field based on TCA eval rules or select field with integer values
         $fieldConfig = $this->tableAccessService->getFieldConfig($table, $field);
         if ($fieldConfig) {
@@ -696,16 +705,6 @@ class ReadTableTool extends AbstractRecordTool
             if (json_last_error() === JSON_ERROR_NONE) {
                 return $decoded;
             }
-        }
-
-        // Convert timestamps to ISO 8601 dates
-        if (is_numeric($value) && $this->tableAccessService->isDateField($table, $field)) {
-            if ($value > 0) {
-                $dateTime = new \DateTime('@' . $value);
-                $dateTime->setTimezone(new \DateTimeZone(date_default_timezone_get()));
-                return $dateTime->format('c');
-            }
-            return null;
         }
 
         return $value;
