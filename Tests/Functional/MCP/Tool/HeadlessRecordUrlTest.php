@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\GetPageTool;
+use Hn\McpServer\MCP\Tool\GetPageTreeTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\Service\LanguageService;
@@ -99,6 +100,45 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
             '#^https://www\.example\.com/about\?ADMCMD_prev=[0-9a-f]{32}\#c102$#',
             $data['preview_url'] ?? ''
         );
+    }
+
+    /**
+     * GetPageTree and GetPage hand out the live and the workspace preview URL of
+     * a page; both point at the frontend, the preview keeps its token, and the
+     * preview URL resolves back in GetPage.
+     */
+    public function testPageTreeAndGetPageUrlsPointAtFrontendBase(): void
+    {
+        $this->writeSiteConfiguration(1);
+        $result = (new WriteTableTool())->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 4,
+            'data' => ['title' => 'Team changed'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $tree = (new GetPageTreeTool(
+            GeneralUtility::makeInstance(SiteInformationService::class),
+            GeneralUtility::makeInstance(LanguageService::class)
+        ))->execute(['startPage' => 1]);
+        $this->assertFalse($tree->isError, json_encode($tree->jsonSerialize()));
+        $treeText = $tree->content[0]->text;
+        $this->assertMatchesRegularExpression(
+            '# - https://www\.example\.com/about/team \(preview with unpublished changes: '
+                . 'https://www\.example\.com/about/team\?ADMCMD_prev=[0-9a-f]{32}\)#',
+            $treeText
+        );
+        $this->assertStringNotContainsString('api.example.com', $treeText);
+
+        $page = $this->executeGetPage(['uid' => 4]);
+        $this->assertStringContainsString('URL: https://www.example.com/about/team' . "\n", $page);
+        $this->assertMatchesRegularExpression(
+            '#Preview URL: (https://www\.example\.com/about/team\?ADMCMD_prev=[0-9a-f]{32})\n#',
+            $page
+        );
+        preg_match('#Preview URL: (\S+)#', $page, $previewUrl);
+        $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => $previewUrl[1]]));
     }
 
     /**

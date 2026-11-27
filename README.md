@@ -152,6 +152,21 @@ final class HeadlessRecordUrlListener
 }
 ```
 
+The attribute registers the listener when the site package's `Configuration/Services.yaml`
+autoconfigures its classes (`_defaults: autoconfigure: true` plus a `resource: '../Classes/*'`
+entry). Without that, register it explicitly:
+
+```yaml
+services:
+  Vendor\SitePackage\EventListener\HeadlessRecordUrlListener:
+    tags:
+      - name: event.listener
+```
+
+The listener rewrites URLs the way EXT:headless 4 rewrites the backend's view button in the
+live workspace, and does so for workspace previews too. The `ADMCMD_prev` token is appended
+after the listener ran, so the frontend has to accept it and pass it on to TYPO3.
+
 Other decoupled frontends can rewrite URLs the same way, through the core
 `AfterPageUriGeneratedEvent` (TYPO3 14) or `AfterRecordUrlGeneratedEvent`.
 

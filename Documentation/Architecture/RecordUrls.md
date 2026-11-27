@@ -98,6 +98,10 @@ visitors use the `frontendBase`. mcp_server contains no headless code:
   `AfterRecordUrlGeneratedEvent` for every URL (before the preview token is appended); the
   site package registers the small listener shown in the [README](../../README.md).
 
+Both paths use EXT:headless' own `UrlUtility::getFrontendUrlWithSite()`, so URLs equal those
+of the backend view button, including its quirks: a language-specific `frontendBase` is picked
+by matching the URL against the language bases, not by the language the URL was generated for.
+
 **The way back.** `GetPage` accepts the URLs it hands out. TYPO3 cannot match a
 `frontendBase` URL (EXT:headless only rewrites outgoing URLs), and mcp_server does not read
 headless configuration. Instead `RecordUrlService::mapPublicUrlToSiteUrl()` inverts whatever

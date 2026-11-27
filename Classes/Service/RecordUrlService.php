@@ -459,7 +459,8 @@ class RecordUrlService
         $context = $this->createContext(0);
         $bases = ['public' => [], 'site' => []];
         foreach ($this->siteFinder->getAllSites() as $site) {
-            foreach ($site->getLanguages() as $language) {
+            // Disabled languages too: URLs are generated for them (getLanguageById())
+            foreach ($site->getAllLanguages() as $language) {
                 // Not generated through the router: on TYPO3 14 its URLs are already rewritten
                 $siteUri = $language->getBase();
                 $siteUri = $siteUri->withPath(rtrim($siteUri->getPath(), '/') . '/');
