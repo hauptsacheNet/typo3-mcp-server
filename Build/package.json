@@ -4,7 +4,7 @@
     "node": ">=22.18.0 <23.0.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.52.0"
+    "@playwright/test": "1.64.1"
   },
   "scripts": {
     "playwright:install": "playwright install",

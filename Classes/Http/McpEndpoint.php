@@ -29,6 +29,14 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 class McpEndpoint
 {
     use CorsHeadersTrait;
+    use RequestBodyLimitTrait;
+
+    /**
+     * Upper bound for a JSON-RPC request body. Tool calls carry text, never
+     * files (those go through the upload endpoint), so this is far beyond
+     * anything a client legitimately sends.
+     */
+    private const MAX_BODY_BYTES = 4194304;
     use RequestUrlTrait;
 
     /**
@@ -150,7 +158,7 @@ class McpEndpoint
 
             if (!$tokenInfo) {
                 $this->logDebug('MCP: Authentication token validation failed');
-                return $this->createUnauthorizedResponse('Invalid or expired token', $request);
+                return $this->createUnauthorizedResponse('Invalid or expired token', $request, true);
             }
 
             $this->logDebug("MCP: Token validation successful for user: " . $tokenInfo['be_user_uid']);
@@ -161,7 +169,7 @@ class McpEndpoint
             // must not tell whether the account behind it exists.
             if (!$this->setupBackendUserContext($tokenInfo['be_user_uid'])) {
                 $this->logDebug('MCP: Backend user of a valid token is not available');
-                return $this->createUnauthorizedResponse('Invalid or expired token', $request);
+                return $this->createUnauthorizedResponse('Invalid or expired token', $request, true);
             }
 
             // Set current request context in SiteInformationService
@@ -202,7 +210,14 @@ class McpEndpoint
             // runner handle it directly. This keeps the whole request/response
             // cycle inside PSR-7 (no superglobals, no output buffering), which
             // also makes the endpoint testable in functional tests.
-            $mcpRequest = new HttpMessage((string)$request->getBody());
+            //
+            // The SDK buffers and decodes the body without a size limit, so it
+            // is bounded here, before the SDK sees it.
+            $requestBody = $this->readBodyWithLimit($request, self::MAX_BODY_BYTES);
+            if ($requestBody === null) {
+                return $this->createPayloadTooLargeResponse($request);
+            }
+            $mcpRequest = new HttpMessage($requestBody);
             $mcpRequest->setMethod($request->getMethod());
             $mcpRequest->setUri((string)$request->getUri());
             $mcpRequest->setQueryParams($request->getQueryParams());
@@ -316,9 +331,31 @@ class McpEndpoint
     }
 
     /**
+     * Answer a request whose body exceeds MAX_BODY_BYTES
+     */
+    private function createPayloadTooLargeResponse(ServerRequestInterface $request): ResponseInterface
+    {
+        $stream = new Stream('php://temp', 'rw');
+        $stream->write(json_encode([
+            'error' => 'Payload Too Large',
+            'message' => 'The request body exceeds the limit of ' . self::MAX_BODY_BYTES . ' bytes.',
+        ]));
+        $stream->rewind();
+
+        $response = new Response($stream, 413, ['Content-Type' => 'application/json']);
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
      * Create unauthorized response
      */
-    private function createUnauthorizedResponse(string $message, ?ServerRequestInterface $request = null): ResponseInterface
+    /**
+     * @param bool $invalidToken A token was sent but is not (or no longer) valid.
+     *        Signalled as error="invalid_token" (RFC 6750 §3.1), which tells
+     *        clients with a refresh token to renew it rather than start over.
+     */
+    private function createUnauthorizedResponse(string $message, ?ServerRequestInterface $request = null, bool $invalidToken = false): ResponseInterface
     {
         $stream = new Stream('php://temp', 'rw');
         $stream->write(json_encode([
@@ -332,6 +369,9 @@ class McpEndpoint
         if ($request !== null) {
             $resourceMetadataUrl = $this->getRequestBaseUrl($request) . '/.well-known/oauth-protected-resource/mcp';
             $wwwAuth = 'Bearer resource_metadata="' . $resourceMetadataUrl . '"';
+        }
+        if ($invalidToken) {
+            $wwwAuth .= ($request !== null ? ', ' : ' ') . 'error="invalid_token"';
         }
 
         $response = new Response(

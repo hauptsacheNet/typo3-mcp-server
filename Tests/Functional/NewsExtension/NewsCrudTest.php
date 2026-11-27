@@ -7,6 +7,8 @@ namespace Hn\McpServer\Tests\Functional\NewsExtension;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -37,6 +39,44 @@ class NewsCrudTest extends FunctionalTestCase
         
         // Set up backend user
         $this->setUpBackendUser(1);
+    }
+
+    /**
+     * news requires "datetime" (dateTimeNotRequired is off by default). The backend
+     * form fills it with "now" for a new record (NewsRowInitializeNew), and so does
+     * WriteTable instead of refusing the create.
+     */
+    public function testCreateWithoutDatetimeGetsTheCurrentTime(): void
+    {
+        $result = (new WriteTableTool())->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => ['title' => 'News without a date'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        $record = BackendUtility::getRecordWSOL('tx_news_domain_model_news', $uid);
+        $this->assertSame('News without a date', $record['title']);
+        // "now" of the request, as the backend form takes it
+        $now = GeneralUtility::makeInstance(Context::class)->getPropertyFromAspect('date', 'timestamp');
+        $this->assertGreaterThan(0, $now);
+        $this->assertSame($now, (int)$record['datetime']);
+    }
+
+    public function testCreateKeepsAGivenDatetime(): void
+    {
+        $result = (new WriteTableTool())->execute([
+            'table' => 'tx_news_domain_model_news',
+            'action' => 'create',
+            'pid' => 1,
+            'data' => ['title' => 'Dated news', 'datetime' => 1704103200],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        $this->assertSame(1704103200, (int)BackendUtility::getRecordWSOL('tx_news_domain_model_news', $uid)['datetime']);
     }
 
     /**

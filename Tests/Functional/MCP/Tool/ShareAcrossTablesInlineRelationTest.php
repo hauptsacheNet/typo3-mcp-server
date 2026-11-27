@@ -7,6 +7,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\RelationHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -107,5 +108,108 @@ class ShareAcrossTablesInlineRelationTest extends FunctionalTestCase
         $record = json_decode($result->content[0]->text, true)['records'][0];
         $this->assertArrayHasKey('tx_testsat_items', $record);
         $this->assertCount(2, $record['tx_testsat_items']);
+    }
+
+    public function testCreatingChildrenWithoutTcaOwnershipColumnsStillLinksThemToTheParent(): void
+    {
+        $contentUid = $this->createContentElementWithBareItems(['First', 'Second']);
+
+        $this->assertBareItemsBelongTo($contentUid, ['First', 'Second']);
+    }
+
+    public function testUpdatingChildrenWithoutTcaOwnershipColumnsStillLinksThemToTheParent(): void
+    {
+        $contentUid = $this->createContentElementWithBareItems([]);
+
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'update',
+            'uid' => $contentUid,
+            'data' => [
+                'tx_testsat_bare_items' => [
+                    ['title' => 'First'],
+                    ['title' => 'Second'],
+                ],
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $this->assertBareItemsBelongTo($contentUid, ['First', 'Second']);
+    }
+
+    /**
+     * @param string[] $titles
+     */
+    private function createContentElementWithBareItems(array $titles): int
+    {
+        $writeTool = GeneralUtility::makeInstance(WriteTableTool::class);
+
+        $result = $writeTool->execute([
+            'table' => 'pages',
+            'action' => 'create',
+            'pid' => 0,
+            'data' => [
+                'title' => 'Test Page',
+                'doktype' => 1,
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $pageUid = json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $writeTool->execute([
+            'table' => 'tt_content',
+            'action' => 'create',
+            'pid' => $pageUid,
+            'data' => [
+                'header' => 'Grid element',
+                'CType' => 'text',
+            ] + ($titles === [] ? [] : [
+                'tx_testsat_bare_items' => array_map(
+                    static fn(string $title): array => ['title' => $title],
+                    $titles
+                ),
+            ]),
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        return json_decode($result->content[0]->text, true)['uid'];
+    }
+
+    /**
+     * @param string[] $titles
+     */
+    private function assertBareItemsBelongTo(int $contentUid, array $titles): void
+    {
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_testsat_bare');
+        $queryBuilder->getRestrictions()->removeAll();
+        $children = $queryBuilder
+            ->select('uid', 'title', 'tablenames', 'fieldname', 'foreign_table_parent_uid')
+            ->from('tx_testsat_bare')
+            ->orderBy('uid')
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        $this->assertSame($titles, array_column($children, 'title'));
+
+        foreach ($children as $child) {
+            $this->assertSame($contentUid, $child['foreign_table_parent_uid']);
+            $this->assertSame('tt_content', $child['tablenames'], 'tablenames of "' . $child['title'] . '"');
+            $this->assertSame('tx_testsat_bare_items', $child['fieldname'], 'fieldname of "' . $child['title'] . '"');
+        }
+
+        // The backend form, page module and Record API resolve the children through
+        // this very lookup (foreign_field + foreign_table_field + foreign_match_fields).
+        $relationHandler = GeneralUtility::makeInstance(RelationHandler::class);
+        $relationHandler->start(
+            '',
+            'tx_testsat_bare',
+            '',
+            $contentUid,
+            'tt_content',
+            $GLOBALS['TCA']['tt_content']['columns']['tx_testsat_bare_items']['config']
+        );
+        $this->assertCount(count($titles), $relationHandler->itemArray);
     }
 }

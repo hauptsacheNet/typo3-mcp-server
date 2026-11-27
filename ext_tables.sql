@@ -43,10 +43,13 @@ CREATE TABLE tx_mcpserver_access_tokens (
 	created_ip varchar(45) DEFAULT '' NOT NULL,
 	last_used_ip varchar(45) DEFAULT '' NOT NULL,
 	token_version tinyint(1) DEFAULT '0' NOT NULL,
+	refresh_token varchar(255) DEFAULT '' NOT NULL,
+	refresh_expires int(11) unsigned DEFAULT '0' NOT NULL,
 
 	PRIMARY KEY (uid),
 	KEY parent (pid),
 	KEY token (token),
+	KEY refresh_token (refresh_token),
 	KEY be_user_uid (be_user_uid),
 	KEY expires (expires)
 );
@@ -93,5 +96,17 @@ CREATE TABLE tx_mcpserver_upload_tokens (
 
 	PRIMARY KEY (uid),
 	UNIQUE KEY token (token),
+	KEY expires (expires)
+);
+
+CREATE TABLE tx_mcpserver_refresh_token_history (
+	uid int(11) NOT NULL auto_increment,
+	refresh_token varchar(255) DEFAULT '' NOT NULL,
+	grant_uid int(11) unsigned DEFAULT '0' NOT NULL,
+	replaced int(11) unsigned DEFAULT '0' NOT NULL,
+	expires int(11) unsigned DEFAULT '0' NOT NULL,
+
+	PRIMARY KEY (uid),
+	KEY refresh_token (refresh_token),
 	KEY expires (expires)
 );

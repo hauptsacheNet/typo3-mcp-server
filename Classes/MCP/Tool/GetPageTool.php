@@ -26,6 +26,7 @@ use Psr\Http\Message\UriInterface;
 use TYPO3\CMS\Core\Exception\Page\PageNotFoundException;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
+use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
 use Hn\McpServer\Service\RecordUrlService;
@@ -109,7 +110,10 @@ class GetPageTool extends AbstractRecordTool
      */
     protected function doExecute(array $params): CallToolResult
     {
-        
+        // Reads pages directly, so the table access rules (incl. allowedTables /
+        // excludedTables) have to be checked here
+        $this->tableAccessService->validateTableAccess('pages');
+
         // Handle language parameter
         $languageId = 0;
         if (isset($params['language'])) {
@@ -153,6 +157,11 @@ class GetPageTool extends AbstractRecordTool
             if (!isset($params['language']) && !isset($params['languageId'])) {
                 $languageId = (int)$translatedPage['sys_language_uid'];
             }
+        }
+
+        // Same answer for missing pages and pages outside the user's DB mounts
+        if (!GeneralUtility::makeInstance(PageAccessService::class)->isPageReadable($uid)) {
+            throw new \InvalidArgumentException('Page not found or outside your page mounts: ' . $uid);
         }
 
         // Get page data (with language overlay if applicable)
@@ -395,14 +404,20 @@ class GetPageTool extends AbstractRecordTool
         // Always include hidden records (like the TYPO3 backend does)
         $queryBuilder = $this->createRecordQueryBuilder($table);
 
+        $restriction = GeneralUtility::makeInstance(PageAccessService::class)->buildRecordRestriction($queryBuilder, $table);
+
         // First, get the total count of records
         $countQueryBuilder = clone $queryBuilder;
-        $totalCount = $countQueryBuilder->count('*')
+        $countQuery = $countQueryBuilder->count('*')
             ->from($table)
             ->where(
                 $countQueryBuilder->expr()->eq('pid', $countQueryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
                 ...$this->getLanguageViewConditions($countQueryBuilder, $table, $languageId)
-            )
+            );
+        if ($restriction !== null) {
+            $countQuery->andWhere($restriction);
+        }
+        $totalCount = $countQuery
             ->executeQuery()
             ->fetchOne();
 
@@ -413,6 +428,9 @@ class GetPageTool extends AbstractRecordTool
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER)),
                 ...$this->getLanguageViewConditions($queryBuilder, $table, $languageId)
             );
+        if ($restriction !== null) {
+            $query->andWhere($restriction);
+        }
 
         // Limit to 20 records per table
         $query->setMaxResults(20);
