@@ -614,7 +614,12 @@ class SearchTool extends AbstractRecordTool
      */
     protected function getSearchableFields(string $table): array
     {
-        return $this->tableAccessService->getSearchFields($table);
+        // Never search password columns: a match would put the record into the
+        // result and a snippet of the stored hash next to it.
+        return array_values(array_filter(
+            $this->tableAccessService->getSearchFields($table),
+            fn(string $field): bool => !$this->tableAccessService->isSecretField($table, $field)
+        ));
     }
 
     /**
