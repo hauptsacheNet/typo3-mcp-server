@@ -71,3 +71,22 @@ $GLOBALS['TCA']['tt_content']['types']['testrequired_conditional'] = [
         ],
     ],
 ];
+
+$GLOBALS['TCA']['tt_content']['columns']['tx_testrequiredfields_slides'] = [
+    'label' => 'Slides',
+    'config' => [
+        'type' => 'inline',
+        'foreign_table' => 'tx_testrequiredfields_slide',
+        'foreign_field' => 'parent_uid',
+        'foreign_sortby' => 'sorting',
+    ],
+];
+
+ExtensionManagementUtility::addTcaSelectItem('tt_content', 'CType', [
+    'label' => 'Slider whose embedded slides have a required field',
+    'value' => 'testrequired_slides',
+]);
+
+$GLOBALS['TCA']['tt_content']['types']['testrequired_slides'] = [
+    'showitem' => '--palette--;;general, header, tx_testrequiredfields_slides, --div--;Language, --palette--;;language',
+];
