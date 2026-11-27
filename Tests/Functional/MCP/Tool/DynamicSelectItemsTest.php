@@ -86,6 +86,27 @@ class DynamicSelectItemsTest extends FunctionalTestCase
         $this->assertNull($error, 'Dynamic colPos 20 from TSconfig should pass validation');
     }
 
+    public function testValidationRejectsNestedSelectValuesWithoutPhpWarning(): void
+    {
+        // Models sometimes send [{"uid": 3}] instead of [3]. That used to cast the
+        // nested array to "Array" (PHP warning) and report "value 'Array' must be one of".
+        $record = ['pid' => 1, 'CType' => 'text'];
+        $warnings = [];
+        set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+            $warnings[] = $errstr;
+            return true;
+        }, E_WARNING);
+        try {
+            $error = $this->tableAccessService->validateFieldValue('tt_content', 'colPos', [['uid' => 0]], $record);
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $warnings, 'Validation must not trigger PHP warnings');
+        $this->assertNotNull($error);
+        $this->assertStringContainsString('expects a list of plain values', $error);
+    }
+
     public function testValidationRejectsInvalidColPosValues(): void
     {
         $record = ['pid' => 1, 'CType' => 'text', 'colPos' => 999];

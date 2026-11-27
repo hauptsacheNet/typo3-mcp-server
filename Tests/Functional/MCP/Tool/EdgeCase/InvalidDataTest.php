@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool\EdgeCase;
 
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use PHPUnit\Framework\Attributes\DataProvider;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
@@ -486,6 +487,8 @@ class InvalidDataTest extends AbstractFunctionalTest
      */
     public function testArrayInNonArrayField(): void
     {
+        $titleBefore = $this->readPageTitle(1);
+
         $result = $this->writeTool->execute([
             'action' => 'update',
             'table' => 'pages',
@@ -495,16 +498,49 @@ class InvalidDataTest extends AbstractFunctionalTest
             ]
         ]);
         
-        // TYPO3 might convert array to string
-        if ($result->isError) {
-            $this->assertStringContainsString('Invalid', $result->content[0]->text);
-        } else {
-            // If it succeeded, check what was stored
-            $data = json_decode($result->content[0]->text, true);
-            if (isset($data['title'])) {
-                $this->assertIsString($data['title']);
-            }
+        // DataHandler would store the string "Array" (with a PHP warning),
+        // so the tool refuses the write and names the field.
+        $this->assertTrue($result->isError, 'An array must not be written into a text field');
+        $this->assertStringContainsString("Field 'title' expects a single value", $result->content[0]->text);
+
+        // Read through the workspace-aware tool: a staged "Array" would only
+        // show up in the workspace version, not in the live row.
+        $this->assertSame($titleBefore, $this->readPageTitle(1));
+    }
+
+    /**
+     * A FlexForm kept in a text column is recognised by its field name and
+     * takes an array of settings, so the single-value check must not apply.
+     */
+    public function testArrayIsAcceptedForFlexFormInTextColumn(): void
+    {
+        $GLOBALS['TCA']['tt_content']['columns']['tx_test_flexform'] = [
+            'label' => 'FlexForm in a text column',
+            'config' => ['type' => 'text'],
+        ];
+        $tableAccessService = GeneralUtility::makeInstance(TableAccessService::class);
+
+        try {
+            $this->assertNull($tableAccessService->validateFieldValue(
+                'tt_content',
+                'tx_test_flexform',
+                ['settings' => ['limit' => 5]]
+            ));
+            $this->assertStringContainsString(
+                'expects a single value',
+                (string)$tableAccessService->validateFieldValue('tt_content', 'bodytext', ['a', 'b'])
+            );
+        } finally {
+            unset($GLOBALS['TCA']['tt_content']['columns']['tx_test_flexform']);
         }
+    }
+
+    private function readPageTitle(int $uid): string
+    {
+        $result = $this->readTool->execute(['table' => 'pages', 'uid' => $uid]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        return (string)json_decode($result->content[0]->text, true)['records'][0]['title'];
     }
     
     /**
