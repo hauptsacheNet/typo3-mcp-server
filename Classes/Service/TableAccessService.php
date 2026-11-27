@@ -802,6 +802,18 @@ class TableAccessService implements SingletonInterface
     }
 
     /**
+     * Does the column hold a secret that must not be read back? TCA marks those
+     * as type=password (be_users.password, fe_users.password): the backend never
+     * shows the stored value, only an empty input to set a new one. The read
+     * tools treat it the same way - not returned, not filterable, not searched -
+     * while WriteTable can still set it.
+     */
+    public function isSecretField(string $table, string $fieldName): bool
+    {
+        return ($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['type'] ?? '') === 'password';
+    }
+
+    /**
      * May the current user see this field at all? The part of canAccessField()
      * that is about the user's rights - exclude fields, admin-only fields,
      * relations into tables they have no access to - and not about how a form

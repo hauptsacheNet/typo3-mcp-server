@@ -620,9 +620,12 @@ class SearchTool extends AbstractRecordTool
         // Only the user's rights count here, not TCEFORM: Search spans pages
         // and record types, so a field hidden by page TSconfig in one place
         // stays searchable where ReadTable would return it.
+        // Password columns are never searched: a match would put the record
+        // into the result and a snippet of the stored hash next to it.
         return array_values(array_filter(
             $this->tableAccessService->getSearchFields($table),
             fn(string $field): bool => $this->tableAccessService->isFieldPermitted($table, $field)
+                && !$this->tableAccessService->isSecretField($table, $field)
         ));
     }
 
