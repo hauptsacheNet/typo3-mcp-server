@@ -119,9 +119,12 @@ TSCONFIG;
         $result = $this->write('create', null, ['pid' => 1, 'CType' => 'text', 'header' => 'Nowhere', 'colPos' => 5]);
 
         $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        // Only the substance is asserted: the refused value and the named columns.
+        // The backend layout placement check of #187 refuses the same write with
+        // its own wording before the field validation runs.
         $text = $result->content[0]->text;
-        $this->assertStringContainsString("Field 'colPos' value '5' must be one of", $text);
-        $this->assertStringContainsString('backend layout of page 1 has these columns: 0 (Main), 1 (Sidebar)', $text);
+        $this->assertMatchesRegularExpression("/colPos\\D{1,12}5\\b/", $text);
+        $this->assertStringContainsString('0 (Main), 1 (Sidebar)', $text);
     }
 
     public function testOtherDisabledFieldIsStillRefusedAndTheErrorSaysWhy(): void
