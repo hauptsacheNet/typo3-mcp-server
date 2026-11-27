@@ -988,6 +988,9 @@ class ReadTableTool extends AbstractRecordTool
             $liveUidsOfVersions[$relatedTable] = $this->getLiveUidsOfVersions($relatedTable, array_values($uids));
         }
 
+        // Fields with "multiple" may list the same record more than once on purpose
+        $allowDuplicates = !empty($config['multiple']);
+
         foreach ($itemsByRecord as $index => $items) {
             $resolved = [];
             foreach ($items as $item) {
@@ -998,6 +1001,10 @@ class ReadTableTool extends AbstractRecordTool
                         continue;
                     }
                     $item['id'] = $versionMap[$item['id']];
+                }
+                if ($allowDuplicates) {
+                    $resolved[] = $item;
+                    continue;
                 }
                 // A record related by its live and its version uid is one relation
                 $resolved[$item['table'] . '_' . $item['id']] = $item;

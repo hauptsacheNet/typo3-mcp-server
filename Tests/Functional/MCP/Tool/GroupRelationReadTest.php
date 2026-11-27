@@ -60,6 +60,30 @@ class GroupRelationReadTest extends FunctionalTestCase
         $this->assertSame([], $records[504]['records']);
     }
 
+    /**
+     * A group with "multiple" may relate the same record twice on purpose; without it
+     * the record is listed once.
+     */
+    public function testRepeatedItemsAreKeptOnlyForMultipleGroups(): void
+    {
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable('tt_content');
+        foreach ([501 => 'First', 502 => 'Second'] as $uid => $header) {
+            $connection->insert('tt_content', ['uid' => $uid, 'pid' => 1, 'CType' => 'text', 'header' => $header]);
+        }
+        $connection->insert('tt_content', [
+            'uid' => 503,
+            'pid' => 1,
+            'CType' => 'shortcut',
+            'header' => 'Shortcut',
+            'records' => '501,502,501',
+        ]);
+
+        $this->assertSame([501, 502], $this->readRecords([503])[503]['records']);
+
+        $GLOBALS['TCA']['tt_content']['columns']['records']['config']['multiple'] = true;
+        $this->assertSame([501, 502, 501], $this->readRecords([503])[503]['records']);
+    }
+
     public function testWrittenGroupValueReadsBackInWorkspace(): void
     {
         $writeTool = new WriteTableTool();
