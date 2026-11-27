@@ -56,8 +56,12 @@ class DateTimeFieldTest extends FunctionalTestCase
 
     protected function tearDown(): void
     {
-        parent::tearDown();
-        date_default_timezone_set($this->previousTimezone);
+        try {
+            parent::tearDown();
+        } finally {
+            // Also when the parent teardown fails, so Europe/Berlin never leaks into later tests
+            date_default_timezone_set($this->previousTimezone);
+        }
     }
 
     public function testServerRunsInEuropeBerlin(): void
