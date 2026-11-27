@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
+use Hn\McpServer\Event\AfterRecordUrlGeneratedEvent;
 use Hn\McpServer\MCP\Tool\GetPageTool;
 use Hn\McpServer\MCP\Tool\GetPageTreeTool;
 use Hn\McpServer\MCP\Tool\Record\ReadTableTool;
@@ -14,6 +15,8 @@ use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Symfony\Component\Yaml\Yaml;
 use TYPO3\CMS\Core\Cache\CacheManager;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\EventDispatcher\ListenerProvider;
+use TYPO3\CMS\Core\Http\Uri;
 use TYPO3\CMS\Core\Core\SystemEnvironmentBuilder;
 use TYPO3\CMS\Core\Http\NormalizedParams;
 use TYPO3\CMS\Core\Http\ServerRequest;
@@ -139,6 +142,39 @@ class HeadlessRecordUrlTest extends AbstractFunctionalTest
         );
         preg_match('#Preview URL: (\S+)#', $page, $previewUrl);
         $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => $previewUrl[1]]));
+    }
+
+    /**
+     * Any listener of AfterRecordUrlGeneratedEvent is inverted for GetPage, also
+     * one that moves only workspace previews to a host of their own.
+     */
+    public function testPreviewUrlOnOwnHostRoundTrips(): void
+    {
+        $this->writeSiteConfiguration(0);
+        $container = $this->getContainer();
+        $container->set('test.preview-host-listener', static function (AfterRecordUrlGeneratedEvent $event): void {
+            if ($event->isPreview()) {
+                $event->setUrl((string)(new Uri($event->getUrl()))->withHost('preview.example.com'));
+            }
+        });
+        $container->get(ListenerProvider::class)->addListener(AfterRecordUrlGeneratedEvent::class, 'test.preview-host-listener');
+
+        $result = (new WriteTableTool())->execute([
+            'action' => 'update',
+            'table' => 'pages',
+            'uid' => 4,
+            'data' => ['title' => 'Team changed'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $record = $this->readRecord('pages', 4);
+        $this->assertSame('https://api.example.com/about/team', $record['frontend_url'] ?? null);
+        $this->assertMatchesRegularExpression(
+            '#^https://preview\.example\.com/about/team\?ADMCMD_prev=[0-9a-f]{32}$#',
+            $record['preview_url'] ?? ''
+        );
+        $this->assertContains('preview.example.com', GeneralUtility::makeInstance(SiteInformationService::class)->getAllDomains());
+        $this->assertStringContainsString('UID: 4' . "\n", $this->executeGetPage(['url' => $record['preview_url']]));
     }
 
     /**

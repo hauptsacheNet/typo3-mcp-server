@@ -119,7 +119,9 @@ Records other than pages and content elements (news, events, ...) get a frontend
 With [EXT:headless](https://github.com/TYPO3-Headless/headless), page and record URLs should
 point at the site's `frontendBase`, not at the JSON API, and `GetPage` should accept them.
 
-- **TYPO3 14 + EXT:headless 5:** works out of the box, nothing to configure.
+- **TYPO3 14 + EXT:headless 5:** works out of the box for the HTTP MCP endpoint, nothing to
+  configure. EXT:headless only rewrites URLs during backend requests, so the deprecated stdio
+  command (`mcp:server`) keeps handing out URLs on the site base.
 - **TYPO3 13 + EXT:headless 4:** add this listener to your site package:
 
 ```php

@@ -450,7 +450,7 @@ class RecordUrlService
      * "site": the base of every site language, moved or not.
      *
      * Not memoized: the result depends on the site configuration and the current
-     * request, and costs one router call per language.
+     * request, and costs two router calls per language (live and preview).
      *
      * @return array{public: list<array{public: UriInterface, site: UriInterface}>, site: list<UriInterface>}
      */
@@ -476,17 +476,23 @@ class RecordUrlService
                     'l10n_parent' => 0,
                     'slug' => '/',
                 ];
-                try {
-                    $public = new Uri($this->generatePageUrl($site, $language, $rootPage, [], $context, false));
-                } catch (\Throwable) {
-                    continue;
+                // Live and preview: a listener may move previews somewhere else
+                $seen = [];
+                foreach ([false, true] as $preview) {
+                    try {
+                        $public = new Uri($this->generatePageUrl($site, $language, $rootPage, [], $context, $preview));
+                    } catch (\Throwable) {
+                        continue;
+                    }
+                    if ($public->getHost() === ''
+                        || (string)$public->withScheme('') === (string)$siteUri->withScheme('')
+                        || isset($seen[(string)$public])
+                    ) {
+                        continue;
+                    }
+                    $seen[(string)$public] = true;
+                    $bases['public'][] = ['public' => $public, 'site' => $siteUri];
                 }
-                if ($public->getHost() === ''
-                    || (string)$public->withScheme('') === (string)$siteUri->withScheme('')
-                ) {
-                    continue;
-                }
-                $bases['public'][] = ['public' => $public, 'site' => $siteUri];
             }
         }
         return $bases;

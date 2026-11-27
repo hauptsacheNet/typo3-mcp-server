@@ -105,8 +105,9 @@ by matching the URL against the language bases, not by the language the URL was 
 **The way back.** `GetPage` accepts the URLs it hands out. TYPO3 cannot match a
 `frontendBase` URL (EXT:headless only rewrites outgoing URLs), and mcp_server does not read
 headless configuration. Instead `RecordUrlService::mapPublicUrlToSiteUrl()` inverts whatever
-the listeners do: it generates the root URL of every site language through the same
-pipeline (one router call each, no database query), and where the result differs from the
+the listeners do: it generates the root URL of every site language, live and as preview,
+through the same pipeline (two router calls each, no database query), and where a result
+differs from the
 language base, a URL below it is moved onto the language base before the site matcher
 resolves it. This covers a `frontendBase` on another host, below a path, or per language,
 and also any other listener. The hosts are listed among the domains `GetPage` advertises.
