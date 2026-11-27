@@ -798,8 +798,12 @@ class ReadTableTool extends AbstractRecordTool
      * treatment one level down, so a file or relation field of a child reads like one of
      * a top-level record. Each level is read in batches per field, not per record.
      *
-     * A field the record does not carry (dropped for its type, by the field permissions
-     * or by the caller's field list) stays out of the result.
+     * Relation data is only added for fields the user may read (isFieldPermitted()),
+     * never for password columns. On the top level, select/category and inline/file
+     * relations are added regardless of the record type, as before. Group fields and
+     * the fields of embedded children are only filled in where the record carries the
+     * field: embedded children are trimmed to a curated field list
+     * (TableAccessService::getEmbeddedRecordFields()) that must not grow back.
      */
     protected function resolveRelationFields(array &$records, string $table, array $requestedFields = [], int $depth = 0): void
     {
@@ -819,21 +823,25 @@ class ReadTableTool extends AbstractRecordTool
             if (!empty($requestedFields) && !in_array($fieldName, $requestedFields)) {
                 continue;
             }
-            if (!$this->anyRecordHasField($records, $fieldName)) {
+            $onlyPresentFields = $depth > 0 || ($fieldConfig['config']['type'] ?? '') === 'group';
+            if ($onlyPresentFields && !$this->anyRecordHasField($records, $fieldName)) {
                 continue;
             }
 
             // Relation data is added to the records after they went through the
             // field filter, so the filter's question has to be asked again here:
-            // a field the user may not read has no relations to show either
-            if (!$this->tableAccessService->isFieldPermitted($table, $fieldName)) {
+            // a field the user may not read has no relations to show either.
+            // This runs on every nesting level, embedded children included.
+            if (!$this->tableAccessService->isFieldPermitted($table, $fieldName)
+                || $this->tableAccessService->isSecretField($table, $fieldName)
+            ) {
                 continue;
             }
 
             $fieldType = $fieldConfig['config']['type'] ?? '';
 
             match ($fieldType) {
-                'select', 'category' => $this->includeSelectRelations($records, $fieldName, $fieldConfig, $table),
+                'select', 'category' => $this->includeSelectRelations($records, $fieldName, $fieldConfig, $table, $onlyPresentFields),
                 'group' => $this->includeGroupRelations($records, $fieldName, $fieldConfig, $table),
                 'inline', 'file' => $this->includeInlineRelations($records, $fieldName, $fieldConfig, $recordUids, $depth),
                 default => null,
@@ -855,7 +863,7 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Include select and category field relations
      */
-    protected function includeSelectRelations(array &$records, string $fieldName, array $fieldConfig, string $table): void
+    protected function includeSelectRelations(array &$records, string $fieldName, array $fieldConfig, string $table, bool $onlyPresentFields = false): void
     {
         // Check if this is a foreign table relation
         if (!empty($fieldConfig['config']['foreign_table'])) {
@@ -868,7 +876,7 @@ class ReadTableTool extends AbstractRecordTool
 
             // Check if this uses MM relations
             if (!empty($fieldConfig['config']['MM'])) {
-                $this->includeMmRelations($records, $fieldName, $fieldConfig, $table);
+                $this->includeMmRelations($records, $fieldName, $fieldConfig, $table, $onlyPresentFields);
                 return;
             }
 
@@ -886,9 +894,9 @@ class ReadTableTool extends AbstractRecordTool
     /**
      * Include the MM relations of a select or category field as a list of live uids.
      */
-    protected function includeMmRelations(array &$records, string $fieldName, array $fieldConfig, string $table): void
+    protected function includeMmRelations(array &$records, string $fieldName, array $fieldConfig, string $table, bool $onlyPresentFields = false): void
     {
-        $relatedItems = $this->readRelatedItems($records, $fieldName, $fieldConfig['config'], $table);
+        $relatedItems = $this->readRelatedItems($records, $fieldName, $fieldConfig['config'], $table, $onlyPresentFields);
 
         foreach ($records as $index => &$record) {
             if (!isset($relatedItems[$index])) {
@@ -949,14 +957,14 @@ class ReadTableTool extends AbstractRecordTool
      * @return array<int|string, list<array{table: string, id: int}>> Related items by record
      *         index, only for records that carry the field
      */
-    protected function readRelatedItems(array $records, string $fieldName, array $config, string $table): array
+    protected function readRelatedItems(array $records, string $fieldName, array $config, string $table, bool $onlyPresentFields = true): array
     {
         $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
         $hasMm = !empty($config['MM']);
 
         $liveUids = [];
         foreach ($records as $record) {
-            if (isset($record['uid']) && array_key_exists($fieldName, $record)) {
+            if (isset($record['uid']) && (!$onlyPresentFields || array_key_exists($fieldName, $record))) {
                 $liveUids[] = (int)$record['uid'];
             }
         }
@@ -965,7 +973,7 @@ class ReadTableTool extends AbstractRecordTool
         $itemsByRecord = [];
         $uidsByTable = [];
         foreach ($records as $index => $record) {
-            if (!isset($record['uid']) || !array_key_exists($fieldName, $record)) {
+            if (!isset($record['uid']) || ($onlyPresentFields && !array_key_exists($fieldName, $record))) {
                 continue;
             }
             $liveUid = (int)$record['uid'];
@@ -975,7 +983,7 @@ class ReadTableTool extends AbstractRecordTool
 
             // Without MM the column holds the relations itself, already overlaid with
             // the record's workspace version.
-            $currentValue = $hasMm ? null : $this->stringifyRelationValue($record[$fieldName]);
+            $currentValue = $hasMm ? null : $this->stringifyRelationValue($record[$fieldName] ?? null);
 
             $relationHandler = GeneralUtility::makeInstance(RelationHandler::class);
             $relationHandler->setWorkspaceId($workspaceId);
@@ -1244,7 +1252,8 @@ class ReadTableTool extends AbstractRecordTool
         // Add related records to each record
         foreach ($records as &$record) {
             $uid = $record['uid'] ?? null;
-            if ($uid !== null && array_key_exists($fieldName, $record)) {
+            // Embedded children only get the fields they carry, see resolveRelationFields()
+            if ($uid !== null && ($depth === 0 || array_key_exists($fieldName, $record))) {
                 if (isset($groupedRecords[$uid]) && !empty($groupedRecords[$uid])) {
                     if ($isHiddenTable) {
                         // Embed full records for hidden tables (like sys_file_reference).
@@ -1261,7 +1270,7 @@ class ReadTableTool extends AbstractRecordTool
                         // Return only UIDs for independent tables (like tt_content)
                         $record[$fieldName] = array_column($groupedRecords[$uid], 'uid');
                     }
-                } else {
+                } elseif (array_key_exists($fieldName, $record)) {
                     $record[$fieldName] = [];
                 }
             }
