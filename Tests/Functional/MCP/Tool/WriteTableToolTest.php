@@ -2173,4 +2173,19 @@ class WriteTableToolTest extends AbstractFunctionalTest
             "MCP operations should only create records in workspace context."
         );
     }
+
+    /**
+     * MCP clients read a missing destructiveHint as true and may refuse to call the tool
+     * for a delete. A delete only stages a delete placeholder in the workspace, so the
+     * hint is false, and the action description says why.
+     */
+    public function testDeleteIsAnnouncedAsStagedAndNonDestructive(): void
+    {
+        $schema = (new WriteTableTool())->getSchema();
+
+        $this->assertFalse($schema['annotations']['destructiveHint']);
+        $actionDescription = $schema['inputSchema']['properties']['action']['description'];
+        $this->assertStringContainsString('STAGES', $actionDescription);
+        $this->assertStringContainsString('published', $actionDescription);
+    }
 }
