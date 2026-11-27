@@ -188,6 +188,19 @@ class DateTimeFieldTest extends FunctionalTestCase
         $this->assertSame('14:30', $this->read(self::TABLE, $uid)['event_time']);
     }
 
+    /**
+     * A non-nullable int time field stores midnight as 0, which TYPO3 itself treats as
+     * "no time": FormEngine (DatetimeElement in 13.4, DateTimeFactory in 14) shows the
+     * field empty. ReadTable reports what the backend form shows.
+     */
+    public function testMidnightInANonNullableTimeFieldIsEmptyLikeInTheBackendForm(): void
+    {
+        $uid = $this->write(self::TABLE, ['title' => 'Event', 'event_time' => '00:00']);
+
+        $this->assertSame(0, (int)BackendUtility::getRecordWSOL(self::TABLE, $uid)['event_time']);
+        $this->assertNull($this->read(self::TABLE, $uid)['event_time']);
+    }
+
     public static function nativeDatetimeProvider(): array
     {
         return [
@@ -256,7 +269,63 @@ class DateTimeFieldTest extends FunctionalTestCase
         ]);
 
         $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
-        $this->assertStringContainsString("Field 'starts_at' of tx_testdatetime_slot expects", $result->content[0]->text);
+        $this->assertStringContainsString(
+            "Field 'slots', item at index 0 (new record): Field 'starts_at' expects",
+            $result->content[0]->text
+        );
+    }
+
+    /**
+     * Embedded children are written after the parent and after the children that are
+     * no longer listed have been deleted, without a transaction. An invalid date in a
+     * child must therefore be rejected before anything is written.
+     */
+    public function testInvalidEmbeddedChildDatetimeChangesNothing(): void
+    {
+        $uid = $this->write(self::TABLE, [
+            'title' => 'Original title',
+            'slots' => [
+                ['starts_at' => '2026-11-27 10:00'],
+                ['starts_at' => '2026-11-28 10:00'],
+            ],
+        ]);
+
+        $result = (new WriteTableTool())->execute([
+            'action' => 'update',
+            'table' => self::TABLE,
+            'uid' => $uid,
+            'data' => [
+                'title' => 'Changed title',
+                'slots' => [['starts_at' => 'soon']],
+            ],
+        ]);
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+
+        $record = $this->read(self::TABLE, $uid);
+        $this->assertSame('Original title', $record['title']);
+        $this->assertSame(
+            ['2026-11-27T10:00:00+01:00', '2026-11-28T10:00:00+01:00'],
+            array_column($record['slots'], 'starts_at')
+        );
+    }
+
+    public function testExistingEmbeddedChildDatetimeIsConverted(): void
+    {
+        $uid = $this->write(self::TABLE, [
+            'title' => 'Event',
+            'slots' => [['starts_at' => '2026-11-27 10:00']],
+        ]);
+        $slotUid = (int)$this->read(self::TABLE, $uid)['slots'][0]['uid'];
+
+        $result = (new WriteTableTool())->execute([
+            'action' => 'update',
+            'table' => self::TABLE,
+            'uid' => $uid,
+            'data' => ['slots' => [['uid' => $slotUid, 'starts_at' => '2026-07-15 18:00']]],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $this->assertSame(['2026-07-15T18:00:00+02:00'], array_column($this->read(self::TABLE, $uid)['slots'], 'starts_at'));
     }
 
     public function testEmptyValuesReadAsNull(): void
