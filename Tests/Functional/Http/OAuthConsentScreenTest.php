@@ -8,6 +8,7 @@ use Hn\McpServer\Http\OAuthAuthorizeEndpoint;
 use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use Psr\Http\Message\ResponseInterface;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Http\Uri;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -50,6 +51,31 @@ class OAuthConsentScreenTest extends AbstractFunctionalTest
         $body = (string)$this->showConsentForm()->getBody();
 
         self::assertStringContainsString('Access is handed to:</strong> client.example', $body);
+    }
+
+    /**
+     * parse_url() reads the host of this URI as trusted.example, a browser treats
+     * the backslash as a path separator and goes to attacker.example. Registration
+     * refuses it; a client stored before that must not get a consent screen naming
+     * the wrong host.
+     */
+    public function testConsentScreenRefusesARedirectUriBrowsersReadDifferently(): void
+    {
+        $redirectUri = 'https://attacker.example\\@trusted.example/callback';
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_oauth_clients')
+            ->update(
+                'tx_mcpserver_oauth_clients',
+                ['redirect_uris' => json_encode([$redirectUri])],
+                ['client_id' => $this->client['client_id']]
+            );
+
+        $response = $this->showConsentForm($redirectUri);
+        $body = (string)$response->getBody();
+
+        self::assertSame(400, $response->getStatusCode(), $body);
+        self::assertStringNotContainsString('Access is handed to', $body);
+        self::assertStringNotContainsString('csrf_token', $body);
     }
 
     public function testConsentScreenNamesALoopbackDestinationAsLocal(): void

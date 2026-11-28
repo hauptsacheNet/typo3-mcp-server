@@ -811,6 +811,7 @@ class OAuthService
                 || empty($parts['scheme'])
                 || empty($parts['host'])
                 || !in_array(strtolower($parts['scheme']), ['http', 'https'], true)
+                || !$this->isUnambiguousRedirectUri($uri)
             ) {
                 throw new \InvalidArgumentException('Invalid redirect_uri: ' . $uri);
             }
@@ -1005,6 +1006,13 @@ class OAuthService
             return false;
         }
 
+        // Also covers URIs stored before registration refused them, and the
+        // loopback sentinel, which would otherwise accept a URI whose host only
+        // parse_url() takes for localhost.
+        if (!$this->isUnambiguousRedirectUri($redirectUri)) {
+            return false;
+        }
+
         $registered = $client['redirect_uris'] ?? [];
         if (!is_array($registered) || empty($registered)) {
             return false;
@@ -1027,6 +1035,33 @@ class OAuthService
         }
 
         return false;
+    }
+
+    /**
+     * Whether PHP's parse_url() and a browser (WHATWG URL) find the same host.
+     *
+     * The host from parse_url() decides whether a redirect URI is a loopback
+     * address and is shown on the consent screen as the place the authorization
+     * code goes to; the browser follows its own reading. They disagree on
+     * - backslashes: a path separator for browsers, part of the userinfo for
+     *   parse_url() ("https://attacker.example\@trusted.example/"),
+     * - whitespace and control characters, which browsers strip or encode and
+     *   parse_url() replaces,
+     * and userinfo ("https://trusted.example@attacker.example/") puts a
+     * convincing name in front of the real host. None of these has a place in a
+     * redirect URI.
+     */
+    private function isUnambiguousRedirectUri(string $uri): bool
+    {
+        if (preg_match('/[\x00-\x20\x7F\\\\]/', $uri) === 1) {
+            return false;
+        }
+        // An "@" in the authority, i.e. before the first "/", "?" or "#" after "//"
+        if (preg_match('#^[a-z][a-z0-9+.\-]*://[^/?\#]*@#i', $uri) === 1) {
+            return false;
+        }
+        $parts = parse_url($uri);
+        return is_array($parts) && !isset($parts['user']) && !isset($parts['pass']);
     }
 
     private function isLoopbackUri(string $uri): bool

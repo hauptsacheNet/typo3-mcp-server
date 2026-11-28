@@ -6,6 +6,7 @@ namespace Hn\McpServer\Tests\Functional\Service;
 
 use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
+use PHPUnit\Framework\Attributes\DataProvider;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -96,6 +97,89 @@ class OAuthClientRegistrationTest extends AbstractFunctionalTest
                 $this->assertStringContainsString('Invalid redirect_uri', $e->getMessage());
             }
         }
+    }
+
+    /**
+     * Redirect URIs whose host PHP's parse_url() reads differently than a
+     * browser does. The consent screen names the host parse_url() finds, the
+     * browser takes the authorization code to the other one.
+     *
+     * @return array<string, array{string}>
+     */
+    public static function ambiguousRedirectUriProvider(): array
+    {
+        return [
+            // parse_url: host trusted.example; browser: host attacker.example
+            'backslash before userinfo' => ['https://attacker.example\\@trusted.example/callback'],
+            'backslash in authority' => ['https://attacker.example\\.trusted.example/callback'],
+            'backslash in path' => ['https://client.example/oauth\\callback'],
+            'userinfo' => ['https://trusted.example@attacker.example/callback'],
+            'userinfo with password' => ['https://user:secret@client.example/callback'],
+            'space' => ['https://client.example/oauth callback'],
+            'tab' => ["https://client.example/oauth\tcallback"],
+            'line feed' => ["https://client.example/oauth\ncallback"],
+            'control character' => ["https://client.example/oauth\x01callback"],
+            'delete character' => ["https://client.example/oauth\x7Fcallback"],
+        ];
+    }
+
+    #[DataProvider('ambiguousRedirectUriProvider')]
+    public function testRegisterRejectsAmbiguousRedirectUri(string $uri): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->service->registerClient(['redirect_uris' => [$uri]]);
+    }
+
+    public function testRegisterAcceptsOrdinaryRedirectUris(): void
+    {
+        $uris = [
+            'https://client.example/oauth/callback',
+            'https://client.example/callback/@user?login=a@b.example#@frag',
+            'http://localhost:6274/oauth/callback',
+            'http://127.0.0.1/callback',
+            'http://[::1]:8080/callback',
+        ];
+
+        $registered = $this->service->registerClient(['redirect_uris' => $uris]);
+        $client = $this->service->getClient($registered['client_id']);
+
+        $this->assertSame($uris, $registered['redirect_uris']);
+        foreach ($uris as $uri) {
+            $this->assertTrue($this->service->isRedirectUriAllowed($client, $uri), $uri);
+        }
+    }
+
+    /**
+     * A client registered before these URIs were refused still has them
+     * stored; they must not be usable either.
+     */
+    #[DataProvider('ambiguousRedirectUriProvider')]
+    public function testStoredAmbiguousRedirectUriIsNotAllowed(string $uri): void
+    {
+        $registered = $this->service->registerClient(['redirect_uris' => ['https://client.example/oauth/callback']]);
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_mcpserver_oauth_clients')
+            ->update(
+                'tx_mcpserver_oauth_clients',
+                ['redirect_uris' => json_encode([$uri])],
+                ['client_id' => $registered['client_id']]
+            );
+        $client = $this->service->getClient($registered['client_id']);
+
+        $this->assertSame([$uri], $client['redirect_uris']);
+        $this->assertFalse($this->service->isRedirectUriAllowed($client, $uri));
+    }
+
+    public function testWellKnownClientRefusesLoopbackLookalikes(): void
+    {
+        $client = $this->service->getClient(OAuthService::WELL_KNOWN_CLIENT_ID);
+
+        // parse_url() finds the host localhost in both, a browser goes to attacker.example
+        $this->assertFalse($this->service->isRedirectUriAllowed($client, 'http://attacker.example\\@localhost/callback'));
+        $this->assertFalse($this->service->isRedirectUriAllowed($client, 'http://attacker.example\\.localhost/callback'));
+        $this->assertFalse($this->service->isRedirectUriAllowed($client, 'http://user@localhost/callback'));
+        $this->assertTrue($this->service->isRedirectUriAllowed($client, 'http://localhost:6274/callback'));
     }
 
     public function testGetClientReturnsNullForUnknownId(): void
