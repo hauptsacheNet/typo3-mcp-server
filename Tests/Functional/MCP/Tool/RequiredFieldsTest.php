@@ -857,6 +857,98 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         );
     }
 
+    public function testTranslationMustFillAFieldOnlyTheTranslationShows(): void
+    {
+        // header_link is hidden in the default language and empty in the original
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::DEPENDENT_TYPE,
+                'header' => 'Original',
+                'subheader' => 'Subheader',
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Übersetzt'],
+        ]);
+
+        $this->assertTrue($result->isError, 'The translation shows header_link, which the copy leaves empty');
+        $this->assertStringContainsString('header_link', $result->content[0]->text);
+        $this->assertSame(
+            0,
+            (int)$this->getConnectionForTable('tt_content')->count('uid', 'tt_content', ['l18n_parent' => $uid])
+        );
+    }
+
+    public function testTranslationTakesAFieldOnlyTheTranslationShowsFromTheOriginal(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::DEPENDENT_TYPE,
+                'header' => 'Original',
+                'subheader' => 'Subheader',
+                'header_link' => 'https://example.com',
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        // The translation is a copy of the original, which has a header_link
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Übersetzt'],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testFieldReferencedTwiceInAConditionIsEvaluated(): void
+    {
+        $service = GeneralUtility::makeInstance(DisplayConditionService::class);
+        $condition = [
+            'OR' => [
+                'FIELD:tx_testrequiredfields_event_date:REQ:false',
+                'AND' => [
+                    'FIELD:tx_testrequiredfields_event_date:REQ:true',
+                    'FIELD:header_layout:=:2',
+                ],
+            ],
+        ];
+        $row = ['pid' => 1, 'tx_testrequiredfields_event_date' => 1767225600, 'header_layout' => '2'];
+
+        $this->assertTrue($service->evaluate('tt_content', $condition, $row, true));
+        $this->assertFalse($service->evaluate('tt_content', $condition, ['header_layout' => '1'] + $row, true));
+    }
+
+    public function testSelectValueRemovedByTsconfigDoesNotShowAField(): void
+    {
+        $this->getConnectionForTable('pages')->update(
+            'pages',
+            ['TSconfig' => "TCEFORM.tt_content.header_layout.removeItems = 2\n"],
+            ['uid' => 1]
+        );
+        $service = GeneralUtility::makeInstance(DisplayConditionService::class);
+        $row = ['uid' => 1, 'pid' => 1, 'CType' => self::STAGE_TYPE];
+
+        // The backend drops the removed value from the selection, so the field is hidden
+        $this->assertFalse($service->evaluate('tt_content', 'FIELD:header_layout:=:2', $row + ['header_layout' => '2'], false));
+        // Available values still decide as usual
+        $this->assertTrue($service->evaluate('tt_content', 'FIELD:header_layout:=:3', $row + ['header_layout' => '3'], false));
+    }
+
     private function createValidElement(): int
     {
         $result = $this->write([

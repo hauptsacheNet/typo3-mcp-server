@@ -1315,6 +1315,7 @@ class WriteTableTool extends AbstractRecordTool
 
         // Build merged record context for dynamic select item resolution (itemsProcFunc, TSconfig)
         $currentRecord = null;
+        $recordShownBefore = null;
         if ($action === 'update' && $uid) {
             $existingRecord = BackendUtility::getRecord($table, $uid) ?? [];
 
@@ -1332,6 +1333,8 @@ class WriteTableTool extends AbstractRecordTool
                     $currentRecord = $existingRecord;
                 }
             }
+            // The stored record decides which fields were shown before this write
+            $recordShownBefore = $currentRecord;
             if ($recordOverrides !== []) {
                 $existingRecord = array_replace($existingRecord, $recordOverrides);
                 $currentRecord = array_replace($currentRecord, $recordOverrides);
@@ -1560,7 +1563,8 @@ class WriteTableTool extends AbstractRecordTool
             $currentRecord,
             $uid,
             $newRecordRow,
-            $tsConfigPid
+            $tsConfigPid,
+            $recordShownBefore
         );
         if ($requiredError !== null) {
             return $requiredError;
@@ -1597,9 +1601,13 @@ class WriteTableTool extends AbstractRecordTool
         ?array $currentRecord,
         ?int $uid,
         ?array $newRecordRow,
-        int $tsConfigPid
+        int $tsConfigPid,
+        ?array $recordShownBefore = null
     ): ?string {
         $typeField = $this->tableAccessService->getTypeFieldName($table);
+        // On translate, $currentRecord already carries the translation's language;
+        // the original still decides which fields were shown before
+        $recordShownBefore ??= $currentRecord;
         $languageField = $this->tableAccessService->getLanguageFieldName($table);
 
         if ($typeField && !str_contains($typeField, ':')) {
@@ -1662,8 +1670,8 @@ class WriteTableTool extends AbstractRecordTool
                     // Cannot tell whether it is shown: only check values the caller sends
                     continue;
                 }
-                $shownOnlyNow = $shown === true && !$isNew && $currentRecord !== null
-                    && $displayConditionService->evaluate($table, $fieldConfig['displayCond'], $currentRecord, false) === false;
+                $shownOnlyNow = $shown === true && !$isNew && $recordShownBefore !== null
+                    && $displayConditionService->evaluate($table, $fieldConfig['displayCond'], $recordShownBefore, false) === false;
             }
 
             if ($isNew) {

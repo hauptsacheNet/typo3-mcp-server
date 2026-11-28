@@ -59,12 +59,15 @@ class DisplayConditionService
             return null;
         }
 
+        // Each reference reads the raw record: the form values written into $row
+        // below (e.g. DateTimeImmutable) are not raw values any more
+        $rawRow = $row;
         foreach ($conditions as $condition) {
             $parts = GeneralUtility::trimExplode(':', $condition, false, 4);
             switch ($parts[0]) {
                 case 'FIELD':
                     $fieldName = $parts[1] ?? '';
-                    $formValue = $this->getFormValue($table, $fieldName, $row);
+                    $formValue = $this->getFormValue($table, $fieldName, $rawRow);
                     if ($formValue === false) {
                         return null;
                     }
@@ -275,7 +278,11 @@ class DisplayConditionService
             if ($value === null || $value === '') {
                 return ['value' => []];
             }
-            return ['value' => is_array($value) ? array_values($value) : GeneralUtility::trimExplode(',', (string)$value, true)];
+            $selected = is_array($value) ? array_values($value) : GeneralUtility::trimExplode(',', (string)$value, true);
+            if ($type === 'category') {
+                return ['value' => $selected];
+            }
+            return $this->getAvailableSelectValues($table, $fieldName, $config, $selected, $row);
         }
         if (is_bool($value)) {
             $value = (int)$value;
@@ -284,6 +291,30 @@ class DisplayConditionService
             return $this->getDateTimeFormValue($table, $fieldName, $config, $value);
         }
         return ['value' => $value];
+    }
+
+    /**
+     * The selected values the backend form keeps: values that are no item of the
+     * field for this record (e.g. removed by TSconfig removeItems or keepItems)
+     * are dropped before the form evaluates display conditions.
+     *
+     * @return array{value: list<mixed>}|false false if the items cannot be resolved
+     */
+    private function getAvailableSelectValues(string $table, string $fieldName, array $config, array $selected, array $row): array|false
+    {
+        $items = GeneralUtility::makeInstance(SelectItemResolver::class)->resolveSelectItems($table, $fieldName, $row);
+        if ($items === null) {
+            return false;
+        }
+        $available = array_flip($items['values']);
+        $hasForeignTable = !empty($config['foreign_table']);
+        return ['value' => array_values(array_filter(
+            $selected,
+            // Relations to records are kept by the form as long as the record
+            // exists, even when the item list does not offer them
+            static fn($item): bool => isset($available[(string)$item])
+                || ($hasForeignTable && is_numeric($item) && (int)$item > 0)
+        ))];
     }
 
     /**
