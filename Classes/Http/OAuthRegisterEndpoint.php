@@ -82,21 +82,15 @@ class OAuthRegisterEndpoint
                 return $this->createErrorResponse($request, 'invalid_request', 'Invalid JSON in request body');
             }
 
-            // Validate required fields (minimal validation for MCP)
-            if (empty($clientData['client_name'])) {
-                $clientData['client_name'] = 'MCP Client';
-            }
-
-            // redirect_uris is required by RFC 7591, but for MCP clients we can provide a default
-            if (empty($clientData['redirect_uris']) || !is_array($clientData['redirect_uris'])) {
-                $clientData['redirect_uris'] = ['http://localhost']; // Default for local MCP clients
-            }
-
             // client_name and scope are stored as given and the name is shown on
             // the consent screen, so both have to be plain strings that fit their
-            // column. Anyone can call this endpoint.
+            // column. Anyone can call this endpoint. A supplied value is checked
+            // before any default replaces it: only an omitted field gets one.
             foreach (['client_name', 'scope'] as $field) {
-                $value = $clientData[$field] ?? '';
+                if (!array_key_exists($field, $clientData)) {
+                    continue;
+                }
+                $value = $clientData[$field];
                 if (!is_string($value) || mb_strlen($value) > 255) {
                     return $this->createErrorResponse(
                         $request,
@@ -104,6 +98,16 @@ class OAuthRegisterEndpoint
                         $field . ' must be a string of at most 255 characters'
                     );
                 }
+            }
+
+            // Validate required fields (minimal validation for MCP)
+            if (($clientData['client_name'] ?? '') === '') {
+                $clientData['client_name'] = 'MCP Client';
+            }
+
+            // redirect_uris is required by RFC 7591, but for MCP clients we can provide a default
+            if (empty($clientData['redirect_uris']) || !is_array($clientData['redirect_uris'])) {
+                $clientData['redirect_uris'] = ['http://localhost']; // Default for local MCP clients
             }
 
             // Set default values for MCP clients

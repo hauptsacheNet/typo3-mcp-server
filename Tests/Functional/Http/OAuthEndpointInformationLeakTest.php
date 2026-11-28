@@ -8,8 +8,11 @@ use Hn\McpServer\Http\OAuthRegisterEndpoint;
 use Hn\McpServer\Http\OAuthTokenEndpoint;
 use Hn\McpServer\Service\OAuthService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Message\ResponseInterface;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\Schema\SchemaMigrator;
+use TYPO3\CMS\Core\Database\Schema\SqlReader;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Http\Stream;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -21,6 +24,23 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class OAuthEndpointInformationLeakTest extends AbstractFunctionalTest
 {
+    private bool $tableDropped = false;
+
+    protected function tearDown(): void
+    {
+        // The testing framework restores the schema between tests only on
+        // SQLite; on MySQL, MariaDB and PostgreSQL it merely truncates the
+        // tables, so a dropped table has to be created again here.
+        if ($this->tableDropped) {
+            $sqlReader = GeneralUtility::makeInstance(SqlReader::class);
+            $this->get(SchemaMigrator::class)->install(
+                $sqlReader->getCreateTableStatementArray($sqlReader->getTablesDefinitionString()),
+                true
+            );
+        }
+        parent::tearDown();
+    }
+
     /**
      * @param array<string, mixed> $body
      */
@@ -46,6 +66,7 @@ class OAuthEndpointInformationLeakTest extends AbstractFunctionalTest
 
     private function dropTable(string $table): void
     {
+        $this->tableDropped = true;
         GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable($table)
             ->executeStatement('DROP TABLE ' . $table);
     }
@@ -128,5 +149,40 @@ class OAuthEndpointInformationLeakTest extends AbstractFunctionalTest
 
         self::assertSame(400, $response->getStatusCode(), (string)$response->getBody());
         self::assertSame('invalid_client_metadata', json_decode((string)$response->getBody(), true)['error']);
+    }
+
+    /**
+     * @return array<string, array{string, mixed}>
+     */
+    public static function metadataThatIsNotAStringProvider(): array
+    {
+        return [
+            'client_name false' => ['client_name', false],
+            'client_name 0' => ['client_name', 0],
+            'client_name empty list' => ['client_name', []],
+            'client_name null' => ['client_name', null],
+            'scope null' => ['scope', null],
+            'scope number' => ['scope', 1],
+            'scope list' => ['scope', ['mcp_access']],
+        ];
+    }
+
+    #[DataProvider('metadataThatIsNotAStringProvider')]
+    public function testRegistrationRefusesSuppliedMetadataThatIsNotAString(string $field, mixed $value): void
+    {
+        $response = $this->register([$field => $value, 'redirect_uris' => ['https://client.example/cb']]);
+
+        self::assertSame(400, $response->getStatusCode(), (string)$response->getBody());
+        self::assertSame('invalid_client_metadata', json_decode((string)$response->getBody(), true)['error']);
+    }
+
+    public function testRegistrationFillsInOmittedNameAndScope(): void
+    {
+        $response = $this->register(['redirect_uris' => ['https://client.example/cb']]);
+
+        self::assertSame(201, $response->getStatusCode(), (string)$response->getBody());
+        $client = json_decode((string)$response->getBody(), true);
+        self::assertSame('MCP Client', $client['client_name']);
+        self::assertSame('mcp_access', $client['scope']);
     }
 }
