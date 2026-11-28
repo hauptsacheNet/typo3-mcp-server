@@ -202,6 +202,43 @@ class OAuthConnectorFlowTest extends FunctionalTestCase
         $this->assertStringNotContainsString('attacker.example', $response->getHeaderLine('Location'));
     }
 
+    /**
+     * A client stored with a redirect URI whose host parse_url() and browsers read
+     * differently (registered before such URIs were refused) must not get a code,
+     * not even by posting the approval directly with a valid CSRF token.
+     */
+    public function testApprovalRefusesARedirectUriBrowsersReadDifferently(): void
+    {
+        $client = $this->registerClient([self::HOSTED_CALLBACK]);
+        $ambiguous = 'https://attacker.example\\@claude.ai/api/mcp/auth_callback';
+        $this->getConnectionPool()->getConnectionForTable('tx_mcpserver_oauth_clients')->update(
+            'tx_mcpserver_oauth_clients',
+            ['redirect_uris' => json_encode([self::HOSTED_CALLBACK, $ambiguous])],
+            ['client_id' => $client['client_id']]
+        );
+        [, $challenge] = $this->createPkcePair();
+        $this->actAsBackendUser(self::RESTRICTED_EDITOR_UID);
+        $query = [
+            'response_type' => 'code',
+            'client_id' => $client['client_id'],
+            'redirect_uri' => self::HOSTED_CALLBACK,
+            'code_challenge' => $challenge,
+            'code_challenge_method' => 'S256',
+            'state' => 's',
+        ];
+        $consent = $this->dispatch('GET', '/mcp_oauth/authorize?' . http_build_query($query));
+        $csrf = $this->extractCsrfToken((string)$consent->getBody());
+        $this->assertNotNull($csrf, (string)$consent->getBody());
+
+        $response = $this->dispatchForm(
+            '/mcp_oauth/authorize?' . http_build_query(['redirect_uri' => $ambiguous] + $query),
+            ['approve' => '1', 'csrf_token' => $csrf]
+        );
+
+        $this->assertNotSame(302, $response->getStatusCode(), 'Must not redirect to ' . $response->getHeaderLine('Location'));
+        $this->assertSame('', $response->getHeaderLine('Location'));
+    }
+
     public function testAuthorizeRequiresPkceForPublicClients(): void
     {
         $client = $this->registerClient([self::HOSTED_CALLBACK]);
