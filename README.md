@@ -15,7 +15,7 @@ Every push to `main` runs a benchmark that has the latest models from **Anthropi
 ![haiku-5.5](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbwyS4NavPMDQWbQQYCh3uKA4zJ5C8sxggxTZQQPdgjXOZ7Vt4BpUd5mzWdsWMqjzniI%2Fexec&query=%24.percentages%5B%22haiku-5.5%22%5D&suffix=%25&label=haiku-5.5)
 ![gpt-6-luna](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbwyS4NavPMDQWbQQYCh3uKA4zJ5C8sxggxTZQQPdgjXOZ7Vt4BpUd5mzWdsWMqjzniI%2Fexec&query=%24.percentages%5B%22gpt-6-luna%22%5D&suffix=%25&label=gpt-6-luna)
 ![mistral-large-4](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbwyS4NavPMDQWbQQYCh3uKA4zJ5C8sxggxTZQQPdgjXOZ7Vt4BpUd5mzWdsWMqjzniI%2Fexec&query=%24.percentages%5B%22mistral-large-4%22%5D&suffix=%25&label=mistral-large-4)
-![gemini-3.8-flash](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbwyS4NavPMDQWbQQYCh3uKA4zJ5C8sxggxTZQQPdgjXOZ7Vt4BpUd5mzWdsWMqjzniI%2Fexec&query=%24.percentages%5B%22gemini-3.8-flash%22%5D&suffix=%25&label=gemini-3.8-flash)
+![gemini-3.5-flash-lite](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbwyS4NavPMDQWbQQYCh3uKA4zJ5C8sxggxTZQQPdgjXOZ7Vt4BpUd5mzWdsWMqjzniI%2Fexec&query=%24.percentages%5B%22gemini-3.5-flash-lite%22%5D&suffix=%25&label=gemini-3.5-flash-lite)
 ![glm-5.3-flash](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbwyS4NavPMDQWbQQYCh3uKA4zJ5C8sxggxTZQQPdgjXOZ7Vt4BpUd5mzWdsWMqjzniI%2Fexec&query=%24.percentages%5B%22glm-5.3-flash%22%5D&suffix=%25&label=glm-5.3-flash)
 ![deepseek-v4.1-flash](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbwyS4NavPMDQWbQQYCh3uKA4zJ5C8sxggxTZQQPdgjXOZ7Vt4BpUd5mzWdsWMqjzniI%2Fexec&query=%24.percentages%5B%22deepseek-v4.1-flash%22%5D&suffix=%25&label=deepseek-v4.1-flash)
 ![qwen3.8-27b](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbwyS4NavPMDQWbQQYCh3uKA4zJ5C8sxggxTZQQPdgjXOZ7Vt4BpUd5mzWdsWMqjzniI%2Fexec&query=%24.percentages%5B%22qwen3.8-27b%22%5D&suffix=%25&label=qwen3.8-27b)
@@ -113,6 +113,64 @@ The defaults work out of the box. All settings live in the extension configurati
 Records other than pages and content elements (news, events, ...) get a frontend URL once
 `TCEMAIN.preview.<table>` is configured in Page TSconfig — the same setting that powers the
 "View" button in the backend. See [Record URLs](Documentation/Architecture/RecordUrls.md).
+
+#### Decoupled frontends (EXT:headless)
+
+With [EXT:headless](https://github.com/TYPO3-Headless/headless), page and record URLs should
+point at the site's `frontendBase`, not at the JSON API, and `GetPage` should accept them.
+
+- **TYPO3 14 + EXT:headless 5:** works out of the box for the HTTP MCP endpoint, nothing to
+  configure. EXT:headless only rewrites URLs during backend requests, so the deprecated stdio
+  command (`mcp:server`) keeps handing out URLs on the site base.
+- **TYPO3 13 + EXT:headless 4:** add this listener to your site package:
+
+```php
+<?php
+
+namespace Vendor\SitePackage\EventListener;
+
+use FriendsOfTYPO3\Headless\Utility\HeadlessModeInterface;
+use FriendsOfTYPO3\Headless\Utility\UrlUtility;
+use Hn\McpServer\Event\AfterRecordUrlGeneratedEvent;
+use TYPO3\CMS\Core\Attribute\AsEventListener;
+use TYPO3\CMS\Core\Http\ServerRequest;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
+
+#[AsEventListener]
+final class HeadlessRecordUrlListener
+{
+    public function __invoke(AfterRecordUrlGeneratedEvent $event): void
+    {
+        $request = $GLOBALS['TYPO3_REQUEST'] ?? new ServerRequest($event->getUrl());
+        $request = GeneralUtility::makeInstance(HeadlessModeInterface::class)
+            ->withRequest($request->withoutHeader('Accept'))
+            ->overrideBackendRequestBySite($event->getSite(), $event->getLanguage());
+        $event->setUrl(
+            GeneralUtility::makeInstance(UrlUtility::class)
+                ->withRequest($request)
+                ->getFrontendUrlWithSite($event->getUrl(), $event->getSite())
+        );
+    }
+}
+```
+
+The attribute registers the listener when the site package's `Configuration/Services.yaml`
+autoconfigures its classes (`_defaults: autoconfigure: true` plus a `resource: '../Classes/*'`
+entry). Without that, register it explicitly:
+
+```yaml
+services:
+  Vendor\SitePackage\EventListener\HeadlessRecordUrlListener:
+    tags:
+      - name: event.listener
+```
+
+The listener rewrites URLs the way EXT:headless 4 rewrites the backend's view button in the
+live workspace, and does so for workspace previews too. The `ADMCMD_prev` token is appended
+after the listener ran, so the frontend has to accept it and pass it on to TYPO3.
+
+Other decoupled frontends can rewrite URLs the same way, through the core
+`AfterPageUriGeneratedEvent` (TYPO3 14) or `AfterRecordUrlGeneratedEvent`.
 
 ## Usage
 

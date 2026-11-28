@@ -22,6 +22,11 @@ children in one of two ways, decided by `TableAccessService::isEmbeddedChildTabl
  'content_elements' => [456, 789]]
 ```
 
+Embedded children are read like top-level records: their own inline, file, select and
+group fields are resolved the same way (a file on a collection item reads as a list of
+references, `[]` when empty), one query batch per field and nesting level
+(`ReadTableTool::resolveRelationFields()`).
+
 ### Standalone `hideTable` tables
 
 Some `hideTable` tables are too complex to edit through their parent, e.g. because
@@ -54,6 +59,10 @@ The value is the complete list of children; the array order is the display order
 - Children can have embedded children themselves (a file inside a collection item).
   Nested relations to independent tables are rejected: those records need their own
   write so the client gets their uids back.
+- Required fields of each child are checked like those of a record of its own
+  (`validateEmbeddedChildRequiredFields()`): a new child like a create, an existing
+  one like an update of the fields it sends. DataHandler would drop an empty required
+  value of a child without an error, and the write would report success.
 
 ### Why it takes several steps
 
