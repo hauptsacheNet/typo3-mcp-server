@@ -184,6 +184,79 @@ class SearchLimitTest extends FunctionalTestCase
         $this->assertSame([801, 803], $uids, 'The moved element counts once and the other one still fits the limit');
     }
 
+    public function testCutInlineMatchesWithoutFoundParentsAreReported(): void
+    {
+        // Six items match; the first five belong to deleted elements, so the five
+        // items the limit lets through yield no parent, while the sixth would.
+        for ($i = 1; $i <= 6; $i++) {
+            $this->insertRecord('tt_content', [
+                'uid' => 900 + $i,
+                'pid' => 1,
+                'CType' => 'textmedia',
+                'header' => 'Element ' . $i,
+                'tx_testnestedfiles_items' => 1,
+                'deleted' => $i <= 5 ? 1 : 0,
+            ]);
+            $this->insertRecord('tx_testnestedfiles_item', [
+                'uid' => 20 + $i,
+                'pid' => 1,
+                'title' => 'Needle item ' . $i,
+                'tt_content_items' => 900 + $i,
+                'sorting' => $i * 256,
+            ]);
+        }
+
+        $result = (new SearchTool())->execute(['terms' => ['needle'], 'limit' => 5]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        $this->assertStringNotContainsString('No results found', $text);
+        $this->assertStringContainsString('More records (may) match in: tt_content.', $text);
+        $this->assertSame(0, $this->countRecordsInSection($text, 'tt_content'), $text);
+    }
+
+    public function testUncutInlineMatchesWithoutParentsStayAPlainEmptyResult(): void
+    {
+        $this->insertRecord('tx_testnestedfiles_item', [
+            'uid' => 30,
+            'pid' => 1,
+            'title' => 'Needle item without element',
+            'tt_content_items' => 999,
+        ]);
+
+        $result = (new SearchTool())->execute(['terms' => ['needle'], 'limit' => 5]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        $this->assertStringContainsString('No results found', $text);
+        $this->assertStringNotContainsString('More records', $text);
+    }
+
+    public function testInlineMatchFindsParentMovedInTheWorkspace(): void
+    {
+        $this->importCSVDataSet(__DIR__ . '/../../Fixtures/sys_workspace.csv');
+        $GLOBALS['BE_USER']->workspace = 1;
+
+        $this->insertRecord('tt_content', [
+            'uid' => 951, 'pid' => 1, 'CType' => 'textmedia', 'header' => 'Moved element', 'tx_testnestedfiles_items' => 1,
+        ]);
+        // Move pointer: the element is moved to page 2 in workspace 1
+        $this->insertRecord('tt_content', [
+            'uid' => 952, 'pid' => 2, 'CType' => 'textmedia', 'header' => 'Moved element', 'tx_testnestedfiles_items' => 1,
+            't3ver_oid' => 951, 't3ver_wsid' => 1, 't3ver_state' => 4,
+        ]);
+        $this->insertRecord('tx_testnestedfiles_item', [
+            'uid' => 40, 'pid' => 1, 'title' => 'Needle item', 'tt_content_items' => 951,
+        ]);
+
+        $result = (new SearchTool())->execute(['terms' => ['needle']]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        $this->assertSame(1, $this->countRecordsInSection($text, 'tt_content'), $text);
+        $this->assertStringContainsString('[UID: 951] Moved element', $text);
+    }
+
     public function testInvalidLimitIsRejected(): void
     {
         $result = (new SearchTool())->execute(['terms' => ['needle'], 'limit' => 0]);

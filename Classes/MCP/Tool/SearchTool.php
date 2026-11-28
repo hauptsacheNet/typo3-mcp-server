@@ -15,6 +15,7 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\WorkspaceRestriction;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Core\Versioning\VersionState;
 use Hn\McpServer\Utility\RecordFormattingUtility;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
 use Hn\McpServer\Database\Query\Restriction\WorkspaceDeletePlaceholderRestriction;
@@ -454,6 +455,17 @@ class SearchTool extends AbstractRecordTool
             }
         }
 
+        // Cut inline matches may belong to parents that were never looked up, also
+        // when none of the looked-up matches yielded a parent: report the table then
+        foreach (array_keys($parentTablesWithCutInlineMatches) as $parentTable) {
+            if (isset($parentRecordsByTable[$parentTable])) {
+                continue;
+            }
+            $attributedResults[$parentTable]['records'] ??= [];
+            $attributedResults[$parentTable]['total'] ??= 0;
+            $attributedResults[$parentTable]['total_is_minimum'] = true;
+        }
+
         return $attributedResults;
     }
 
@@ -486,9 +498,20 @@ class SearchTool extends AbstractRecordTool
             // For inline relations, use the foreign_field to find parent
             $parentUid = $inlineRecord[$foreignField] ?? null;
             if ($parentUid) {
-                $queryBuilder->where(
-                    $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($parentUid, ParameterType::INTEGER))
-                );
+                $uidCondition = $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($parentUid, ParameterType::INTEGER));
+                if (!empty($GLOBALS['TCA'][$parentTable]['ctrl']['versioningWS'])) {
+                    // The child references the live uid. A parent moved in the workspace
+                    // is only reachable through its move pointer, as the restriction
+                    // above leaves out its live row.
+                    $uidCondition = $queryBuilder->expr()->or(
+                        $uidCondition,
+                        $queryBuilder->expr()->and(
+                            $queryBuilder->expr()->eq('t3ver_oid', $queryBuilder->createNamedParameter($parentUid, ParameterType::INTEGER)),
+                            $queryBuilder->expr()->eq('t3ver_state', $queryBuilder->createNamedParameter(VersionState::MOVE_POINTER->value, ParameterType::INTEGER))
+                        )
+                    );
+                }
+                $queryBuilder->where($uidCondition);
             } else {
                 return [];
             }
@@ -978,7 +1001,7 @@ class SearchTool extends AbstractRecordTool
         $result .= "Tables Searched: " . count($searchResults) . "\n\n";
 
         // If no results, show no results message
-        if ($totalResults === 0) {
+        if ($totalResults === 0 && $tablesWithCutResults === []) {
             $termsDisplay = count($searchTerms) === 1 ? '"' . $searchTerms[0] . '"' : '[' . implode(', ', array_map(fn($t) => '"'.$t.'"', $searchTerms)) . ']';
             $result .= "No results found for search terms: $termsDisplay\n";
         } else {
@@ -1014,9 +1037,13 @@ class SearchTool extends AbstractRecordTool
         $total = (int)($tableData['total'] ?? $shown);
         if (!empty($tableData['total_is_minimum'])) {
             // Matches were cut before their records were known, so more may exist
-            $result .= $total > $shown
-                ? "Found at least $total record(s), showing $shown\n\n"
-                : "Found $shown record(s), more may match\n\n";
+            if ($shown === 0) {
+                $result .= "No record shown, but the limit cut matches whose records were not looked up, so more may match\n\n";
+            } else {
+                $result .= $total > $shown
+                    ? "Found at least $total record(s), showing $shown\n\n"
+                    : "Found $shown record(s), more may match\n\n";
+            }
         } elseif ($total > $shown) {
             $result .= "Found $total record(s), showing $shown of $total\n\n";
         } else {
