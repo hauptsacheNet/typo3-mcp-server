@@ -8,6 +8,7 @@ use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use Hn\McpServer\Service\DisplayConditionService;
 use Hn\McpServer\Service\SelectItemResolver;
 use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
@@ -26,8 +27,9 @@ class TcaFormattingUtility
      * @param string $fieldName Optional field name for special handling
      * @param string $table Optional table name for authMode filtering
      * @param int|null $pid Optional page id for TSconfig context (filters select items via FormDataCompiler)
+     * @param string|array|null $displayCond The field's displayCond: a required field is only required when it is shown
      */
-    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = '', ?int $pid = null): void
+    public static function addFieldDetailsInline(string &$result, $config, string $fieldName = '', string $table = '', ?int $pid = null, string|array|null $displayCond = null): void
     {
         // Get the field type
         $type = $config['type'] ?? '';
@@ -241,7 +243,7 @@ class TcaFormattingUtility
             || $minItems > 0
             || in_array('required', GeneralUtility::trimExplode(',', (string)($config['eval'] ?? ''), true), true);
         if ($isRequired) {
-            $result .= " [Required]";
+            $result .= self::formatRequiredMarker($displayCond);
         }
         if (in_array($type, ['inline', 'file', 'group', 'select', 'category', 'folder'], true)) {
             if ($minItems > 0) {
@@ -256,6 +258,22 @@ class TcaFormattingUtility
         if (isset($config['default']) && $type !== 'check') {
             $result .= " [Default: " . $config['default'] . "]";
         }
+    }
+
+    /**
+     * "[Required]", or "[Required when <condition>]" for a field the backend form
+     * only shows under a condition (WriteTable checks it only then as well)
+     */
+    protected static function formatRequiredMarker(string|array|null $displayCond): string
+    {
+        if ($displayCond === null || $displayCond === '' || $displayCond === []) {
+            return " [Required]";
+        }
+        $condition = GeneralUtility::makeInstance(DisplayConditionService::class)->describe($displayCond);
+        if ($condition === '') {
+            return " [Required]";
+        }
+        return $condition === null ? " [Required when shown]" : " [Required when " . $condition . "]";
     }
 
     /**

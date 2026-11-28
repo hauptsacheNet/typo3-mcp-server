@@ -6,9 +6,11 @@ namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\MCP\Tool\Record\WriteTableTool;
+use Hn\McpServer\Service\DisplayConditionService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Core\Environment;
+use TYPO3\CMS\Core\Information\Typo3Version;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 class RequiredFieldsTest extends AbstractFunctionalTest
@@ -16,6 +18,8 @@ class RequiredFieldsTest extends AbstractFunctionalTest
     private const TYPE = 'testrequired_textmedia';
     private const CATEGORIES_TYPE = 'testrequired_categories';
     private const CONDITIONAL_TYPE = 'testrequired_conditional';
+    private const STAGE_TYPE = 'testrequired_stage';
+    private const DEPENDENT_TYPE = 'testrequired_dependent';
 
     protected array $testExtensionsToLoad = [
         __DIR__ . '/../../Fixtures/Extensions/test_required_fields',
@@ -427,20 +431,22 @@ class RequiredFieldsTest extends AbstractFunctionalTest
         $this->assertStringContainsString('subheader', $result->content[0]->text);
     }
 
-    public function testOmittedFieldWithDisplayCondIsNotChecked(): void
+    public function testOmittedFieldWithDisplayCondIsCheckedOnlyWhenShown(): void
     {
-        $result = $this->write([
-            'action' => 'create',
-            'table' => 'tt_content',
-            'data' => [
-                'pid' => 1,
-                'CType' => self::CONDITIONAL_TYPE,
-                'header' => 'Conditional',
-                'imagewidth' => 100,
-            ],
-        ]);
+        $data = [
+            'pid' => 1,
+            'CType' => self::CONDITIONAL_TYPE,
+            'imagewidth' => 100,
+        ];
 
+        // No header: subheader is hidden (FIELD:header:REQ:true) and not required
+        $result = $this->write(['action' => 'create', 'table' => 'tt_content', 'data' => $data]);
         $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // With a header the form shows subheader, so it has to be filled
+        $result = $this->write(['action' => 'create', 'table' => 'tt_content', 'data' => $data + ['header' => 'Conditional']]);
+        $this->assertTrue($result->isError, 'A required field shown by its condition must be filled');
+        $this->assertStringContainsString('subheader', $result->content[0]->text);
     }
 
     public function testZeroFillsARequiredNumberField(): void
@@ -642,6 +648,305 @@ class RequiredFieldsTest extends AbstractFunctionalTest
     private function getSlideAuthors(int $parentUid): array
     {
         return array_map(static fn(array $row): string => (string)$row['author'], $this->getSlideRows($parentUid));
+    }
+
+    public function testSchemaNamesTheConditionOfConditionallyRequiredFields(): void
+    {
+        $schema = $this->getSchema('tt_content', self::STAGE_TYPE);
+
+        $subheaderLine = $this->fieldLine($schema, 'subheader');
+        $this->assertStringContainsString('[Required when header_layout = 2]', $subheaderLine);
+        $this->assertStringNotContainsString('[Required]', $subheaderLine);
+
+        $this->assertStringContainsString(
+            '[Required when header_layout is one of 3, 4 and (header_position = center or header_position = left)]',
+            $this->fieldLine($schema, 'header_link')
+        );
+        // A condition that cannot be put into words still tells that it is conditional
+        $this->assertStringContainsString('[Required when shown]', $this->fieldLine($schema, 'bodytext'));
+        // Fields without displayCond stay plainly required
+        $this->assertStringContainsString('[Required when header is set]', $this->fieldLine($this->getSchema('tt_content', self::CONDITIONAL_TYPE), 'subheader'));
+        $this->assertStringContainsString('[Required]', $this->fieldLine($this->getSchema('tt_content', self::CONDITIONAL_TYPE), 'imagewidth'));
+    }
+
+    public function testFieldHiddenByItsConditionIsNotRequiredOnCreate(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::STAGE_TYPE,
+                'header' => 'Plain stage',
+                'header_layout' => 0,
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testFieldShownByItsConditionIsRequiredOnCreate(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::STAGE_TYPE,
+                'header' => 'Layout 2 stage',
+                'header_layout' => 2,
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'subheader is shown for header_layout 2 and must be filled');
+        $this->assertStringContainsString('subheader', $result->content[0]->text);
+        $this->assertStringNotContainsString('header_link', $result->content[0]->text);
+        // Not evaluable (VERSION condition): an omitted value is not checked
+        $this->assertStringNotContainsString('bodytext', $result->content[0]->text);
+
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::STAGE_TYPE,
+                'header' => 'Layout 2 stage',
+                'header_layout' => 2,
+                'subheader' => 'Filled',
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testCombinedConditionDecidesWhetherTheFieldIsRequired(): void
+    {
+        $data = [
+            'pid' => 1,
+            'CType' => self::STAGE_TYPE,
+            'header' => 'Layout 3 stage',
+            'header_layout' => 3,
+        ];
+
+        $result = $this->write(['action' => 'create', 'table' => 'tt_content', 'data' => $data + ['header_position' => 'right']]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $result = $this->write(['action' => 'create', 'table' => 'tt_content', 'data' => $data + ['header_position' => 'center']]);
+        $this->assertTrue($result->isError, 'header_link is shown for header_layout 3 with a centered header');
+        $this->assertStringContainsString('header_link', $result->content[0]->text);
+    }
+
+    public function testUpdateThatShowsAFieldChecksItsStoredValue(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::STAGE_TYPE,
+                'header' => 'Plain stage',
+                'header_layout' => 0,
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        // Unrelated updates are not blocked by the hidden field
+        $result = $this->write(['action' => 'update', 'table' => 'tt_content', 'uid' => $uid, 'data' => ['header' => 'Renamed']]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        // Switching to the variant that shows the empty required field is refused
+        $result = $this->write(['action' => 'update', 'table' => 'tt_content', 'uid' => $uid, 'data' => ['header_layout' => 2]]);
+        $this->assertTrue($result->isError, 'Showing an empty required field must be refused');
+        $this->assertStringContainsString('subheader', $result->content[0]->text);
+
+        $result = $this->write([
+            'action' => 'update',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['header_layout' => 2, 'subheader' => 'Now filled'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testEmptyingAFieldHiddenByItsConditionIsAllowed(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::STAGE_TYPE,
+                'header' => 'Plain stage',
+                'header_layout' => 0,
+                'subheader' => '',
+            ],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testConditionSeesTheDefaultFilledInForAnEmptyRequiredField(): void
+    {
+        // The empty header gets its default, which shows the required subheader
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::DEPENDENT_TYPE,
+                'header' => '',
+            ],
+        ]);
+
+        $this->assertTrue($result->isError, 'subheader is shown for the default header and must be filled');
+        $this->assertStringContainsString('subheader', $result->content[0]->text);
+    }
+
+    public function testTranslationIsValidatedInItsTargetLanguageBeforeItIsCreated(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::DEPENDENT_TYPE,
+                'header' => 'Original',
+                'subheader' => 'Subheader',
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        // header_link is only shown in translations (FIELD:sys_language_uid:>:0)
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Übersetzt', 'header_link' => ''],
+        ]);
+        $this->assertTrue($result->isError, 'The empty header_link of the translation must be refused');
+        $this->assertStringContainsString('header_link', $result->content[0]->text);
+        $this->assertStringNotContainsString('Translation record was created', $result->content[0]->text);
+        $this->assertSame(
+            0,
+            (int)$this->getConnectionForTable('tt_content')->count('uid', 'tt_content', ['l18n_parent' => $uid]),
+            'A refused translation must not leave a translation record behind'
+        );
+
+        // The corrected retry succeeds
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Übersetzt', 'header_link' => 'https://example.com'],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testDateConditionSeesTheValueTheBackendFormHas(): void
+    {
+        $service = GeneralUtility::makeInstance(DisplayConditionService::class);
+        $condition = 'FIELD:tx_testrequiredfields_event_date:REQ:false';
+
+        $this->assertTrue($service->evaluate('tt_content', $condition, ['tx_testrequiredfields_event_date' => null], true));
+        $this->assertFalse($service->evaluate('tt_content', $condition, ['tx_testrequiredfields_event_date' => 1767225600], true));
+        // TYPO3 14 turns 0 of a nullable datetime field into a date (1970-01-01), TYPO3 13 keeps 0
+        $this->assertSame(
+            (new Typo3Version())->getMajorVersion() < 14,
+            $service->evaluate('tt_content', $condition, ['tx_testrequiredfields_event_date' => 0], true)
+        );
+    }
+
+    public function testTranslationMustFillAFieldOnlyTheTranslationShows(): void
+    {
+        // header_link is hidden in the default language and empty in the original
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::DEPENDENT_TYPE,
+                'header' => 'Original',
+                'subheader' => 'Subheader',
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Übersetzt'],
+        ]);
+
+        $this->assertTrue($result->isError, 'The translation shows header_link, which the copy leaves empty');
+        $this->assertStringContainsString('header_link', $result->content[0]->text);
+        $this->assertSame(
+            0,
+            (int)$this->getConnectionForTable('tt_content')->count('uid', 'tt_content', ['l18n_parent' => $uid])
+        );
+    }
+
+    public function testTranslationTakesAFieldOnlyTheTranslationShowsFromTheOriginal(): void
+    {
+        $result = $this->write([
+            'action' => 'create',
+            'table' => 'tt_content',
+            'data' => [
+                'pid' => 1,
+                'CType' => self::DEPENDENT_TYPE,
+                'header' => 'Original',
+                'subheader' => 'Subheader',
+                'header_link' => 'https://example.com',
+            ],
+        ]);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $uid = (int)json_decode($result->content[0]->text, true)['uid'];
+
+        // The translation is a copy of the original, which has a header_link
+        $result = $this->write([
+            'action' => 'translate',
+            'table' => 'tt_content',
+            'uid' => $uid,
+            'data' => ['sys_language_uid' => 'de', 'header' => 'Übersetzt'],
+        ]);
+
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testFieldReferencedTwiceInAConditionIsEvaluated(): void
+    {
+        $service = GeneralUtility::makeInstance(DisplayConditionService::class);
+        $condition = [
+            'OR' => [
+                'FIELD:tx_testrequiredfields_event_date:REQ:false',
+                'AND' => [
+                    'FIELD:tx_testrequiredfields_event_date:REQ:true',
+                    'FIELD:header_layout:=:2',
+                ],
+            ],
+        ];
+        $row = ['pid' => 1, 'tx_testrequiredfields_event_date' => 1767225600, 'header_layout' => '2'];
+
+        $this->assertTrue($service->evaluate('tt_content', $condition, $row, true));
+        $this->assertFalse($service->evaluate('tt_content', $condition, ['header_layout' => '1'] + $row, true));
+    }
+
+    public function testSelectValueRemovedByTsconfigDoesNotShowAField(): void
+    {
+        $this->getConnectionForTable('pages')->update(
+            'pages',
+            ['TSconfig' => "TCEFORM.tt_content.header_layout.removeItems = 2\n"],
+            ['uid' => 1]
+        );
+        $service = GeneralUtility::makeInstance(DisplayConditionService::class);
+        $row = ['uid' => 1, 'pid' => 1, 'CType' => self::STAGE_TYPE];
+
+        // The backend drops the removed value from the selection, so the field is hidden
+        $this->assertFalse($service->evaluate('tt_content', 'FIELD:header_layout:=:2', $row + ['header_layout' => '2'], false));
+        // Available values still decide as usual
+        $this->assertTrue($service->evaluate('tt_content', 'FIELD:header_layout:=:3', $row + ['header_layout' => '3'], false));
     }
 
     private function createValidElement(): int
