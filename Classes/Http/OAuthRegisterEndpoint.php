@@ -15,6 +15,7 @@ use TYPO3\CMS\Core\Locking\LockFactory;
 use TYPO3\CMS\Core\RateLimiter\Storage\CachingFrameworkStorage;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Core\Http\Stream;
+use TYPO3\CMS\Core\Log\LogManager;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
@@ -81,8 +82,26 @@ class OAuthRegisterEndpoint
                 return $this->createErrorResponse($request, 'invalid_request', 'Invalid JSON in request body');
             }
 
+            // client_name and scope are stored as given and the name is shown on
+            // the consent screen, so both have to be plain strings that fit their
+            // column. Anyone can call this endpoint. A supplied value is checked
+            // before any default replaces it: only an omitted field gets one.
+            foreach (['client_name', 'scope'] as $field) {
+                if (!array_key_exists($field, $clientData)) {
+                    continue;
+                }
+                $value = $clientData[$field];
+                if (!is_string($value) || mb_strlen($value) > 255) {
+                    return $this->createErrorResponse(
+                        $request,
+                        'invalid_client_metadata',
+                        $field . ' must be a string of at most 255 characters'
+                    );
+                }
+            }
+
             // Validate required fields (minimal validation for MCP)
-            if (empty($clientData['client_name'])) {
+            if (($clientData['client_name'] ?? '') === '') {
                 $clientData['client_name'] = 'MCP Client';
             }
 
@@ -124,7 +143,12 @@ class OAuthRegisterEndpoint
             return $this->addCorsHeaders($response, $request);
 
         } catch (\Throwable $e) {
-            return $this->createErrorResponse($request, 'server_error', $e->getMessage(), 500);
+            // The endpoint is reachable without authentication, and exception
+            // messages carry internals (file paths, SQL, table names). They
+            // belong in the log, the caller gets a generic answer.
+            GeneralUtility::makeInstance(LogManager::class)->getLogger(__CLASS__)
+                ->error('OAuth client registration failed: ' . $e->getMessage(), ['exception' => $e]);
+            return $this->createErrorResponse($request, 'server_error', 'The registration request could not be processed.', 500);
         }
     }
 

@@ -9,6 +9,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Core\Http\Stream;
+use TYPO3\CMS\Core\Log\LogManager;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
@@ -48,6 +49,14 @@ class OAuthTokenEndpoint
             if ($basicAuth !== null) {
                 $clientId = $basicAuth['client_id'];
                 $clientSecret = $basicAuth['client_secret'];
+            }
+
+            // Every parameter is a single string. PHP turns "code[]=x" into an
+            // array, which would otherwise surface as a TypeError further down.
+            foreach ([$grantType, $code, $refreshToken, $clientId, $clientSecret, $codeVerifier, $redirectUri] as $value) {
+                if ($value !== null && !is_string($value)) {
+                    return $this->createErrorResponse($request, 'invalid_request', 'Parameters must be strings');
+                }
             }
 
             // Validate required parameters
@@ -105,7 +114,12 @@ class OAuthTokenEndpoint
             return $this->addCorsHeaders($response, $request);
 
         } catch (\Throwable $e) {
-            return $this->createErrorResponse($request, 'server_error', $e->getMessage(), 500);
+            // The endpoint is reachable without authentication, and exception
+            // messages carry internals (file paths, SQL, table names). They
+            // belong in the log, the caller gets a generic answer.
+            GeneralUtility::makeInstance(LogManager::class)->getLogger(__CLASS__)
+                ->error('OAuth token request failed: ' . $e->getMessage(), ['exception' => $e]);
+            return $this->createErrorResponse($request, 'server_error', 'The token request could not be processed.', 500);
         }
     }
 
