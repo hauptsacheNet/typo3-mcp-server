@@ -822,6 +822,15 @@ class TableAccessService implements SingletonInterface
      */
     public function isFieldPermitted(string $table, string $fieldName): bool
     {
+        return $this->getFieldPermissionDenialReason($table, $fieldName) === null;
+    }
+
+    /**
+     * Why the user's rights do not cover a field (see isFieldPermitted()), or null
+     * when they do. Phrased to complete "Field 'x' is not accessible: ...".
+     */
+    public function getFieldPermissionDenialReason(string $table, string $fieldName): ?string
+    {
         $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
 
         $fieldType = $fieldConfig['config']['type'] ?? '';
@@ -831,7 +840,7 @@ class TableAccessService implements SingletonInterface
         if ($fieldType === 'inline' || $fieldType === 'file') {
             $foreignTable = $fieldConfig['config']['foreign_table'] ?? '';
             if ($foreignTable && !$this->canAccessTable($foreignTable)) {
-                return false;
+                return sprintf("it relates to table '%s', which is not accessible", $foreignTable);
             }
         }
 
@@ -843,18 +852,18 @@ class TableAccessService implements SingletonInterface
         if (($fieldConfig['displayCond'] ?? '') === 'HIDE_FOR_NON_ADMINS'
             && !$this->getBackendUser()->isAdmin()
         ) {
-            return false;
+            return 'only administrators may edit it';
         }
 
         // Check exclude fields
         if (!empty($fieldConfig['exclude'])) {
             $backendUser = $this->getBackendUser();
             if (!$backendUser->isAdmin() && !$backendUser->check('non_exclude_fields', $table . ':' . $fieldName)) {
-                return false;
+                return 'the backend user has no permission for it (not among the allowed exclude fields of its groups)';
             }
         }
 
-        return true;
+        return null;
     }
 
     /**
@@ -868,11 +877,32 @@ class TableAccessService implements SingletonInterface
      */
     public function canAccessField(string $table, string $fieldName, string $type = '', ?int $pid = null): bool
     {
-        if (!$this->isFieldPermitted($table, $fieldName)) {
-            return false;
+        return $this->getFieldAccessDenialReason($table, $fieldName, $type, $pid) === null;
+    }
+
+    /**
+     * Why a field is not accessible, or null when it is: the user's rights
+     * (getFieldPermissionDenialReason()) first, then TCEFORM. The reason completes
+     * the sentence "Field 'x' is not accessible: ..." and names where the
+     * restriction comes from, so the reader does not go looking in the wrong place.
+     *
+     * @param string $table Table name
+     * @param string $fieldName Field name
+     * @param string $type Record type (optional, for type-specific TSconfig)
+     * @param int|null $pid Page id for TSconfig context (null → first site root)
+     */
+    public function getFieldAccessDenialReason(string $table, string $fieldName, string $type = '', ?int $pid = null): ?string
+    {
+        $permissionDenialReason = $this->getFieldPermissionDenialReason($table, $fieldName);
+        if ($permissionDenialReason !== null) {
+            return $permissionDenialReason;
         }
 
-        $fieldConfig = $GLOBALS['TCA'][$table]['columns'][$fieldName] ?? [];
+        // Positional fields are set by the page module, which ignores TCEFORM.
+        // The user's rights above still apply. See isPositionalField().
+        if ($this->isPositionalField($table, $fieldName)) {
+            return null;
+        }
 
         // Check TSconfig field visibility (applies to all users including admins).
         // Resolve TSconfig at a real page id — page 0 has no rootline so it
@@ -880,21 +910,61 @@ class TableAccessService implements SingletonInterface
         // The record-type-specific TCEFORM (`types.<recordType>.disabled`) overrides the
         // global one, which lets installations disable a field globally and re-enable it
         // only for selected record types.
-        $TSconfig = BackendUtility::getPagesTSconfig($this->resolveTSconfigPid($pid));
+        $resolvedPid = $this->resolveTSconfigPid($pid);
+        $TSconfig = BackendUtility::getPagesTSconfig($resolvedPid);
         $fieldTSconfig = $TSconfig['TCEFORM.'][$table . '.'][$fieldName . '.'] ?? [];
 
         $fieldDisabled = '';
+        $setting = 'TCEFORM.' . $table . '.' . $fieldName . '.disabled';
         if ($type !== '' && isset($fieldTSconfig['types.'][$type . '.']['disabled'])) {
             $fieldDisabled = $fieldTSconfig['types.'][$type . '.']['disabled'];
+            $setting = 'TCEFORM.' . $table . '.' . $fieldName . '.types.' . $type . '.disabled';
         } elseif (isset($fieldTSconfig['disabled'])) {
             $fieldDisabled = $fieldTSconfig['disabled'];
         }
 
         if ($fieldDisabled === '1' || $fieldDisabled === 1 || $fieldDisabled === true) {
-            return false;
+            return sprintf('page TSconfig hides it from editors (%s = 1, effective on page %d)', $setting, $resolvedPid);
         }
 
-        return true;
+        return null;
+    }
+
+    /**
+     * Whether a field places a record instead of describing it, like the column
+     * (tt_content.colPos) of a content element.
+     *
+     * TCEFORM.<table>.<field>.disabled only hides a field in the edit form. The
+     * page module sets positional fields without that form: the new content
+     * element wizard passes colPos as a default value, drag and drop moves an
+     * element into another column. Sites hide the column select because editors
+     * place content in the page module (often there is just one column), not to
+     * forbid placing content. So these fields stay writable when the form hides
+     * them. Their values are still checked against the select items, which for
+     * colPos come from the page's backend layout.
+     *
+     * TYPO3 names the positional fields of a table in ctrl.copyAfterDuplFields:
+     * DataHandler copies them from the record that a copied record is placed
+     * after (tt_content: colPos, sys_language_uid). The language field is
+     * left out, it has its own handling (translate action, no language change on
+     * update). b13/container's tx_container_parent is positional as well, its
+     * drag and drop sets the field when an element moves into or out of a
+     * container.
+     */
+    public function isPositionalField(string $table, string $fieldName): bool
+    {
+        if (!isset($GLOBALS['TCA'][$table]['columns'][$fieldName])) {
+            return false;
+        }
+        $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
+        if ($fieldName === ($ctrl['languageField'] ?? null) || $fieldName === ($ctrl['transOrigPointerField'] ?? null)) {
+            return false;
+        }
+        if ($table === 'tt_content' && $fieldName === 'tx_container_parent') {
+            return true;
+        }
+        $positionalFields = GeneralUtility::trimExplode(',', (string)($ctrl['copyAfterDuplFields'] ?? ''), true);
+        return in_array($fieldName, $positionalFields, true);
     }
     
     

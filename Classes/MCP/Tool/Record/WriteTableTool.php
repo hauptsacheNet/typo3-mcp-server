@@ -14,10 +14,12 @@ use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\NewRecordInitializer;
 use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\RecordUrlService;
+use Hn\McpServer\Service\SelectItemResolver;
 use Hn\McpServer\Service\TableAccessService;
 use Mcp\Types\CallToolResult;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Backend\View\BackendLayoutView;
 use TYPO3\CMS\Core\Configuration\FlexForm\FlexFormTools;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -335,6 +337,10 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function createRecord(string $table, int $pid, array $data, ?string $position): CallToolResult
     {
+        // "after:N" / "before:N" put the record on N's page, whatever pid says
+        // (#50). Run every check below for that page.
+        $pid = $this->getPositionReferencePage($table, $position) ?? $pid;
+
         // Pre-validate page access for non-admin users
         $pageAccessError = $this->validatePageAccess($pid);
         if ($pageAccessError !== null) {
@@ -566,6 +572,15 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function updateRecord(string $table, int $uid, array $data, ?string $position = null, bool $dispatchEvent = true): CallToolResult
     {
+        // "after:N" / "before:N" move the record to N's page, like a pid would.
+        // Treat it as one, so the validation checks the page the record ends up on.
+        $referencePage = $this->getPositionReferencePage($table, $position);
+        if ($referencePage !== null
+            && $referencePage !== (array_key_exists('pid', $data) ? (int)$data['pid'] : $this->getWorkspacePid($table, $uid))
+        ) {
+            $data['pid'] = $referencePage;
+        }
+
         // Validate the data
         $validationResult = $this->validateRecordData($table, $data, 'update', $uid);
         if ($validationResult !== true) {
@@ -1304,6 +1319,24 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
+        // colPos holds one column. The select validation splits lists and
+        // comma-separated strings, and DataHandler drops empty entries of a CSV
+        // value, so [1] and "1," both end up as column 1. Reduce such a value to
+        // that column first, so every check sees what storage receives, and refuse
+        // more than one column.
+        if ($table === 'tt_content' && array_key_exists('colPos', $data)) {
+            $columns = $data['colPos'];
+            if (is_string($columns) && str_contains($columns, ',')) {
+                $columns = GeneralUtility::trimExplode(',', $columns, true);
+            }
+            if (is_array($columns)) {
+                if (count($columns) !== 1 || !is_scalar(reset($columns))) {
+                    return "Field 'colPos' takes a single column number, not a list";
+                }
+                $data['colPos'] = reset($columns);
+            }
+        }
+
         // Build merged record context for dynamic select item resolution (itemsProcFunc, TSconfig)
         $currentRecord = null;
         if ($action === 'update' && $uid) {
@@ -1338,7 +1371,10 @@ class WriteTableTool extends AbstractRecordTool
                 }
             }
 
-            $mergedRecord = array_merge($existingRecord, $data);
+            // The workspace version is what this update writes to. Its page and
+            // column may differ from the live row (e.g. moved in the workspace), and
+            // select items and placement have to be checked where it really is.
+            $mergedRecord = array_merge($currentRecord, $data);
         } else {
             $mergedRecord = array_merge($data, ['pid' => $pid]);
         }
@@ -1399,17 +1435,22 @@ class WriteTableTool extends AbstractRecordTool
             }
 
             // Check if field is accessible (exclude fields, inaccessible inline
-            // relations, TCEFORM disabled for this page and record type)
-            if (!$this->tableAccessService->canAccessField($table, $fieldName, $recordType, $tsConfigPid)) {
-                return "Field '{$fieldName}' is not accessible";
+            // relations, TCEFORM disabled for this page and record type). Positional
+            // fields like colPos pass the TCEFORM part, see isPositionalField().
+            $denialReason = $this->tableAccessService->getFieldAccessDenialReason($table, $fieldName, $recordType, $tsConfigPid);
+            if ($denialReason !== null) {
+                return $this->formatFieldNotAccessible($fieldName, $denialReason);
             }
 
             // Validate field value (with record context for dynamic select item resolution)
             $validationError = $this->tableAccessService->validateFieldValue($table, $fieldName, $value, $mergedRecord);
             if ($validationError !== null) {
+                if ($table === 'tt_content' && $fieldName === 'colPos') {
+                    $validationError .= $this->describeColumnItems($mergedRecord, (int)$effectivePid);
+                }
                 return $validationError;
             }
-            
+
             // Handle date/time fields - convert ISO 8601 to timestamp for TYPO3
             if (!empty($fieldConfig['config']['eval'])) {
                 $evalRules = GeneralUtility::trimExplode(',', $fieldConfig['config']['eval'], true);
@@ -1459,7 +1500,14 @@ class WriteTableTool extends AbstractRecordTool
                 }
             }
         }
-        
+
+        if ($table === 'tt_content') {
+            $columnError = $this->validateColumnPlacement($data, $action, $mergedRecord, $currentRecord, $newRecordRow, (int)$effectivePid);
+            if ($columnError !== null) {
+                return $columnError;
+            }
+        }
+
         // After validating all field values, check field availability based on record type
         // This ensures type field validation happens first
 
@@ -1554,6 +1602,206 @@ class WriteTableTool extends AbstractRecordTool
         }
 
         return true;
+    }
+
+    /**
+     * "Field 'x' is not accessible: <reason>." plus what to do about it.
+     */
+    protected function formatFieldNotAccessible(string $fieldName, string $reason): string
+    {
+        return sprintf(
+            "Field '%s' is not accessible: %s. Leave the field out of the data.",
+            $fieldName,
+            $reason
+        );
+    }
+
+    /**
+     * Names the columns behind the colPos values, so a refused colPos tells the
+     * reader which column to pick instead of a bare list of numbers. The items are
+     * the ones the value was checked against: the columns of the page's backend
+     * layout, or the grid columns of a b13/container parent.
+     */
+    protected function describeColumnItems(array $mergedRecord, int $pageId): string
+    {
+        $resolved = GeneralUtility::makeInstance(SelectItemResolver::class)
+            ->resolveSelectItems('tt_content', 'colPos', $mergedRecord);
+        if ($resolved === null || $resolved['values'] === []) {
+            return '';
+        }
+        $columns = array_map(
+            static function (string $value) use ($resolved): string {
+                $label = TableAccessService::translateLabel((string)($resolved['labels'][$value] ?? ''));
+                return $label !== '' ? sprintf('%s (%s)', $value, $label) : $value;
+            },
+            $resolved['values']
+        );
+        $containerUid = (int)($mergedRecord['tx_container_parent'] ?? 0);
+        return sprintf(
+            '. colPos is the column the element is placed in; %s has these columns: %s',
+            $containerUid > 0 ? sprintf('its container (tx_container_parent %d)', $containerUid) : sprintf('the backend layout of page %d', $pageId),
+            implode(', ', $columns)
+        );
+    }
+
+    /**
+     * Page that "after:N" / "before:N" places a record on: the page of record N
+     * (its workspace version). DataHandler puts the record there whatever pid
+     * the write names, and that reference wins on purpose (#50). The checks of
+     * the write (page access, TCEFORM, columns) have to run for this page, not
+     * for the named one. Null without such a reference, or when N does not
+     * exist (left to the position handling).
+     */
+    protected function getPositionReferencePage(string $table, ?string $position): ?int
+    {
+        foreach (['after:', 'before:'] as $prefix) {
+            if ($position !== null && str_starts_with($position, $prefix)) {
+                return $this->getWorkspacePid($table, (int)substr($position, strlen($prefix)));
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Page of a record as the current workspace sees it (a record moved in the
+     * workspace is on its new page), or null when the record does not exist.
+     */
+    protected function getWorkspacePid(string $table, int $uid): ?int
+    {
+        $record = BackendUtility::getRecord($table, $uid);
+        if (!is_array($record)) {
+            return null;
+        }
+        $liveRecord = $record;
+        BackendUtility::workspaceOL($table, $record);
+        return (int)((is_array($record) ? $record : $liveRecord)['pid'] ?? 0);
+    }
+
+    /**
+     * A container child's column comes from the colPos items as well:
+     * b13/container's itemsProcFunc offers the grid column that matches the
+     * child's colPos, and nothing when the grid has no such column. An empty
+     * list would make the select validation fall back to the static TCA items
+     * (0-3), so a child could land in a column its container never renders.
+     */
+    protected function validateContainerColumn(array $record, int $colPos, int $containerUid, int $pageId): ?string
+    {
+        $resolved = GeneralUtility::makeInstance(SelectItemResolver::class)->resolveSelectItems(
+            'tt_content',
+            'colPos',
+            array_merge($record, ['pid' => $pageId, 'colPos' => $colPos, 'tx_container_parent' => $containerUid])
+        );
+        if ($resolved === null || $resolved['values'] !== []) {
+            return null;
+        }
+        return sprintf(
+            "Field 'colPos' value '%d' is not a column of the container it is placed in (tx_container_parent %d). "
+            . 'Use a column of that container, or set tx_container_parent to 0 to place the element in a column of the page.',
+            $colPos,
+            $containerUid
+        );
+    }
+
+    /**
+     * Checks the column a content element ends up in whenever it is placed: on
+     * create, and on update when colPos or the page changes. The column is the
+     * one given in the data, else the one the element already has (its
+     * workspace version), else the default of a new element. Elements that stay
+     * where they are remain editable, even in a column checked out below.
+     *
+     * - A column the page does not have is refused. When colPos was given, the
+     *   field validation already checked it against the colPos items (the
+     *   columns of the page's backend layout); a move to another page without
+     *   colPos is checked here, otherwise the element would vanish into a
+     *   column the target page does not show.
+     * - The page module only lets a user place content in the columns that
+     *   mod.SHARED.colPos_list allows (page TSconfig, or user TSconfig via
+     *   page.mod.SHARED.colPos_list); the other columns are shown as
+     *   restricted. The colPos items do not know this limit.
+     *
+     * Children of b13/container elements sit in the grid columns of their
+     * container instead, which the page layout and mod.SHARED.colPos_list do not
+     * cover. Their column must be one the container grid offers. An element that
+     * leaves its container counts as placed in a page column.
+     */
+    protected function validateColumnPlacement(
+        array $data,
+        string $action,
+        array $mergedRecord,
+        ?array $currentRecord,
+        ?array $newRecordRow,
+        int $pageId
+    ): ?string {
+        if ($action === 'translate' || $pageId <= 0) {
+            return null;
+        }
+        $colPosGiven = array_key_exists('colPos', $data);
+        $record = array_merge($newRecordRow ?? [], $mergedRecord);
+        $colPos = $record['colPos'] ?? $GLOBALS['TCA']['tt_content']['columns']['colPos']['config']['default'] ?? 0;
+        if (!is_numeric($colPos)) {
+            return null;
+        }
+        $colPos = (int)$colPos;
+        $containerUid = (int)($record['tx_container_parent'] ?? 0);
+
+        $pageChanged = $currentRecord !== null && (int)($currentRecord['pid'] ?? 0) !== $pageId;
+        $columnChanged = $currentRecord === null
+            || (int)($currentRecord['colPos'] ?? 0) !== $colPos
+            || (int)($currentRecord['tx_container_parent'] ?? 0) !== $containerUid;
+        if ($action !== 'create' && !$pageChanged && !$columnChanged) {
+            return null;
+        }
+
+        if ($containerUid > 0) {
+            return $this->validateContainerColumn($record, $colPos, $containerUid, $pageId);
+        }
+
+        if (!$colPosGiven) {
+            $context = array_merge($record, ['pid' => $pageId, 'colPos' => $colPos]);
+            if ($this->tableAccessService->validateFieldValue('tt_content', 'colPos', $colPos, $context) !== null) {
+                return sprintf(
+                    "The element would be in colPos %d, which page %d does not have; set colPos as well",
+                    $colPos,
+                    $pageId
+                ) . $this->describeColumnItems($context, $pageId);
+            }
+        }
+
+        $colPosList = trim((string)(BackendUtility::getPagesTSconfig($pageId)['mod.']['SHARED.']['colPos_list'] ?? ''));
+        if ($colPosList === '') {
+            return null;
+        }
+        $allowedColumns = array_unique(GeneralUtility::intExplode(',', $colPosList, true));
+        if (in_array($colPos, $allowedColumns, true)) {
+            return null;
+        }
+
+        $columnNames = [];
+        try {
+            $columnNames = GeneralUtility::makeInstance(BackendLayoutView::class)
+                ->getBackendLayoutForPage($pageId)
+                ->getUsedColumns();
+        } catch (\Throwable) {
+            // Names are only decoration for the message.
+        }
+        $describe = static function (int $column) use ($columnNames): string {
+            $name = (string)($columnNames[$column] ?? '');
+            return $name !== '' ? sprintf('%d (%s)', $column, TableAccessService::translateLabel($name)) : (string)$column;
+        };
+        $placeable = array_values(array_filter(
+            $allowedColumns,
+            static fn(int $column): bool => $columnNames === [] || isset($columnNames[$column])
+        ));
+
+        return sprintf(
+            "Field 'colPos' value '%d': this column of page %d is restricted for the backend user "
+            . '(mod.SHARED.colPos_list), the page module does not let it place content there. %s',
+            $colPos,
+            $pageId,
+            $placeable === []
+                ? 'No column of this page is open for new content.'
+                : 'Use one of these columns: ' . implode(', ', array_map($describe, $placeable)) . '.'
+        );
     }
 
     /**
@@ -2812,8 +3060,9 @@ class WriteTableTool extends AbstractRecordTool
             if (!$fieldConfig) {
                 throw new ValidationException(["search_replace field '{$fieldName}' does not exist in table '{$table}'"]);
             }
-            if (!$this->tableAccessService->canAccessField($table, $fieldName, $recordType, $tsConfigPid)) {
-                throw new ValidationException(["Field '{$fieldName}' is not accessible"]);
+            $denialReason = $this->tableAccessService->getFieldAccessDenialReason($table, $fieldName, $recordType, $tsConfigPid);
+            if ($denialReason !== null) {
+                throw new ValidationException([$this->formatFieldNotAccessible($fieldName, $denialReason)]);
             }
             $fieldType = $fieldConfig['config']['type'] ?? '';
             if (!in_array($fieldType, $stringFieldTypes, true)) {
