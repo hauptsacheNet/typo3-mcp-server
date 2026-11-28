@@ -192,7 +192,7 @@ class SearchLanguageTest extends FunctionalTestCase
         // French translation doesn't contain "team" so won't be found
         
         // Should show language indicators for found content
-        $this->assertStringContainsString('🌐 Language: DE', $output);
+        $this->assertStringContainsString('🌐 Language: de (1, German)', $output);
         // French content won't be found because it doesn't contain "team"
         
         // Should not have language filter in output
@@ -216,7 +216,7 @@ class SearchLanguageTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         
         // Should show language filter
-        $this->assertStringContainsString('Language Filter: DE (ID: 1)', $output);
+        $this->assertStringContainsString('Language Filter: de (1, German)', $output);
         
         // Should find German and default language content
         $this->assertStringContainsString('Team Einführung', $output); // German translation
@@ -245,7 +245,7 @@ class SearchLanguageTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         
         // Should show language filter
-        $this->assertStringContainsString('Language Filter: FR (ID: 2)', $output);
+        $this->assertStringContainsString('Language Filter: fr (2, French)', $output);
         
         // Should find French content when searching for French term
         $this->assertStringContainsString('Introduction de l\'équipe', $output); // French translation
@@ -275,7 +275,7 @@ class SearchLanguageTest extends FunctionalTestCase
         $output = $result->content[0]->text;
         
         // Should show language filter
-        $this->assertStringContainsString('Language Filter: EN (ID: 0)', $output);
+        $this->assertStringContainsString('Language Filter: en (0, English)', $output);
         
         // Should find only default language content
         $this->assertStringContainsString('Team Introduction', $output);
@@ -305,7 +305,7 @@ class SearchLanguageTest extends FunctionalTestCase
         
         // Should find German-only content
         $this->assertStringContainsString('Kontaktformular', $output);
-        $this->assertStringContainsString('🌐 Language: DE', $output);
+        $this->assertStringContainsString('🌐 Language: de (1, German)', $output);
         
         // Search with English filter
         $result = $tool->execute([

@@ -172,7 +172,7 @@ class TcaFormattingUtility
                     
                     if (!empty($isoCodes)) {
                         $result .= " [ISO codes accepted: " . implode(', ', $isoCodes) . "]";
-                        $result .= " (Use ISO codes like 'de' instead of numeric IDs in WriteTable tool)";
+                        $result .= " (Use ISO codes like 'de' instead of numeric IDs in WriteTable tool; where a site has several variants of a language, use the listed tag such as 'de-AT')";
                     }
                 }
                 break;
@@ -230,7 +230,7 @@ class TcaFormattingUtility
                 
                 if (!empty($isoCodes)) {
                     $result .= " [ISO codes accepted: " . implode(', ', $isoCodes) . "]";
-                    $result .= " (Use ISO codes like 'de' instead of numeric IDs in WriteTable tool)";
+                    $result .= " (Use ISO codes like 'de' instead of numeric IDs in WriteTable tool; where a site has several variants of a language, use the listed tag such as 'de-AT')";
                 }
                 break;
         }
