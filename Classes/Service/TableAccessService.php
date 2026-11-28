@@ -944,8 +944,8 @@ class TableAccessService implements SingletonInterface
      * colPos come from the page's backend layout.
      *
      * TYPO3 names the positional fields of a table in ctrl.copyAfterDuplFields:
-     * DataHandler copies them from the record that a moved or copied record is
-     * placed after (tt_content: colPos, sys_language_uid). The language field is
+     * DataHandler copies them from the record that a copied record is placed
+     * after (tt_content: colPos, sys_language_uid). The language field is
      * left out, it has its own handling (translate action, no language change on
      * update). b13/container's tx_container_parent is positional as well, its
      * drag and drop sets the field when an element moves into or out of a

@@ -337,6 +337,10 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function createRecord(string $table, int $pid, array $data, ?string $position): CallToolResult
     {
+        // "after:N" / "before:N" put the record on N's page, whatever pid says
+        // (#50). Run every check below for that page.
+        $pid = $this->getPositionReferencePage($table, $position) ?? $pid;
+
         // Pre-validate page access for non-admin users
         $pageAccessError = $this->validatePageAccess($pid);
         if ($pageAccessError !== null) {
@@ -568,6 +572,15 @@ class WriteTableTool extends AbstractRecordTool
      */
     protected function updateRecord(string $table, int $uid, array $data, ?string $position = null, bool $dispatchEvent = true): CallToolResult
     {
+        // "after:N" / "before:N" move the record to N's page, like a pid would.
+        // Treat it as one, so the validation checks the page the record ends up on.
+        $referencePage = $this->getPositionReferencePage($table, $position);
+        if ($referencePage !== null
+            && $referencePage !== (array_key_exists('pid', $data) ? (int)$data['pid'] : $this->getWorkspacePid($table, $uid))
+        ) {
+            $data['pid'] = $referencePage;
+        }
+
         // Validate the data
         $validationResult = $this->validateRecordData($table, $data, 'update', $uid);
         if ($validationResult !== true) {
@@ -1306,14 +1319,22 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
 
-        // colPos holds one column. A one-element list is taken as that column, so it
-        // gets the same checks as a plain value (the select validation accepts lists
-        // and the storage below would flatten it to a string anyway).
-        if ($table === 'tt_content' && is_array($data['colPos'] ?? null)) {
-            if (count($data['colPos']) !== 1 || !is_scalar(reset($data['colPos']))) {
-                return "Field 'colPos' takes a single column number, not a list";
+        // colPos holds one column. The select validation splits lists and
+        // comma-separated strings, and DataHandler drops empty entries of a CSV
+        // value, so [1] and "1," both end up as column 1. Reduce such a value to
+        // that column first, so every check sees what storage receives, and refuse
+        // more than one column.
+        if ($table === 'tt_content' && array_key_exists('colPos', $data)) {
+            $columns = $data['colPos'];
+            if (is_string($columns) && str_contains($columns, ',')) {
+                $columns = GeneralUtility::trimExplode(',', $columns, true);
             }
-            $data['colPos'] = reset($data['colPos']);
+            if (is_array($columns)) {
+                if (count($columns) !== 1 || !is_scalar(reset($columns))) {
+                    return "Field 'colPos' takes a single column number, not a list";
+                }
+                $data['colPos'] = reset($columns);
+            }
         }
 
         // Build merged record context for dynamic select item resolution (itemsProcFunc, TSconfig)
@@ -1624,6 +1645,64 @@ class WriteTableTool extends AbstractRecordTool
     }
 
     /**
+     * Page that "after:N" / "before:N" places a record on: the page of record N
+     * (its workspace version). DataHandler puts the record there whatever pid
+     * the write names, and that reference wins on purpose (#50). The checks of
+     * the write (page access, TCEFORM, columns) have to run for this page, not
+     * for the named one. Null without such a reference, or when N does not
+     * exist (left to the position handling).
+     */
+    protected function getPositionReferencePage(string $table, ?string $position): ?int
+    {
+        foreach (['after:', 'before:'] as $prefix) {
+            if ($position !== null && str_starts_with($position, $prefix)) {
+                return $this->getWorkspacePid($table, (int)substr($position, strlen($prefix)));
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Page of a record as the current workspace sees it (a record moved in the
+     * workspace is on its new page), or null when the record does not exist.
+     */
+    protected function getWorkspacePid(string $table, int $uid): ?int
+    {
+        $record = BackendUtility::getRecord($table, $uid);
+        if (!is_array($record)) {
+            return null;
+        }
+        $liveRecord = $record;
+        BackendUtility::workspaceOL($table, $record);
+        return (int)((is_array($record) ? $record : $liveRecord)['pid'] ?? 0);
+    }
+
+    /**
+     * A container child's column comes from the colPos items as well:
+     * b13/container's itemsProcFunc offers the grid column that matches the
+     * child's colPos, and nothing when the grid has no such column. An empty
+     * list would make the select validation fall back to the static TCA items
+     * (0-3), so a child could land in a column its container never renders.
+     */
+    protected function validateContainerColumn(array $record, int $colPos, int $containerUid, int $pageId): ?string
+    {
+        $resolved = GeneralUtility::makeInstance(SelectItemResolver::class)->resolveSelectItems(
+            'tt_content',
+            'colPos',
+            array_merge($record, ['pid' => $pageId, 'colPos' => $colPos, 'tx_container_parent' => $containerUid])
+        );
+        if ($resolved === null || $resolved['values'] !== []) {
+            return null;
+        }
+        return sprintf(
+            "Field 'colPos' value '%d' is not a column of the container it is placed in (tx_container_parent %d). "
+            . 'Use a column of that container, or set tx_container_parent to 0 to place the element in a column of the page.',
+            $colPos,
+            $containerUid
+        );
+    }
+
+    /**
      * Checks the column a content element ends up in whenever it is placed: on
      * create, and on update when colPos or the page changes. The column is the
      * one given in the data, else the one the element already has (its
@@ -1640,8 +1719,10 @@ class WriteTableTool extends AbstractRecordTool
      *   page.mod.SHARED.colPos_list); the other columns are shown as
      *   restricted. The colPos items do not know this limit.
      *
-     * Children of b13/container elements sit in the container's grid columns,
-     * which the container's own colPos items and DataHandler hooks check.
+     * Children of b13/container elements sit in the grid columns of their
+     * container instead, which the page layout and mod.SHARED.colPos_list do not
+     * cover. Their column must be one the container grid offers. An element that
+     * leaves its container counts as placed in a page column.
      */
     protected function validateColumnPlacement(
         array $data,
@@ -1657,15 +1738,22 @@ class WriteTableTool extends AbstractRecordTool
         $colPosGiven = array_key_exists('colPos', $data);
         $record = array_merge($newRecordRow ?? [], $mergedRecord);
         $colPos = $record['colPos'] ?? $GLOBALS['TCA']['tt_content']['columns']['colPos']['config']['default'] ?? 0;
-        if (!is_numeric($colPos) || (int)($record['tx_container_parent'] ?? 0) > 0) {
+        if (!is_numeric($colPos)) {
             return null;
         }
         $colPos = (int)$colPos;
+        $containerUid = (int)($record['tx_container_parent'] ?? 0);
 
         $pageChanged = $currentRecord !== null && (int)($currentRecord['pid'] ?? 0) !== $pageId;
-        $columnChanged = $currentRecord === null || (int)($currentRecord['colPos'] ?? 0) !== $colPos;
+        $columnChanged = $currentRecord === null
+            || (int)($currentRecord['colPos'] ?? 0) !== $colPos
+            || (int)($currentRecord['tx_container_parent'] ?? 0) !== $containerUid;
         if ($action !== 'create' && !$pageChanged && !$columnChanged) {
             return null;
+        }
+
+        if ($containerUid > 0) {
+            return $this->validateContainerColumn($record, $colPos, $containerUid, $pageId);
         }
 
         if (!$colPosGiven) {

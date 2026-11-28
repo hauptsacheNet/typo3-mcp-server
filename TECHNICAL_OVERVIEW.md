@@ -359,7 +359,10 @@ the language field has its own handling) and b13/container's `tx_container_paren
 sets them without the edit form (new content element wizard, drag and drop), so sites that hide the
 column select still place content in columns. Their values are checked against the select items
 (the columns of the page's backend layout). Whenever an element is placed (create, new column, move to another
-page, where it keeps its column) that column must exist on the page and pass `mod.SHARED.colPos_list`.
+page, where it keeps its column, or out of a container) that column must exist on the page and pass
+`mod.SHARED.colPos_list`. Children of b13/container elements are the exception: their column must be one of
+their container's grid, and the page layout and `colPos_list` do not apply. A `position` of `after:N` /
+`before:N` places the record on N's page, whatever `pid` says, so all checks of the write run for that page.
 
 ## What's Not Yet Implemented
 

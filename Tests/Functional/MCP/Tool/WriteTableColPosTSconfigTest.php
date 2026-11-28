@@ -287,16 +287,90 @@ TSCONFIG;
         $this->assertStringContainsString("Field 'colPos' takes a single column number, not a list", $result->content[0]->text);
     }
 
+    /**
+     * DataHandler places a record with "after:N" on N's page, whatever pid says
+     * (#50). The columns are therefore checked on N's page: page 2 has only
+     * column 0, so column 1 is refused there although page 1 has it. Record 102
+     * is on page 2, record 101 on page 1.
+     */
+    public function testCreatePositionedNextToARecordOnAnotherPageIsCheckedOnThatPage(): void
+    {
+        $this->getConnectionForTable('pages')->update('pages', ['backend_layout' => 'pagets__single'], ['uid' => 2]);
+
+        $result = $this->write('create', null, ['pid' => 1, 'CType' => 'text', 'header' => 'Elsewhere', 'colPos' => 1], 'after:102');
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('the backend layout of page 2 has these columns: 0 (Main)', $result->content[0]->text);
+        $this->assertSame(0, $this->countRecordsWithHeader('Elsewhere'));
+
+        $result = $this->write('create', null, ['pid' => 1, 'CType' => 'text', 'header' => 'Elsewhere', 'colPos' => 0], 'after:102');
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    public function testCreatePositionedNextToARecordOnTheSamePageWorks(): void
+    {
+        $result = $this->write('create', null, ['pid' => 1, 'CType' => 'text', 'header' => 'Next to 101', 'colPos' => 1], 'after:101');
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+
+        $result = $this->write('create', null, ['pid' => 1, 'CType' => 'text', 'header' => 'Before 101', 'colPos' => 0], 'before:101');
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+    }
+
+    /**
+     * An update with "after:N" moves the element to N's page like a pid would,
+     * so its column is checked there.
+     */
+    public function testUpdatePositionedNextToARecordOnAnotherPageIsCheckedOnThatPage(): void
+    {
+        $this->getConnectionForTable('pages')->update('pages', ['backend_layout' => 'pagets__single'], ['uid' => 2]);
+        $this->getConnectionForTable('tt_content')->update('tt_content', ['colPos' => 1], ['uid' => 100]);
+
+        $result = $this->write('update', 100, ['header' => 'Moved'], 'after:102');
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('would be in colPos 1, which page 2 does not have', $result->content[0]->text);
+
+        $result = $this->write('update', 100, ['header' => 'Moved', 'colPos' => 0], 'after:102');
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $page = $this->getConnectionForTable('tt_content')
+            ->select(['pid'], 'tt_content', ['t3ver_oid' => 100])
+            ->fetchOne();
+        $this->assertSame(2, (int)$page);
+    }
+
+    /**
+     * "1," passes the select validation as column 1 and DataHandler stores 1,
+     * so the column checks have to see 1 as well.
+     */
+    public function testCommaSeparatedSingleColumnIsCheckedLikeAPlainValue(): void
+    {
+        $this->setPageTSconfig(self::TSCONFIG . "\nmod.SHARED.colPos_list = 0\n");
+
+        $result = $this->write('update', 100, ['colPos' => '1,']);
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString('mod.SHARED.colPos_list', $result->content[0]->text);
+
+        $result = $this->write('update', 100, ['colPos' => '0,1']);
+        $this->assertTrue($result->isError, json_encode($result->jsonSerialize()));
+        $this->assertStringContainsString("Field 'colPos' takes a single column number, not a list", $result->content[0]->text);
+    }
+
+    private function countRecordsWithHeader(string $header): int
+    {
+        return (int)$this->getConnectionForTable('tt_content')->count('uid', 'tt_content', ['header' => $header]);
+    }
+
     private function setPageTSconfig(string $tsConfig, int $pageUid = 1): void
     {
         $this->getConnectionForTable('pages')->update('pages', ['TSconfig' => $tsConfig], ['uid' => $pageUid]);
     }
 
-    private function write(string $action, ?int $uid, array $data): CallToolResult
+    private function write(string $action, ?int $uid, array $data, ?string $position = null): CallToolResult
     {
         $params = ['action' => $action, 'table' => 'tt_content', 'data' => $data];
         if ($uid !== null) {
             $params['uid'] = $uid;
+        }
+        if ($position !== null) {
+            $params['position'] = $position;
         }
         return (new WriteTableTool())->execute($params);
     }

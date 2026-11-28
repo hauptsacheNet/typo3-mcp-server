@@ -62,6 +62,16 @@ class SelectItemResolver
 
         $items = $formData['processedTca']['columns'][$field]['config']['items'] ?? null;
         if (!is_array($items)) {
+            // The form was to show the field but dropped it: FormEngine may remove
+            // a select without selectable items (TcaColumnsRemoveEmptyRelations in
+            // TYPO3 14.3).
+            // That is an empty item list, not a failure to resolve, e.g. the colPos
+            // of a b13/container child whose column the container grid lacks.
+            if (in_array($field, $formData['columnsToProcess'] ?? [], true)
+                && !isset($formData['processedTca']['columns'][$field])
+            ) {
+                return ['values' => [], 'labels' => []];
+            }
             return null;
         }
 
