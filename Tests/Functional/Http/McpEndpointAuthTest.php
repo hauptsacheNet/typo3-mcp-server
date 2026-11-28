@@ -314,4 +314,23 @@ class McpEndpointAuthTest extends AbstractFunctionalTest
 
         return $body;
     }
+
+    /**
+     * The self-test of the backend module is answered before authentication.
+     * It says whether an Authorization header arrived and nothing else.
+     */
+    public function testAuthHeaderSelfTestDoesNotEchoHeadersOrServerDetails(): void
+    {
+        $request = (new ServerRequest(new Uri('https://example.com/mcp'), 'GET'))
+            ->withQueryParams(['test' => 'auth'])
+            ->withHeader('Authorization', 'Bearer secret-added-by-a-proxy');
+
+        $response = (new McpEndpoint())($request);
+        $body = (string)$response->getBody();
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertTrue(json_decode($body, true)['auth_header_detected']);
+        self::assertStringNotContainsString('secret-added-by-a-proxy', $body);
+        self::assertStringNotContainsString('server_software', $body);
+    }
 }
