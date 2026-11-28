@@ -26,6 +26,7 @@ use Psr\Http\Message\UriInterface;
 use TYPO3\CMS\Core\Exception\Page\PageNotFoundException;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use Hn\McpServer\MCP\Tool\Record\AbstractRecordTool;
+use Hn\McpServer\Service\DateTimeFieldService;
 use Hn\McpServer\Service\PageAccessService;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
@@ -686,8 +687,9 @@ class GetPageTool extends AbstractRecordTool
         $result .= "Parent Page (PID): " . $pageData['pid'] . "\n";
         $result .= "Doktype: " . $pageData['doktype'] . "\n";
         $result .= "Hidden: " . ($pageData['hidden'] ? 'Yes' : 'No') . "\n";
-        $result .= "Created: " . date('Y-m-d H:i:s', (int)$pageData['crdate']) . "\n";
-        $result .= "Last Modified: " . date('Y-m-d H:i:s', (int)$pageData['tstamp']) . "\n";
+        $dateTimeService = GeneralUtility::makeInstance(DateTimeFieldService::class);
+        $result .= "Created: " . $dateTimeService->formatTimestamp((int)$pageData['crdate']) . "\n";
+        $result .= "Last Modified: " . $dateTimeService->formatTimestamp((int)$pageData['tstamp']) . "\n";
         
         // Add language/translation information
         if ($languageId > 0) {

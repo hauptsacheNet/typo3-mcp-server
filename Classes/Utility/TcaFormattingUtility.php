@@ -8,6 +8,7 @@ use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Localization\LanguageService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use Hn\McpServer\Service\DateTimeFieldService;
 use Hn\McpServer\Service\SelectItemResolver;
 use Hn\McpServer\Service\TableAccessService;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
@@ -67,6 +68,15 @@ class TcaFormattingUtility
                 }
                 break;
                 
+            case 'datetime':
+                $dateTimeService = GeneralUtility::makeInstance(DateTimeFieldService::class);
+                $dateTimeSettings = $dateTimeService->getSettingsFromConfig($config);
+                if ($dateTimeSettings !== null) {
+                    $result .= " [format: " . $dateTimeSettings['format'] . " - write as "
+                        . $dateTimeService->describeExpectedInput($dateTimeSettings) . "]";
+                }
+                break;
+
             case 'check':
                 if (isset($config['default'])) {
                     $result .= " [Default: " . $config['default'] . "]";

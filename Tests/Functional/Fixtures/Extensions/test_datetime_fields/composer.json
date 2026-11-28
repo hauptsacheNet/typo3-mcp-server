@@ -1,0 +1,11 @@
+{
+    "name": "hn/test-datetime-fields",
+    "type": "typo3-cms-extension",
+    "description": "Fixture: a table with every storage variant of TCA datetime fields",
+    "license": "GPL-2.0-or-later",
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "test_datetime_fields"
+        }
+    }
+}

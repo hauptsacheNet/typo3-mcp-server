@@ -9,6 +9,7 @@ use Hn\McpServer\Event\AfterRecordWriteEvent;
 use Hn\McpServer\Event\BeforeRecordWriteEvent;
 use Hn\McpServer\Exception\DatabaseException;
 use Hn\McpServer\Exception\ValidationException;
+use Hn\McpServer\Service\DateTimeFieldService;
 use Hn\McpServer\Service\InlineParentService;
 use Hn\McpServer\Service\LanguageService;
 use Hn\McpServer\Service\NewRecordInitializer;
@@ -102,6 +103,7 @@ class WriteTableTool extends AbstractRecordTool
                             'on "update" setting "pid" moves the record to that page (combine with "position" to control where on the new page it lands; e.g. data: {"pid": 1} moves the record to page 1). ' .
                             ($hasMultipleLanguages ? 'Language fields (sys_language_uid) accept ISO codes like "de", "fr" instead of numeric IDs. ' .
                                 '"update" never changes the language of a record; to translate a record use "translate", which creates a linked translation. ' : '') .
+                            'Date and time fields take ISO 8601 values like ReadTable returns them, e.g. "2026-11-27T14:30:00+01:00", "2026-11-27 14:30" (without an offset the time is local time in the server timezone ' . date_default_timezone_get() . ', as entered in the backend form), "2026-11-27" for date fields and "14:30" for time fields. ' .
                             'Inline relations can be specified as arrays - UIDs for independent tables, record data for embedded tables. ' .
                             'For embedded tables (e.g. file references), the array fully replaces the existing list: ' .
                             'children present in the previous record but missing from the new array are deleted. ' .
@@ -1392,6 +1394,7 @@ class WriteTableTool extends AbstractRecordTool
         $recordType = $this->resolveRecordType($table, $data, $currentRecord, $newRecordRow);
 
         // Validate and convert field values
+        $dateTimeService = GeneralUtility::makeInstance(DateTimeFieldService::class);
         foreach ($data as $fieldName => $value) {
             $fieldConfig = $this->tableAccessService->getFieldConfig($table, $fieldName);
             if (!$fieldConfig) {
@@ -1410,20 +1413,15 @@ class WriteTableTool extends AbstractRecordTool
                 return $validationError;
             }
             
-            // Handle date/time fields - convert ISO 8601 to timestamp for TYPO3
-            if (!empty($fieldConfig['config']['eval'])) {
-                $evalRules = GeneralUtility::trimExplode(',', $fieldConfig['config']['eval'], true);
-                if (array_intersect(['date', 'datetime', 'time'], $evalRules)) {
-                    if (is_string($value) && preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $value)) {
-                        try {
-                            $dateTime = new \DateTime($value);
-                            $data[$fieldName] = $dateTime->getTimestamp();
-                        } catch (\Exception $e) {
-                            // Log the error but let DataHandler handle the invalid date
-                            $this->logException($e, 'parsing date value');
-                        }
-                    }
+            // Date/time fields: hand DataHandler the value it stores as is (timestamp,
+            // seconds since midnight or native local DB string). An ISO string would be
+            // shifted by the server's UTC offset in TYPO3 13 (see DateTimeFieldService).
+            if ($dateTimeService->getSettingsFromConfig($fieldConfig['config'] ?? []) !== null) {
+                $dateTimeError = $this->convertDateTimeFields($table, $data, [$fieldName]);
+                if ($dateTimeError !== null) {
+                    return $dateTimeError;
                 }
+                continue;
             }
             
             // Validate inline/file field type
@@ -1438,7 +1436,7 @@ class WriteTableTool extends AbstractRecordTool
                 // of their own before anything is written.
                 $foreignTable = (string)($fieldConfig['config']['foreign_table'] ?? '');
                 if ($this->tableAccessService->isEmbeddedChildTable($foreignTable)) {
-                    $validationError = $this->validateEmbeddedChildRequiredFields(
+                    $validationError = $this->validateEmbeddedChildren(
                         $foreignTable,
                         $data[$fieldName],
                         $effectivePid,
@@ -1666,7 +1664,9 @@ class WriteTableTool extends AbstractRecordTool
      * Check the required fields of embedded inline children (and their own embedded
      * children) the way validateRequiredFields() checks a top-level record: a new child
      * like a create, an existing child ({"uid": N, ...}) like an update of the fields it
-     * sends. Defaults filled for a new child are written back into $children.
+     * sends. Defaults filled for a new child are written back into $children, and so are
+     * date/time values converted to their stored form. Nothing is written before this
+     * passes: the children are processed after the parent is saved, without a transaction.
      *
      * @param array $children The child records as sent for the inline field
      * @param int $pid Page the children live on
@@ -1674,7 +1674,7 @@ class WriteTableTool extends AbstractRecordTool
      *        child (foreign_match_fields, foreign_table_field); they count as filled
      * @return string|null Error message naming the item, null if all children are valid
      */
-    protected function validateEmbeddedChildRequiredFields(string $childTable, array &$children, int $pid, array $relationValues = []): ?string
+    protected function validateEmbeddedChildren(string $childTable, array &$children, int $pid, array $relationValues = []): ?string
     {
         foreach ($children as $index => &$childData) {
             if (!is_array($childData)) {
@@ -1684,6 +1684,14 @@ class WriteTableTool extends AbstractRecordTool
             $childUid = (isset($childData['uid']) && is_numeric($childData['uid']) && (int)$childData['uid'] > 0)
                 ? (int)$childData['uid']
                 : null;
+            // Name the item the way the caller sent it: its array index and live uid.
+            $item = sprintf('item at index %d (%s)', $index, $childUid !== null ? "uid {$childUid}" : 'new record');
+
+            $dateTimeError = $this->convertDateTimeFields($childTable, $childData);
+            if ($dateTimeError !== null) {
+                return "{$item}: {$dateTimeError}";
+            }
+
             $fields = $childData;
             unset($fields['uid']);
             // A new child gets the relation's own values on insert, overriding what was sent.
@@ -1722,8 +1730,6 @@ class WriteTableTool extends AbstractRecordTool
                 $newRecordRow,
                 $pid
             );
-            // Name the item the way the caller sent it: its array index and live uid.
-            $item = sprintf('item at index %d (%s)', $index, $childUid !== null ? "uid {$childUid}" : 'new record');
             if ($error !== null) {
                 return "{$item}: {$error}";
             }
@@ -1745,7 +1751,7 @@ class WriteTableTool extends AbstractRecordTool
                 }
                 // Nested children only get foreign_match_fields (see resolveNestedEmbeddedRelations()).
                 $nestedMatchFields = is_array($nestedConfig['foreign_match_fields'] ?? null) ? $nestedConfig['foreign_match_fields'] : [];
-                $nestedError = $this->validateEmbeddedChildRequiredFields($nestedTable, $nestedValue, $pid, $nestedMatchFields);
+                $nestedError = $this->validateEmbeddedChildren($nestedTable, $nestedValue, $pid, $nestedMatchFields);
                 if ($nestedError !== null) {
                     return "{$item}, field '{$nestedField}', {$nestedError}";
                 }
@@ -1760,6 +1766,35 @@ class WriteTableTool extends AbstractRecordTool
             }
         }
         unset($childData);
+
+        return null;
+    }
+
+    /**
+     * Convert the date/time values of a record to the value DataHandler stores as is
+     * (timestamp, seconds since midnight or native local DB string). An ISO string
+     * would be shifted by the server's UTC offset in TYPO3 13 (see DateTimeFieldService).
+     *
+     * @param array<string, mixed> $fields Record data, converted in place
+     * @param list<string>|null $fieldNames Only these fields; null for all
+     * @return string|null Error message for the first value that is no date, null if all are valid
+     */
+    protected function convertDateTimeFields(string $table, array &$fields, ?array $fieldNames = null): ?string
+    {
+        $dateTimeService = GeneralUtility::makeInstance(DateTimeFieldService::class);
+        foreach ($fieldNames ?? array_keys($fields) as $fieldName) {
+            $settings = $dateTimeService->getSettingsFromConfig(
+                $this->tableAccessService->getFieldConfig($table, (string)$fieldName)['config'] ?? []
+            );
+            if ($settings === null || !array_key_exists($fieldName, $fields)) {
+                continue;
+            }
+            try {
+                $fields[$fieldName] = $dateTimeService->convertForStorage($fields[$fieldName], $settings);
+            } catch (\InvalidArgumentException $e) {
+                return "Field '{$fieldName}' expects " . $e->getMessage() . ', got ' . json_encode($fields[$fieldName]);
+            }
+        }
 
         return null;
     }

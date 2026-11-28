@@ -1258,42 +1258,6 @@ class TableAccessService implements SingletonInterface
     }
     
     /**
-     * Check if a field is a date field
-     */
-    public function isDateField(string $table, string $fieldName): bool
-    {
-        // Common date fields in TYPO3
-        $commonDateFields = ['tstamp', 'crdate', 'starttime', 'endtime', 'lastlogin', 'date'];
-        
-        if (in_array($fieldName, $commonDateFields)) {
-            return true;
-        }
-        
-        // Check TCA eval for date/datetime/time
-        $fieldConfig = $this->getFieldConfig($table, $fieldName);
-        if (!$fieldConfig) {
-            return false;
-        }
-        
-        $config = $fieldConfig['config'] ?? [];
-        
-        // Check eval rules
-        if (!empty($config['eval'])) {
-            $evalRules = GeneralUtility::trimExplode(',', $config['eval'], true);
-            if (in_array('date', $evalRules) || in_array('datetime', $evalRules) || in_array('time', $evalRules)) {
-                return true;
-            }
-        }
-        
-        // Check renderType for inputDateTime
-        if (($config['renderType'] ?? '') === 'inputDateTime') {
-            return true;
-        }
-        
-        return false;
-    }
-    
-    /**
      * Check if a field is a FlexForm field
      */
     public function isFlexFormField(string $table, string $fieldName): bool

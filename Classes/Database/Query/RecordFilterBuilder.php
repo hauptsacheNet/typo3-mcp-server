@@ -7,8 +7,10 @@ namespace Hn\McpServer\Database\Query;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\ParameterType;
 use Hn\McpServer\Exception\ValidationException;
+use Hn\McpServer\Service\DateTimeFieldService;
 use Hn\McpServer\Service\TableAccessService;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * Translates a list of filter clauses into QueryBuilder expressions.
@@ -173,6 +175,10 @@ final class RecordFilterBuilder
         }
         $value = $clause['value'];
 
+        if (!in_array($operator, self::TEXT_OPERATORS, true)) {
+            $value = $this->convertDateValues($table, $field, $value, $position);
+        }
+
         if (in_array($operator, self::LIST_OPERATORS, true)) {
             return (string)$expression->{self::OPERATORS[$operator]}(
                 $field,
@@ -281,10 +287,60 @@ final class RecordFilterBuilder
         return $this->filterableFields[$cacheKey] = $fields;
     }
 
+    /**
+     * Date and time fields accept the ISO 8601 values ReadTable shows (and raw
+     * stored integers); the comparison runs against the stored representation.
+     *
+     * @param mixed $value
+     * @return mixed
+     * @throws ValidationException
+     */
+    private function convertDateValues(string $table, string $field, $value, string $position)
+    {
+        $dateTimeService = GeneralUtility::makeInstance(DateTimeFieldService::class);
+        $settings = $dateTimeService->getFieldSettings($table, $field);
+        if ($settings === null) {
+            return $value;
+        }
+
+        $convert = static function ($entry, string $entryPosition) use ($dateTimeService, $settings, $field) {
+            if (!is_string($entry) && !is_int($entry)) {
+                // Left to the type assertions, which report it
+                return $entry;
+            }
+            try {
+                return $dateTimeService->convertForStorage($entry, $settings);
+            } catch (\InvalidArgumentException $e) {
+                throw new ValidationException([sprintf(
+                    '%s must be %s because %s holds dates, got %s.',
+                    $entryPosition,
+                    $e->getMessage(),
+                    $field,
+                    json_encode($entry)
+                )]);
+            }
+        };
+
+        if (is_array($value)) {
+            foreach ($value as $key => $entry) {
+                $value[$key] = $convert($entry, $position . '.value[' . $key . ']');
+            }
+            return $value;
+        }
+
+        return $convert($value, $position . '.value');
+    }
+
     private function isNumericField(string $table, string $field): bool
     {
         if (in_array($field, self::ALWAYS_FILTERABLE, true)) {
             return true;
+        }
+
+        // Date fields with a native column (dbType) hold date strings, the others timestamps
+        $dateTimeSettings = GeneralUtility::makeInstance(DateTimeFieldService::class)->getFieldSettings($table, $field);
+        if ($dateTimeSettings !== null) {
+            return $dateTimeSettings['dbType'] === null;
         }
 
         $ctrl = $GLOBALS['TCA'][$table]['ctrl'] ?? [];
